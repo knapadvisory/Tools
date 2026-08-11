@@ -1,0 +1,3 @@
+# The downloads are served byte-for-byte — never normalise their line endings.
+# .bat files MUST keep CRLF for Windows; .mjs files ship exactly as tested.
+downloads/** -text

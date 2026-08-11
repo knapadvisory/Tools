@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KNAP Tools — one place for every tool</title>
+<meta name="description" content="Every KNAP Advisory internal tool, in one place: invoice parser, AR dashboard, Tally audit assistant, GSTR-2B poster and more.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧰</text></svg>">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --accent: #4f46e5;
+    --accent-hover: #4338ca;
+    --accent-soft: #eef2ff;
+    --on-accent: #ffffff;
+    --bg: #f4f5f8;
+    --surface: #ffffff;
+    --surface-2: #f5f6f9;
+    --border: #e4e6ec;
+    --text: #1d1c1d;
+    --muted: #6b7280;
+    --shadow: rgba(20, 25, 45, .08);
+    --success: #16a34a;  --success-soft: #e7f6ec;
+    --warning: #d97706;  --warning-soft: #fbf4dc;
+    --header-bg: #1e1b4b;
+    --header-text: rgba(255, 255, 255, .85);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --accent-soft: rgba(79, 70, 229, .22);
+      --bg: #0f1117;
+      --surface: #171a22;
+      --surface-2: #20242e;
+      --border: #2b303c;
+      --text: #e7e9ee;
+      --muted: #9aa3b2;
+      --shadow: rgba(0, 0, 0, .45);
+      --success: #4ade80;  --success-soft: rgba(74, 222, 128, .16);
+      --warning: #fbbf24;  --warning-soft: rgba(251, 191, 36, .16);
+      --header-bg: #14122e;
+    }
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* ---------- header ---------- */
+  .site-head { background: var(--header-bg); color: var(--header-text); }
+  .site-head-inner {
+    max-width: 1060px; margin: 0 auto; padding: 14px 24px;
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; color: #fff; }
+  .brand .logo { font-size: 22px; }
+  .fam { margin-left: auto; display: flex; gap: 4px; flex-wrap: wrap; }
+  .fam a {
+    color: var(--header-text); font-size: 13px; padding: 6px 12px; border-radius: 8px;
+  }
+  .fam a:hover { background: rgba(255,255,255,.1); text-decoration: none; }
+  .fam a.current { background: var(--accent); color: var(--on-accent); font-weight: 600; }
+
+  /* ---------- hero ---------- */
+  .hero { max-width: 1060px; margin: 0 auto; padding: 40px 24px 8px; width: 100%; }
+  .hero h1 { font-size: 26px; letter-spacing: -.01em; }
+  .hero p { color: var(--muted); margin-top: 6px; max-width: 640px; }
+
+  /* ---------- grid & cards ---------- */
+  main { max-width: 1060px; margin: 0 auto; padding: 24px; width: 100%; flex: 1; }
+  .section-label {
+    font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--muted); margin: 26px 0 12px;
+  }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+  .card {
+    display: flex; flex-direction: column; gap: 10px; padding: 20px;
+    border: 1px solid var(--border); border-radius: 14px; background: var(--surface);
+    box-shadow: 0 1px 2px var(--shadow);
+    transition: border-color .15s, transform .1s;
+  }
+  .card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .card-top { display: flex; align-items: flex-start; gap: 12px; }
+  .card-icon { font-size: 30px; line-height: 1; }
+  .card-name { font-weight: 700; font-size: 15.5px; }
+  .badge {
+    display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px;
+    border-radius: 999px; margin-top: 4px;
+  }
+  .badge.web { background: var(--success-soft); color: var(--success); }
+  .badge.desktop { background: var(--warning-soft); color: var(--warning); }
+  .card-desc { font-size: 13px; color: var(--muted); flex: 1; }
+  .card-meta { font-size: 12px; color: var(--muted); }
+  .card-meta code {
+    background: var(--surface-2); border: 1px solid var(--border);
+    padding: 1px 5px; border-radius: 5px; font-size: 11.5px;
+  }
+  .card-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 13px; font-weight: 600; padding: 8px 14px; border-radius: 9px;
+    border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+    cursor: pointer; transition: background .12s, border-color .12s;
+  }
+  .btn:hover { border-color: var(--accent); text-decoration: none; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .btn.ghost { background: transparent; }
+
+  /* ---------- setup note ---------- */
+  .note {
+    margin-top: 28px; padding: 18px 20px; border: 1px solid var(--border);
+    border-left: 4px solid var(--accent); border-radius: 12px; background: var(--surface);
+  }
+  .note h3 { font-size: 14px; margin-bottom: 6px; }
+  .note ol { margin: 6px 0 0 20px; font-size: 13.5px; color: var(--muted); }
+  .note li { margin: 4px 0; }
+  .note b { color: var(--text); }
+
+  /* ---------- footer ---------- */
+  footer {
+    border-top: 1px solid var(--border); margin-top: 40px;
+    padding: 20px 24px; text-align: center; font-size: 12.5px; color: var(--muted);
+  }
+</style>
+</head>
+<body>
+
+<header class="site-head">
+  <div class="site-head-inner">
+    <span class="brand"><span class="logo">🧰</span> KNAP Tools</span>
+    <nav class="fam">
+      <a href="https://teamhub.knapadvisory.com">TeamHub</a>
+      <a href="https://hr.teamhub.knapadvisory.com">HR</a>
+      <a href="https://tools.teamhub.knapadvisory.com" class="current">Tools</a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero">
+  <h1>Every tool, one address</h1>
+  <p>All the utilities built for the practice, parked under one link.
+     Web apps open in a tab; desktop tools download and run next to Tally on your own PC —
+     the books never leave your machine.</p>
+</div>
+
+<main>
+  <div class="section-label">Tools</div>
+  <div class="grid">
+
+    <!-- 1 · Marketplace / Amazon invoice parser -->
+    <div class="card">
+      <div class="card-top">
+        <span class="card-icon">🧾</span>
+        <div>
+          <div class="card-name">Marketplace Invoice Parser</div>
+          <span class="badge web">Web app · inside TeamHub</span>
+        </div>
+      </div>
+      <div class="card-desc">
+        Turn Amazon / Flipkart / Myntra / Nykaa fee PDFs into one reconciled Excel
+        register — split by fee type, with TDS sections mapped.
+      </div>
+      <div class="card-meta">Sign in to TeamHub, then open <code>🧰 KNAP Tools</code> in the sidebar.</div>
+      <div class="card-actions">
+        <a class="btn primary" href="https://teamhub.knapadvisory.com">Open in TeamHub</a>
+      </div>
+    </div>
+
+    <!-- 2 · AR / Customer dashboard -->
+    <div class="card">
+      <div class="card-top">
+        <span class="card-icon">📒</span>
+        <div>
+          <div class="card-name">AR / Customer Dashboard</div>
+          <span class="badge web">Web app</span>
+        </div>
+      </div>
+      <div class="card-desc">
+        Accounts-receivable system: ageing, currency exposure and Schedule III for admins,
+        plus on-screen entry of payments, invoices and credit notes. Each customer logs in,
+        sees only their own statement, and can flag an invoice as disputed.
+      </div>
+      <div class="card-meta">Login required — <code>admin</code> or your customer code.</div>
+      <div class="card-actions">
+        <a class="btn primary" href="https://dashboard-knap1.vercel.app">Open dashboard</a>
+      </div>
+    </div>
+
+    <!-- 3 · Tally audit assistant -->
+    <div class="card">
+      <div class="card-top">
+        <span class="card-icon">🔍</span>
+        <div>
+          <div class="card-name">Tally Statutory Audit Assistant</div>
+          <span class="badge desktop">Runs on your PC</span>
+        </div>
+      </div>
+      <div class="card-desc">
+        Connects to Tally Prime, reads every ledger and voucher for the year, and runs the
+        44-test CA battery — negative cash, 40A(3), 269ST/269SS, MSME ageing, Benford,
+        materiality — graded High / Medium / Low with statute references.
+      </div>
+      <div class="card-meta">One file. Double-click the <code>.bat</code>, then open <code>http://localhost:8789</code>.</div>
+      <div class="card-actions">
+        <a class="btn primary" href="/downloads/TallyAudit-AllInOne.bat" download>Download tool</a>
+        <a class="btn ghost" href="/downloads/TALLY-AUDIT-README.md">Guide</a>
+      </div>
+    </div>
+
+    <!-- 4 · GSTR-2B poster -->
+    <div class="card">
+      <div class="card-top">
+        <span class="card-icon">🔁</span>
+        <div>
+          <div class="card-name">GSTR-2B ⇄ Tally Poster</div>
+          <span class="badge desktop">Runs on the Tally PC</span>
+        </div>
+      </div>
+      <div class="card-desc">
+        Reconcile GSTR-2B JSON from the GST portal against the books, post not-booked
+        invoices straight into Tally with a double-posting guard, RCM liability journals,
+        and a 6-sheet Excel working paper.
+      </div>
+      <div class="card-meta">v1.7 · put both files in <code>C:\TallyPoster</code>, double-click the <code>.bat</code> — the page opens at <code>http://localhost:8787</code>.</div>
+      <div class="card-actions">
+        <a class="btn primary" href="/downloads/gstr2b-tally-poster.mjs" download>Download tool</a>
+        <a class="btn" href="/downloads/Start-Tally-Poster.bat" download>Start&nbsp;.bat</a>
+        <a class="btn ghost" href="/downloads/GSTR2B-POSTER-README.md">Guide</a>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="section-label">More utilities</div>
+  <div class="grid">
+
+    <!-- 5 · GSTR-1 Excel summary -->
+    <div class="card">
+      <div class="card-top">
+        <span class="card-icon">📊</span>
+        <div>
+          <div class="card-name">GSTR-1 Excel Summary</div>
+          <span class="badge desktop">Runs on your PC</span>
+        </div>
+      </div>
+      <div class="card-desc">
+        Drop GSTR-1 files from the GST portal and get a clean Excel summary —
+        section-wise, ready for the working-paper file.
+      </div>
+      <div class="card-meta">Download both files into one folder, double-click the <code>.bat</code>.</div>
+      <div class="card-actions">
+        <a class="btn primary" href="/downloads/gstr1-excel-summary.mjs" download>Download tool</a>
+        <a class="btn" href="/downloads/gstr1-excel-summary.bat" download>Start&nbsp;.bat</a>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="note">
+    <h3>First-time setup for the desktop tools (one time only)</h3>
+    <ol>
+      <li>Install <b>Node.js (LTS)</b> from <a href="https://nodejs.org">nodejs.org</a>.</li>
+      <li>In <b>Tally Prime</b>: F1 (Help) → Settings → Connectivity → Client/Server configuration →
+          <i>TallyPrime acts as</i> = <b>Both</b>, <i>Port</i> = <b>9000</b>. Keep the company open.</li>
+      <li>Download a tool above, put it in its own folder, and double-click the <code>.bat</code>.</li>
+    </ol>
+  </div>
+</main>
+
+<footer>
+  KNAP Advisory · internal tools ·
+  <a href="https://teamhub.knapadvisory.com">teamhub.knapadvisory.com</a>
+</footer>
+
+</body>
+</html>
