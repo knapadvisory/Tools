@@ -16,12 +16,12 @@
 #   git pull && bash deploy/tools-setup.sh
 #
 # Optional env:
-#   TOOLS_DOMAIN   defaults to tools.knapadvisory.com
+#   TOOLS_DOMAIN   defaults to apps.knapadvisory.com
 set -euo pipefail
 
 cd "$(dirname "$0")/.."   # repo root (Dockerfile lives here)
 
-TOOLS_DOMAIN="${TOOLS_DOMAIN:-tools.knapadvisory.com}"
+TOOLS_DOMAIN="${TOOLS_DOMAIN:-apps.knapadvisory.com}"
 
 echo "==> Building the Tools hub image..."
 docker build -t knap-tools:latest .

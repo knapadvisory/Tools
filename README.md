@@ -1,4 +1,4 @@
-# KNAP Tools hub — `tools.knapadvisory.com`
+# KNAP Tools hub — `apps.knapadvisory.com`
 
 One page where every internal tool lives. Web apps link out; desktop tools
 (the ones that must run next to Tally) are downloaded straight from this page.
@@ -45,7 +45,7 @@ cd Tools
 bash deploy/tools-setup.sh        # builds image, starts "teamhub-tools", registers Caddy route
 ```
 
-Then add a DNS **A record** for `tools.knapadvisory.com` pointing at
+Then add a DNS **A record** for `apps.knapadvisory.com` pointing at
 the same server IP as `teamhub.knapadvisory.com`. Caddy fetches the HTTPS
 certificate automatically on first load. (To serve it under a different
 name, run the script with `TOOLS_DOMAIN=<domain>`.)
