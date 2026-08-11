@@ -15,21 +15,13 @@
 # Redeploy after changes:
 #   git pull && bash deploy/tools-setup.sh
 #
-# Env (or you'll be prompted / pulled from TeamHub's config):
-#   DOMAIN   TeamHub's domain, e.g. teamhub.knapadvisory.com
+# Optional env:
+#   TOOLS_DOMAIN   defaults to tools.knapadvisory.com
 set -euo pipefail
 
 cd "$(dirname "$0")/.."   # repo root (Dockerfile lives here)
 
-# Non-interactive redeploys: pull the domain from the TeamHub config
-# (written by TeamHub's vps-setup.sh). Anything already set in the
-# environment still wins, so overrides remain possible.
-_cli_DOMAIN="${DOMAIN:-}"
-[ -f /root/teamhub.env ] && . /root/teamhub.env
-[ -n "$_cli_DOMAIN" ] && DOMAIN="$_cli_DOMAIN"
-
-if [ -z "${DOMAIN:-}" ]; then read -rp "TeamHub domain (e.g. teamhub.knapadvisory.com): " DOMAIN; fi
-TOOLS_DOMAIN="tools.$DOMAIN"
+TOOLS_DOMAIN="${TOOLS_DOMAIN:-tools.knapadvisory.com}"
 
 echo "==> Building the Tools hub image..."
 docker build -t knap-tools:latest .
