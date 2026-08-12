@@ -44,16 +44,27 @@ deploy/tools-setup.sh one-command deploy on the TeamHub VPS
 ## Access (site-wide key)
 
 The whole site sits behind one shared **access key**: every page and download
-serves a key screen (`gate.html`) until the right key is entered, after which
-a long-lived HttpOnly cookie remembers the browser. Enforced on the server
-(`server.js`), so downloads and the parser API are covered too — a stand-in
-until proper login is wired up.
+serves a key screen (`gate.html`) until the right key is entered. Enforced on
+the server (`server.js`), so downloads and the parser API are covered too — a
+stand-in until proper login is wired up.
 
-- The deploy script prompts for the key the first time (and remembers it in
-  `/root/knap-tools.env`); change it with
-  `TOOLS_PASSCODE=newkey bash deploy/tools-setup.sh`. Changing the key signs
-  every browser out. A blank key at the prompt leaves the site open.
-- Scripts/curl can send the key as an `x-passcode` header instead of the cookie.
+**Session lifetime.** Signing in lasts until the **browser is closed** or
+**8 hours** pass, whichever comes first (`TOOLS_SESSION_HOURS` changes the
+limit). Ten minutes before the limit, `session.js` pops up a
+continue-or-close warning with a countdown:
+
+- **Continue** → a fresh full session, extended *in place* — nothing on the
+  page is reloaded or reset, half-done work stays.
+- **Sign out & close** (or the **Sign out** button in the header) → session
+  ends, back to the key screen.
+- If the countdown hits zero unanswered, the popup asks for the key itself —
+  entering it resumes right where the user left off, still without a reload.
+
+Sessions are stateless signed tokens (HMAC of the key), so they survive
+container restarts, and changing the key signs every browser out at once:
+`TOOLS_PASSCODE=newkey bash deploy/tools-setup.sh`. A blank key at the prompt
+leaves the site open. Scripts/curl can send the key as an `x-passcode` header
+instead of the cookie.
 
 The parser itself is the same tested file TeamHub uses
 (`tools/amazon_invoice_parser.py` in the `Management-tool` repo). If it's

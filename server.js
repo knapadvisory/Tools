@@ -34,10 +34,29 @@ app.disable('x-powered-by');
 
 // ------------------------------------------------------------ access gate
 
-// Deterministic cookie token: survives container restarts, dies with the key.
-const TOKEN = PASSCODE
-  ? crypto.createHmac('sha256', PASSCODE).update('knap-tools-gate-v1').digest('hex')
-  : '';
+// Sessions are a signed expiry timestamp in a browser-session cookie: the key
+// stops working when the browser closes OR after SESSION_MS (default 8 h),
+// whichever comes first. session.js on each page warns 10 minutes before the
+// limit and lets the user extend in place, so in-progress work is never lost.
+// Tokens are stateless (HMAC-signed with the key itself), so they survive
+// container restarts and all die together when the key changes.
+const SESSION_MS = (Number(process.env.TOOLS_SESSION_HOURS) || 8) * 3600 * 1000;
+
+function sign(exp) {
+  return crypto.createHmac('sha256', PASSCODE).update('knap-tools-gate-v2:' + exp).digest('hex');
+}
+function makeToken() { const exp = Date.now() + SESSION_MS; return exp + '.' + sign(exp); }
+function tokenExp(t) {
+  const dot = (t || '').indexOf('.');
+  if (dot < 1) return 0;
+  const exp = Number(t.slice(0, dot));
+  if (!exp || exp < Date.now()) return 0;
+  try {
+    const a = Buffer.from(t.slice(dot + 1)), b = Buffer.from(sign(exp));
+    if (a.length === b.length && crypto.timingSafeEqual(a, b)) return exp;
+  } catch { /* fall through */ }
+  return 0;
+}
 
 function cookieToken(req) {
   const m = /(?:^|;\s*)knap_key=([^;]+)/.exec(req.headers.cookie || '');
@@ -46,8 +65,16 @@ function cookieToken(req) {
 
 function hasAccess(req) {
   if (!PASSCODE) return true;
-  if (cookieToken(req) === TOKEN) return true;
+  if (tokenExp(cookieToken(req)) > 0) return true;
   return (req.get('x-passcode') || '') === PASSCODE; // curl / script access
+}
+
+function setSession(req, res) {
+  const token = makeToken();
+  const secure = req.secure || req.get('x-forwarded-proto') === 'https' ? '; Secure' : '';
+  // No Max-Age: a browser-session cookie, gone when the browser closes.
+  res.setHeader('Set-Cookie', `knap_key=${token}; Path=/; HttpOnly; SameSite=Lax${secure}`);
+  return Number(token.split('.')[0]);
 }
 
 app.post('/api/auth/login', express.json(), (req, res) => {
@@ -55,9 +82,12 @@ app.post('/api/auth/login', express.json(), (req, res) => {
     // Small damper against key guessing.
     return setTimeout(() => res.status(401).json({ error: 'Wrong key.' }), 700);
   }
-  const secure = req.secure || req.get('x-forwarded-proto') === 'https' ? '; Secure' : '';
-  res.setHeader('Set-Cookie',
-    `knap_key=${TOKEN}; Path=/; HttpOnly; SameSite=Lax; Max-Age=15552000${secure}`);
+  res.json({ exp: setSession(req, res) });
+});
+
+// Signing out needs no auth — it only clears the browser's own cookie.
+app.post('/api/auth/logout', (_req, res) => {
+  res.setHeader('Set-Cookie', 'knap_key=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
   res.status(204).end();
 });
 
@@ -66,6 +96,18 @@ app.use((req, res, next) => {
   if (req.path === '/healthz' || hasAccess(req)) return next();
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'Passcode required.' });
   res.status(401).set('Cache-Control', 'no-store').sendFile(path.join(__dirname, 'gate.html'));
+});
+
+// Session info for the pages' timer (gated: only reachable once signed in).
+app.get('/api/auth/status', (req, res) => {
+  if (!PASSCODE) return res.json({ gated: false });
+  res.json({ gated: true, exp: tokenExp(cookieToken(req)) || null });
+});
+
+// "Continue" on the expiry warning: a fresh full session, no reload needed.
+app.post('/api/auth/extend', (req, res) => {
+  if (!PASSCODE) return res.json({ gated: false });
+  res.json({ exp: setSession(req, res) });
 });
 
 // ------------------------------------------------------------ fee parser API
@@ -142,6 +184,7 @@ const NO_CACHE = { 'Cache-Control': 'no-cache' };
 app.get('/healthz', (_req, res) => res.type('text').send('ok'));
 
 app.get('/', (_req, res) => res.set(NO_CACHE).sendFile(path.join(__dirname, 'index.html')));
+app.get('/session.js', (_req, res) => res.set(NO_CACHE).sendFile(path.join(__dirname, 'session.js')));
 
 app.use('/fee-parser', express.static(path.join(__dirname, 'fee-parser'), {
   setHeaders: (res) => res.set(NO_CACHE),

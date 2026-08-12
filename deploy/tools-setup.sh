@@ -17,20 +17,24 @@
 #
 # Optional env:
 #   TOOLS_DOMAIN     defaults to apps.knapadvisory.com
-#   TOOLS_PASSCODE   the shared access key the whole site asks for before
-#                    showing anything (remembered in /root/knap-tools.env for
-#                    redeploys; prompted for on first run; blank = open site)
+#   TOOLS_PASSCODE       the shared access key the whole site asks for before
+#                        showing anything (remembered in /root/knap-tools.env
+#                        for redeploys; prompted for on first run; blank = open)
+#   TOOLS_SESSION_HOURS  how long a signed-in session lasts before the
+#                        continue-or-close popup (default 8)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."   # repo root (Dockerfile lives here)
 
 # Remember settings across redeploys; anything set in the environment wins.
 TOOLS_CONFIG=/root/knap-tools.env
-_cli_DOMAIN="${TOOLS_DOMAIN:-}"; _cli_PASS="${TOOLS_PASSCODE:-}"
+_cli_DOMAIN="${TOOLS_DOMAIN:-}"; _cli_PASS="${TOOLS_PASSCODE:-}"; _cli_HRS="${TOOLS_SESSION_HOURS:-}"
 [ -f "$TOOLS_CONFIG" ] && . "$TOOLS_CONFIG"
 [ -n "$_cli_DOMAIN" ] && TOOLS_DOMAIN="$_cli_DOMAIN"
 [ -n "$_cli_PASS" ] && TOOLS_PASSCODE="$_cli_PASS"
+[ -n "$_cli_HRS" ] && TOOLS_SESSION_HOURS="$_cli_HRS"
 TOOLS_DOMAIN="${TOOLS_DOMAIN:-apps.knapadvisory.com}"
+TOOLS_SESSION_HOURS="${TOOLS_SESSION_HOURS:-8}"
 if [ -z "${TOOLS_PASSCODE:-}" ]; then
   read -rp "Access key for the site (users must enter this; blank = open): " TOOLS_PASSCODE
 fi
@@ -39,6 +43,7 @@ umask 077
 cat > "$TOOLS_CONFIG" <<EOF
 TOOLS_DOMAIN="$TOOLS_DOMAIN"
 TOOLS_PASSCODE="$TOOLS_PASSCODE"
+TOOLS_SESSION_HOURS="$TOOLS_SESSION_HOURS"
 EOF
 
 echo "==> Building the Tools hub image..."
@@ -51,6 +56,7 @@ docker rm -f teamhub-tools 2>/dev/null || true
 docker run -d --name teamhub-tools --restart unless-stopped \
   --network teamhub-net \
   -e TOOLS_PASSCODE="$TOOLS_PASSCODE" \
+  -e TOOLS_SESSION_HOURS="$TOOLS_SESSION_HOURS" \
   knap-tools:latest
 
 echo "==> Registering the $TOOLS_DOMAIN route with Caddy..."
