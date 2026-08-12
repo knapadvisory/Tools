@@ -1,0 +1,15 @@
+{
+  "name": "knap-tools-hub",
+  "version": "1.0.0",
+  "private": true,
+  "description": "KNAP Tools hub — static tool directory + hosted Marketplace Fee Register parser",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "multer": "^2.0.2"
+  }
+}

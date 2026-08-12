@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Marketplace Fee Register — KNAP Tools</title>
+<meta name="description" content="Turn Amazon / Flipkart / Myntra / Nykaa fee PDFs into one reconciled Excel register.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧾</text></svg>">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --accent: #4f46e5;
+    --accent-hover: #4338ca;
+    --on-accent: #ffffff;
+    --bg: #f4f5f8;
+    --surface: #ffffff;
+    --surface-2: #f5f6f9;
+    --border: #e4e6ec;
+    --text: #1d1c1d;
+    --muted: #6b7280;
+    --shadow: rgba(20, 25, 45, .08);
+    --success: #16a34a;  --success-soft: #e7f6ec;
+    --warning: #d97706;  --warning-soft: #fbf4dc;
+    --danger: #dc2626;   --danger-soft: #fdecec;
+    --header-bg: #1e1b4b;
+    --header-text: rgba(255, 255, 255, .85);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1117;
+      --surface: #171a22;
+      --surface-2: #20242e;
+      --border: #2b303c;
+      --text: #e7e9ee;
+      --muted: #9aa3b2;
+      --shadow: rgba(0, 0, 0, .45);
+      --success: #4ade80;  --success-soft: rgba(74, 222, 128, .16);
+      --warning: #fbbf24;  --warning-soft: rgba(251, 191, 36, .16);
+      --danger: #f87171;   --danger-soft: rgba(248, 113, 113, .16);
+      --header-bg: #14122e;
+    }
+  }
+
+  body {
+    background: var(--bg); color: var(--text);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    min-height: 100vh; display: flex; flex-direction: column;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .site-head { background: var(--header-bg); color: var(--header-text); }
+  .site-head-inner {
+    max-width: 860px; margin: 0 auto; padding: 14px 24px;
+    display: flex; align-items: center; gap: 16px;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; color: #fff; }
+  .back { margin-left: auto; color: var(--header-text); font-size: 13px; padding: 6px 12px; border-radius: 8px; }
+  .back:hover { background: rgba(255,255,255,.1); text-decoration: none; }
+
+  main { max-width: 860px; margin: 0 auto; padding: 32px 24px; width: 100%; flex: 1; }
+  h1 { font-size: 22px; letter-spacing: -.01em; }
+  .ver { font-size: 11.5px; color: var(--muted); margin-left: 8px; font-weight: 400; }
+  .lede { color: var(--muted); margin: 8px 0 24px; max-width: 640px; font-size: 13.5px; }
+
+  .drop {
+    border: 2px dashed var(--border); border-radius: 14px; background: var(--surface);
+    padding: 40px 24px; text-align: center; cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); }
+  .drop.busy { opacity: .6; pointer-events: none; }
+  .drop-h { font-size: 16px; font-weight: 700; display: block; }
+  .drop-p { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .marks { margin-top: 14px; font-size: 11px; letter-spacing: .12em; color: var(--muted); font-weight: 600; }
+
+  .selected { margin-top: 18px; }
+  .flist { list-style: none; display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
+  .fli {
+    display: flex; align-items: center; gap: 10px; font-size: 13px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 7px 12px;
+  }
+  .fn { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rm { border: 0; background: none; color: var(--muted); font-size: 16px; cursor: pointer; padding: 0 4px; }
+  .rm:hover { color: var(--danger); }
+
+  .actions { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 600;
+    padding: 9px 16px; border-radius: 9px; border: 1px solid var(--border);
+    background: var(--surface-2); color: var(--text); cursor: pointer;
+    transition: background .12s, border-color .12s;
+  }
+  .btn:hover { border-color: var(--accent); }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .btn.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+
+  .err {
+    margin-top: 16px; padding: 12px 16px; border-radius: 10px; font-size: 13.5px;
+    background: var(--danger-soft); color: var(--danger); border: 1px solid var(--danger);
+  }
+
+  .pass { margin-top: 16px; display: none; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .pass.show { display: flex; }
+  .pass input {
+    font: inherit; padding: 8px 12px; border-radius: 9px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text); width: 220px;
+  }
+
+  .result { margin-top: 22px; }
+  .summary { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
+  .sumN { font-size: 20px; font-weight: 700; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .ledger { display: flex; flex-direction: column; gap: 6px; max-height: 340px; overflow-y: auto; }
+  .rrow {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px;
+  }
+  .tick { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .tick.ok { background: var(--success); }
+  .tick.check { background: var(--warning); }
+  .rdoc { font-size: 13.5px; font-weight: 600; }
+  .rdetail { font-size: 12px; color: var(--muted); }
+  .rrow > div { flex: 1; min-width: 0; }
+  .chip {
+    flex: none; font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 999px;
+  }
+  .chip.ok { background: var(--success-soft); color: var(--success); }
+  .chip.check { background: var(--warning-soft); color: var(--warning); }
+  .note { margin-top: 12px; }
+
+  footer {
+    border-top: 1px solid var(--border); margin-top: 40px;
+    padding: 18px 24px; text-align: center; font-size: 12.5px; color: var(--muted);
+  }
+</style>
+</head>
+<body>
+
+<header class="site-head">
+  <div class="site-head-inner">
+    <span class="brand"><span>🧾</span> Marketplace Fee Register</span>
+    <a class="back" href="/">← All tools</a>
+  </div>
+</header>
+
+<main>
+  <h1>Marketplace Fee Register <span class="ver" id="ver"></span></h1>
+  <p class="lede">
+    Drop this month’s marketplace fee documents — invoices and credit notes together,
+    Amazon / Flipkart / Myntra / Nykaa. Each PDF is read, split by fee type, GST separated,
+    a TDS section mapped, and reconciled against its printed total — then compiled into one
+    Excel register. Files are processed on the server and discarded after 15 minutes.
+  </p>
+
+  <div class="drop" id="drop" role="button" tabindex="0">
+    <strong class="drop-h">Drop invoice PDFs here</strong>
+    <div class="drop-p">or click to browse — up to 80 files, 25&nbsp;MB each</div>
+    <div class="marks">AMAZON · FLIPKART · MYNTRA · NYKAA</div>
+  </div>
+  <input type="file" id="picker" multiple accept="application/pdf" style="display:none">
+
+  <div class="selected" id="selected" hidden>
+    <ul class="flist" id="flist"></ul>
+    <div class="actions">
+      <button class="btn primary" id="go"></button>
+      <button class="btn" id="reset">↺ Reset</button>
+    </div>
+  </div>
+
+  <div class="pass" id="pass">
+    <span class="muted">This tool needs the team passcode:</span>
+    <input type="password" id="passInput" placeholder="Passcode" autocomplete="off">
+    <button class="btn" id="passSave">Save</button>
+  </div>
+
+  <div class="err" id="err" hidden></div>
+
+  <div class="result" id="result" hidden>
+    <div class="summary">
+      <span class="sumN" id="sumN"></span>
+      <span class="muted" id="sumT"></span>
+    </div>
+    <div class="ledger" id="ledger"></div>
+    <div class="actions">
+      <button class="btn primary" id="dl">Download Excel register</button>
+      <button class="btn" id="again">Process another batch</button>
+    </div>
+    <p class="muted note">Rows marked <b>CHECK</b> did not match their printed total — open those PDFs and verify before filing.</p>
+  </div>
+</main>
+
+<footer>
+  KNAP Advisory · internal tools · <a href="/">apps.knapadvisory.com</a>
+</footer>
+
+<script>
+(function () {
+  var API = '/api/fee-parser';
+  var files = [];
+  var result = null;
+  var busy = false;
+
+  var $ = function (id) { return document.getElementById(id); };
+  var drop = $('drop'), picker = $('picker'), flist = $('flist'),
+      selected = $('selected'), go = $('go'), resetBtn = $('reset'),
+      err = $('err'), resultBox = $('result'), ledger = $('ledger'),
+      pass = $('pass'), passInput = $('passInput');
+
+  function passcode() { return localStorage.getItem('knap_tools_passcode') || ''; }
+  function headers() {
+    var h = {};
+    if (passcode()) h['x-passcode'] = passcode();
+    return h;
+  }
+
+  function setError(msg) { err.hidden = !msg; err.textContent = msg || ''; }
+
+  function render() {
+    selected.hidden = files.length === 0;
+    resultBox.hidden = !result;
+    flist.innerHTML = '';
+    files.forEach(function (f, i) {
+      var li = document.createElement('li'); li.className = 'fli';
+      var fn = document.createElement('span'); fn.className = 'fn'; fn.textContent = f.name;
+      var rm = document.createElement('button'); rm.className = 'rm'; rm.textContent = '×';
+      rm.onclick = function () { files.splice(i, 1); render(); };
+      li.appendChild(fn); li.appendChild(rm); flist.appendChild(li);
+    });
+    go.textContent = busy ? 'Reading documents…' : 'Generate register (' + files.length + ')';
+    go.disabled = busy; resetBtn.disabled = busy;
+    drop.classList.toggle('busy', busy);
+    if (result) {
+      $('ver').textContent = result.version ? 'parser ' + result.version : '';
+      $('sumN').textContent = result.ok + ' of ' + result.total;
+      $('sumT').textContent = result.ok === result.total
+        ? 'documents reconciled cleanly'
+        : 'reconciled — the rest need a manual check';
+      ledger.innerHTML = '';
+      result.rows.forEach(function (row) {
+        var ok = row.status === 'OK';
+        var r = document.createElement('div'); r.className = 'rrow';
+        var t = document.createElement('span'); t.className = 'tick ' + (ok ? 'ok' : 'check');
+        var mid = document.createElement('div');
+        var d1 = document.createElement('div'); d1.className = 'rdoc'; d1.textContent = row.doc;
+        var d2 = document.createElement('div'); d2.className = 'rdetail'; d2.textContent = row.detail;
+        mid.appendChild(d1); mid.appendChild(d2);
+        var c = document.createElement('span'); c.className = 'chip ' + (ok ? 'ok' : 'check'); c.textContent = row.status;
+        r.appendChild(t); r.appendChild(mid); r.appendChild(c); ledger.appendChild(r);
+      });
+    }
+  }
+
+  function addFiles(list) {
+    Array.prototype.slice.call(list).forEach(function (f) {
+      if (f.name.toLowerCase().slice(-4) === '.pdf') files.push(f);
+    });
+    result = null; setError(''); render();
+  }
+
+  drop.onclick = function () { picker.click(); };
+  drop.ondragover = function (e) { e.preventDefault(); drop.classList.add('over'); };
+  drop.ondragleave = function () { drop.classList.remove('over'); };
+  drop.ondrop = function (e) { e.preventDefault(); drop.classList.remove('over'); addFiles(e.dataTransfer.files); };
+  picker.onchange = function () { addFiles(picker.files); picker.value = ''; };
+
+  resetBtn.onclick = function () { files = []; result = null; setError(''); render(); };
+  $('again').onclick = function () { files = []; result = null; render(); };
+
+  $('passSave').onclick = function () {
+    localStorage.setItem('knap_tools_passcode', passInput.value);
+    pass.classList.remove('show');
+    if (files.length) process();
+  };
+
+  function process() {
+    busy = true; setError(''); render();
+    var fd = new FormData();
+    files.forEach(function (f) { fd.append('files', f); });
+    fetch(API + '/process', { method: 'POST', body: fd, headers: headers() })
+      .then(function (r) { return r.json().then(function (data) { return { r: r, data: data }; }); })
+      .then(function (x) {
+        if (x.r.status === 401) { pass.classList.add('show'); throw new Error('Enter the team passcode to use this tool.'); }
+        if (!x.r.ok) throw new Error(x.data.error || 'Processing failed.');
+        result = x.data; files = [];
+      })
+      .catch(function (e) { setError(e.message); })
+      .then(function () { busy = false; render(); });
+  }
+  go.onclick = process;
+
+  $('dl').onclick = function () {
+    fetch(API + '/download/' + result.token, { headers: headers() })
+      .then(function (r) {
+        if (!r.ok) throw new Error('Download expired — please process again.');
+        return r.blob();
+      })
+      .then(function (blob) {
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url; a.download = 'Fee_Register.xlsx'; a.click();
+        URL.revokeObjectURL(url);
+      })
+      .catch(function (e) { setError(e.message); });
+  };
+
+  render();
+})();
+</script>
+</body>
+</html>

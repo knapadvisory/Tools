@@ -16,12 +16,26 @@
 #   git pull && bash deploy/tools-setup.sh
 #
 # Optional env:
-#   TOOLS_DOMAIN   defaults to apps.knapadvisory.com
+#   TOOLS_DOMAIN     defaults to apps.knapadvisory.com
+#   TOOLS_PASSCODE   set to require a shared passcode for the fee-parser API
+#                    (remembered in /root/knap-tools.env for redeploys)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."   # repo root (Dockerfile lives here)
 
+# Remember settings across redeploys; anything set in the environment wins.
+TOOLS_CONFIG=/root/knap-tools.env
+_cli_DOMAIN="${TOOLS_DOMAIN:-}"; _cli_PASS="${TOOLS_PASSCODE:-}"
+[ -f "$TOOLS_CONFIG" ] && . "$TOOLS_CONFIG"
+[ -n "$_cli_DOMAIN" ] && TOOLS_DOMAIN="$_cli_DOMAIN"
+[ -n "$_cli_PASS" ] && TOOLS_PASSCODE="$_cli_PASS"
 TOOLS_DOMAIN="${TOOLS_DOMAIN:-apps.knapadvisory.com}"
+TOOLS_PASSCODE="${TOOLS_PASSCODE:-}"
+umask 077
+cat > "$TOOLS_CONFIG" <<EOF
+TOOLS_DOMAIN="$TOOLS_DOMAIN"
+TOOLS_PASSCODE="$TOOLS_PASSCODE"
+EOF
 
 echo "==> Building the Tools hub image..."
 docker build -t knap-tools:latest .
@@ -32,6 +46,7 @@ echo "==> (Re)starting the Tools hub container..."
 docker rm -f teamhub-tools 2>/dev/null || true
 docker run -d --name teamhub-tools --restart unless-stopped \
   --network teamhub-net \
+  -e TOOLS_PASSCODE="$TOOLS_PASSCODE" \
   knap-tools:latest
 
 echo "==> Registering the $TOOLS_DOMAIN route with Caddy..."
