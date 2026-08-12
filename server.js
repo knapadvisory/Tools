@@ -158,5 +158,5 @@ app.use('/downloads', express.static(path.join(__dirname, 'downloads'), {
 }));
 
 app.listen(PORT, () => {
-  console.log(`KNAP Tools hub listening on :${PORT}` + (PASSCODE ? ' (parser passcode ON)' : ''));
+  console.log(`KNAP Tools hub listening on :${PORT} — access key ${PASSCODE ? 'ON' : 'OFF (site is open)'}`);
 });
