@@ -1,5 +1,8 @@
 // Session UI for the KNAP Tools access gate. Included by every page.
 // - Adds a "Sign out" button to the header when the site is gated.
+// - Per-TAB sign-in: a marker in sessionStorage dies when the tab closes, so
+//   a new or reopened tab shows an opaque key screen over the page until the
+//   key is entered — even if the browser-wide cookie is still valid.
 // - 10 minutes before the session's time limit, shows a warning popup with a
 //   live countdown: [Continue] extends the session in place (NO reload — the
 //   page's in-progress work is untouched), [Sign out & close] ends it.
@@ -7,7 +10,12 @@
 //   key; entering it resumes in place, still without losing the page's data.
 (function () {
   var WARN_BEFORE = 10 * 60 * 1000; // warn 10 minutes before expiry
+  var TAB_FLAG = 'knap_tab';
   var exp = 0, warnTimer = 0, tick = 0;
+
+  function tabOk() { try { return !!sessionStorage.getItem(TAB_FLAG); } catch (e) { return true; } }
+  function markTab() { try { sessionStorage.setItem(TAB_FLAG, '1'); } catch (e) {} }
+  function unmarkTab() { try { sessionStorage.removeItem(TAB_FLAG); } catch (e) {} }
 
   function el(tag, cls, text) {
     var e = document.createElement(tag);
@@ -21,6 +29,8 @@
     '.sess-overlay{position:fixed;inset:0;background:rgba(15,17,23,.55);display:none;',
     'align-items:center;justify-content:center;z-index:1000;padding:24px}',
     '.sess-overlay.show{display:flex}',
+    // Fully opaque for the per-tab key screen: nothing readable behind it.
+    '.sess-overlay.lock{background:var(--bg,#f4f5f8)}',
     '.sess-card{width:100%;max-width:400px;background:var(--surface,#fff);color:var(--text,#1d1c1d);',
     'border:1px solid var(--border,#e4e6ec);border-radius:16px;padding:28px;text-align:center;',
     'box-shadow:0 12px 40px rgba(0,0,0,.35)}',
@@ -81,6 +91,18 @@
     keyInput.focus();
   }
 
+  // Opaque key screen for a tab that is not signed in yet (new or reopened
+  // tab): same key flow as expiry, but nothing on the page shows behind it.
+  function toLockMode() {
+    overlay.classList.add('lock', 'show');
+    h.textContent = 'KNAP Tools';
+    p.textContent = 'Enter the access key to continue in this tab.';
+    expired = true;
+    count.style.display = 'none';
+    keyInput.classList.add('show');
+    keyInput.focus();
+  }
+
   function showWarning() {
     // Another tab may have extended the session meanwhile — check first.
     fetch('/api/auth/status').then(function (r) { return r.ok ? r.json() : null; })
@@ -97,7 +119,7 @@
   }
 
   function hidePopup() {
-    overlay.classList.remove('show');
+    overlay.classList.remove('show', 'lock');
     clearInterval(tick);
     expired = false;
     h.textContent = 'Your session is about to end';
@@ -124,7 +146,7 @@
       }).then(function (r) { return r.ok ? r.json() : null; })
         .then(function (s) {
           if (!s) { err.classList.add('show'); keyInput.select(); return; }
-          hidePopup(); schedule(s.exp);
+          markTab(); hidePopup(); schedule(s.exp);
         });
     } else {
       fetch('/api/auth/extend', { method: 'POST' })
@@ -138,6 +160,7 @@
   keyInput.onkeydown = function (e) { if (e.key === 'Enter') btnGo.click(); };
 
   function signOut() {
+    unmarkTab();
     fetch('/api/auth/logout', { method: 'POST' }).then(function () { location.href = '/'; });
   }
   btnOut.onclick = signOut;
@@ -153,6 +176,7 @@
         out.onclick = signOut;
         head.appendChild(out);
       }
+      if (!tabOk()) { toLockMode(); return; } // new/reopened tab: key first
       if (s.exp) schedule(s.exp);
     })
     .catch(function () { /* network hiccup: no session UI */ });

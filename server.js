@@ -35,12 +35,14 @@ app.disable('x-powered-by');
 // ------------------------------------------------------------ access gate
 
 // Sessions are a signed expiry timestamp in a browser-session cookie: the key
-// stops working when the browser closes OR after SESSION_MS (default 8 h),
-// whichever comes first. session.js on each page warns 10 minutes before the
-// limit and lets the user extend in place, so in-progress work is never lost.
-// Tokens are stateless (HMAC-signed with the key itself), so they survive
-// container restarts and all die together when the key changes.
-const SESSION_MS = (Number(process.env.TOOLS_SESSION_HOURS) || 8) * 3600 * 1000;
+// stops working when the browser closes OR after SESSION_MS (default 3 h),
+// whichever comes first. On top of that, session.js keeps a per-TAB marker in
+// sessionStorage, so even reopening a closed tab asks for the key again. It
+// also warns 10 minutes before the time limit and lets the user extend in
+// place, so in-progress work is never lost. Tokens are stateless (HMAC-signed
+// with the key itself): they survive container restarts and all die together
+// when the key changes.
+const SESSION_MS = (Number(process.env.TOOLS_SESSION_HOURS) || 3) * 3600 * 1000;
 
 function sign(exp) {
   return crypto.createHmac('sha256', PASSCODE).update('knap-tools-gate-v2:' + exp).digest('hex');
@@ -201,5 +203,5 @@ app.use('/downloads', express.static(path.join(__dirname, 'downloads'), {
 }));
 
 app.listen(PORT, () => {
-  console.log(`KNAP Tools hub listening on :${PORT} — access key ${PASSCODE ? 'ON' : 'OFF (site is open)'}`);
+  console.log(`KNAP Tools hub listening on :${PORT} — access key ${PASSCODE ? `ON (sessions ${SESSION_MS / 3600000}h)` : 'OFF (site is open)'}`);
 });

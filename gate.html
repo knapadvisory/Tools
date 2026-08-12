@@ -77,7 +77,11 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key: key.value })
     }).then(function (r) {
-      if (r.ok) { location.reload(); return; }
+      if (r.ok) {
+        // Mark THIS tab as signed in (session.js checks it; dies with the tab).
+        try { sessionStorage.setItem('knap_tab', '1'); } catch (e) {}
+        location.reload(); return;
+      }
       err.classList.add('show'); go.disabled = false; key.select();
     }).catch(function () { err.classList.add('show'); go.disabled = false; });
   };

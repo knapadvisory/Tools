@@ -48,10 +48,13 @@ serves a key screen (`gate.html`) until the right key is entered. Enforced on
 the server (`server.js`), so downloads and the parser API are covered too — a
 stand-in until proper login is wired up.
 
-**Session lifetime.** Signing in lasts until the **browser is closed** or
-**8 hours** pass, whichever comes first (`TOOLS_SESSION_HOURS` changes the
-limit). Ten minutes before the limit, `session.js` pops up a
-continue-or-close warning with a countdown:
+**Session lifetime.** Signing in is **per tab**: closing the tab (or the
+whole browser) means the key is asked again on the next visit — a marker in
+`sessionStorage` dies with the tab, and a new/reopened tab gets an opaque
+key screen even while the browser-wide cookie is still valid. On top of
+that there is a **3-hour** time limit (`TOOLS_SESSION_HOURS` changes it).
+Ten minutes before the limit, `session.js` pops up a continue-or-close
+warning with a countdown:
 
 - **Continue** → a fresh full session, extended *in place* — nothing on the
   page is reloaded or reset, half-done work stays.
@@ -59,6 +62,9 @@ continue-or-close warning with a countdown:
   ends, back to the key screen.
 - If the countdown hits zero unanswered, the popup asks for the key itself —
   entering it resumes right where the user left off, still without a reload.
+
+In-progress work is lost only on explicit sign-out, pressing
+"Sign out & close", closing the tab, or closing the browser.
 
 Sessions are stateless signed tokens (HMAC of the key), so they survive
 container restarts, and changing the key signs every browser out at once:

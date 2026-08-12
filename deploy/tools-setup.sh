@@ -21,7 +21,7 @@
 #                        showing anything (remembered in /root/knap-tools.env
 #                        for redeploys; prompted for on first run; blank = open)
 #   TOOLS_SESSION_HOURS  how long a signed-in session lasts before the
-#                        continue-or-close popup (default 8)
+#                        continue-or-close popup (default 3)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."   # repo root (Dockerfile lives here)
@@ -34,7 +34,7 @@ _cli_DOMAIN="${TOOLS_DOMAIN:-}"; _cli_PASS="${TOOLS_PASSCODE:-}"; _cli_HRS="${TO
 [ -n "$_cli_PASS" ] && TOOLS_PASSCODE="$_cli_PASS"
 [ -n "$_cli_HRS" ] && TOOLS_SESSION_HOURS="$_cli_HRS"
 TOOLS_DOMAIN="${TOOLS_DOMAIN:-apps.knapadvisory.com}"
-TOOLS_SESSION_HOURS="${TOOLS_SESSION_HOURS:-8}"
+TOOLS_SESSION_HOURS="${TOOLS_SESSION_HOURS:-3}"
 if [ -z "${TOOLS_PASSCODE:-}" ]; then
   read -rp "Access key for the site (users must enter this; blank = open): " TOOLS_PASSCODE
 fi
