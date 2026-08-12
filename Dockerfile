@@ -19,6 +19,8 @@ COPY index.html gate.html session.js ./
 COPY fee-parser/ ./fee-parser/
 COPY gstr2b/ ./gstr2b/
 COPY audit/ ./audit/
+COPY gstr1/ ./gstr1/
+COPY gstr1-engine/ ./gstr1-engine/
 COPY connector/ ./connector/
 COPY downloads/ ./downloads/
 

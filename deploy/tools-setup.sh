@@ -57,6 +57,8 @@ docker run -d --name teamhub-tools --restart unless-stopped \
   --network teamhub-net \
   -e TOOLS_PASSCODE="$TOOLS_PASSCODE" \
   -e TOOLS_SESSION_HOURS="$TOOLS_SESSION_HOURS" \
+  -e KNAP_DATA=/data \
+  -v knap-tools-data:/data \
   knap-tools:latest
 
 echo "==> Registering the $TOOLS_DOMAIN route with Caddy..."

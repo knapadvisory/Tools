@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GSTR-1 Excel Summary — KNAP Tools</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; margin: 0; background: #f4f6f8; color: #1a2330; }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 24px 16px 60px; }
+  h1 { font-size: 22px; margin: 8px 0 4px; }
+  .sub { color: #5b6a7c; font-size: 14px; margin-bottom: 20px; }
+  .drop { border: 2px dashed #b8c4d0; border-radius: 12px; background: #fff; padding: 36px 20px; text-align: center; cursor: pointer; transition: border-color .15s, background .15s; }
+  .drop.on { border-color: #e8901a; background: #fff8ec; }
+  .drop b { color: #e8901a; }
+  .files { margin: 14px 0 0; padding: 0; list-style: none; font-size: 14px; }
+  .files li { background: #fff; border: 1px solid #e2e8ee; border-radius: 8px; padding: 8px 12px; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center; }
+  .files li .rm { color: #c0392b; cursor: pointer; border: none; background: none; font-size: 15px; }
+  .btns { margin: 18px 0; display: flex; gap: 10px; flex-wrap: wrap; }
+  button.primary { background: #e8901a; color: #fff; border: none; border-radius: 8px; padding: 10px 22px; font-size: 15px; font-weight: 600; cursor: pointer; }
+  button.primary:disabled { background: #cfd8e0; cursor: default; }
+  button.ghost { background: #fff; color: #1a2330; border: 1px solid #b8c4d0; border-radius: 8px; padding: 10px 18px; font-size: 15px; cursor: pointer; }
+  table { border-collapse: collapse; background: #fff; font-size: 14px; width: 100%; }
+  th, td { border: 1px solid #9aa7b4; padding: 6px 10px; text-align: right; white-space: nowrap; }
+  th { background: #f6a821; font-weight: 700; text-align: center; }
+  td:first-child { text-align: center; }
+  .tablewrap { overflow-x: auto; margin-top: 8px; }
+  .warn { background: #fff4e0; border: 1px solid #f0c36c; border-radius: 8px; padding: 10px 14px; font-size: 13px; margin-top: 14px; }
+  .err { background: #fdecea; border: 1px solid #e6a19a; border-radius: 8px; padding: 10px 14px; font-size: 13px; margin-top: 14px; }
+  .names { background: #fff; border: 1px solid #e2e8ee; border-radius: 10px; padding: 14px 16px; margin-top: 16px; }
+  .names h2 { font-size: 16px; margin: 0 0 6px; }
+  .names .row { display: flex; gap: 8px; align-items: center; margin: 5px 0; }
+  .names .row code { font-size: 13px; min-width: 150px; }
+  .names input[type=text] { flex: 1; padding: 6px 9px; border: 1px solid #b8c4d0; border-radius: 6px; font-size: 14px; }
+  .names a { color: #e8901a; font-size: 13px; white-space: nowrap; }
+  .names .ok { color: #1e7d32; font-size: 13px; }
+  .privacy { font-size: 12px; color: #7d8b9a; margin-top: 30px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>GSTR-1 → Excel summary <a href="/" style="font-size:12.5px;font-weight:400;float:right">← All tools</a></h1>
+  <div class="sub">Drop the monthly <b>GSTR-1 files</b> (GST portal download — PDF and/or JSON) and get the
+  “As Per GSTR1” table — B2B / B2C / Export / IGST / CGST / SGST, one row per month — as an Excel file.<br>
+  <b>JSON files also give section-wise bill sheets for the year</b> — B2B bills, B2B credit/debit notes,
+  exports, B2C — with party GSTIN &amp; name, monthly subtotals, and a separate Amendments sheet whose
+  effect is included in the summary.<br>
+  <b>GSTR-3B PDFs</b> can be dropped too — you get a GSTR-1 vs GSTR-3B difference sheet
+  (3B B2B+B2C and Export separately) and an RCM sheet from Table 3.1(d).</div>
+
+  <div class="drop" id="drop">Drag &amp; drop GSTR-1 / GSTR-3B files here, or <b>click to choose</b><br><span style="font-size:13px;color:#7d8b9a">Tip: also drop the portal’s filed-GSTR-1 <b>Excel</b> — party names are imported from it, free, no API needed</span>
+    <input type="file" id="pick" accept=".pdf,.json,.xlsx" multiple hidden>
+  </div>
+  <ul class="files" id="list"></ul>
+
+  <div class="btns">
+    <button class="primary" id="go" disabled>Download Excel</button>
+    <button class="ghost" id="clear">Clear</button>
+  </div>
+
+  <div id="out"></div>
+  <div id="names"></div>
+
+  <div class="privacy">Files are processed on KNAP's own server (apps.knapadvisory.com) — parsed
+  in memory, never stored. Party-name lookups go from the server to the GST portal
+  (services.gst.gov.in) and only the GSTIN→name cache is kept, shared by the whole team.</div>
+</div>
+<script src="/session.js" defer></script>
+<script>
+const files = [];
+const drop = document.getElementById('drop');
+const pick = document.getElementById('pick');
+const list = document.getElementById('list');
+const go = document.getElementById('go');
+const out = document.getElementById('out');
+
+drop.onclick = () => pick.click();
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('on'); };
+drop.ondragleave = () => drop.classList.remove('on');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('on'); addFiles(e.dataTransfer.files); };
+pick.onchange = () => addFiles(pick.files);
+document.getElementById('clear').onclick = () => { files.length = 0; render(); out.innerHTML = ''; };
+
+function addFiles(fl) {
+  for (const f of fl) {
+    if (!/\.(pdf|json|xlsx)$/i.test(f.name)) continue;
+    if (files.some(x => x.name === f.name && x.size === f.size)) continue;
+    files.push(f);
+  }
+  render();
+  if (files.length) preview();
+}
+function render() {
+  list.innerHTML = '';
+  files.forEach((f, i) => {
+    const li = document.createElement('li');
+    li.innerHTML = '<span>' + f.name + '</span>';
+    const rm = document.createElement('button');
+    rm.className = 'rm'; rm.textContent = '✕';
+    rm.onclick = () => { files.splice(i, 1); render(); files.length ? preview() : out.innerHTML = ''; };
+    li.appendChild(rm);
+    list.appendChild(li);
+  });
+  go.disabled = !files.length;
+}
+async function payload() {
+  const arr = [];
+  for (const f of files) {
+    const buf = await f.arrayBuffer();
+    let bin = '';
+    const bytes = new Uint8Array(buf);
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    arr.push({ name: f.name, dataB64: btoa(bin) });
+  }
+  return JSON.stringify({ files: arr });
+}
+async function preview() {
+  out.innerHTML = '<div class="sub">Reading…</div>';
+  try {
+    const res = await fetch('/gstr1-api/api/parse', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: await payload() });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'parse failed');
+    let html = '';
+    const groups = data.groups || [];
+    if (groups.length > 1) {
+      html += '<div class="sub">' + groups.length + ' GSTINs found \u2014 each gets its own Excel file (downloaded together as a zip).</div>';
+    }
+    for (const grp of groups) {
+      if (groups.length > 1) {
+        html += '<h2 style="font-size:17px;margin:18px 0 6px">' + (grp.legalName ? grp.legalName + ' \u2014 ' : '') + grp.gstin + '</h2>';
+      }
+      if (grp.rows.length) {
+        html += '<div class="tablewrap"><table><tr><th></th><th colspan="6">As Per GSTR1</th></tr>' +
+          '<tr><th>Month</th><th>B2B</th><th>B2C</th><th>Export</th><th>IGST</th><th>CGST</th><th>SGST</th></tr>';
+        for (const r of grp.rows) {
+          html += '<tr><td>' + r.month + '</td>' + [r.b2b, r.b2c, r.export, r.igst, r.cgst, r.sgst]
+            .map(v => '<td>' + v + '</td>').join('') + '</tr>';
+        }
+        html += '</table></div>';
+      }
+      if ((grp.cmp || []).length) {
+        html += '<div class="tablewrap" style="margin-top:14px"><table>' +
+          '<tr><th></th><th colspan="6">GSTR-1 vs GSTR-3B (difference = 3B \u2212 GSTR-1)</th></tr>' +
+          '<tr><th>Month</th><th>3B Value</th><th>GSTR-1 Value</th><th>Diff Value</th><th>Diff IGST</th><th>Diff CGST</th><th>Diff SGST</th></tr>';
+        for (const c of grp.cmp) {
+          const style = c.mismatch ? ' style="color:#c00000;font-weight:600"' : '';
+          html += '<tr><td>' + c.month + '</td>' + [c.g3b, c.g1, c.dv, c.di, c.dc, c.ds]
+            .map(v => '<td' + style + '>' + v + '</td>').join('') + '</tr>';
+        }
+        html += '</table></div>';
+      }
+      const nBills = grp.rows.reduce((n, r) => n + (r.bills || 0), 0);
+      const nAmend = grp.rows.reduce((n, r) => n + (r.amendments || 0), 0);
+      if (nBills) {
+        html += '<div class="sub" style="margin-top:8px">Excel will contain section-wise bill sheets (B2B, credit notes, exports, B2C) covering ' +
+          nBills + ' documents' + (nAmend ? ' and an Amendments sheet (' + nAmend + ' amended documents)' : '') + '.</div>';
+      }
+      for (const w of grp.warnings || []) html += '<div class="warn">' + w + '</div>';
+    }
+    for (const n of data.notes || []) html += '<div class="warn" style="background:#eaf7ea;border-color:#9fd49f">' + n + '</div>';
+    for (const e of data.errors || []) html += '<div class="err">' + e + '</div>';
+    out.innerHTML = html;
+    partyGstins = data.gstins || [];
+    partyNames = data.names || {};
+    hasApiKey = !!data.hasApiKey;
+    renderNames();
+  } catch (e) {
+    out.innerHTML = '<div class="err">' + e.message + '</div>';
+  }
+}
+
+let partyGstins = [], partyNames = {}, hasApiKey = false;
+const namesDiv = document.getElementById('names');
+function renderNames(msg) {
+  if (!partyGstins.length) { namesDiv.innerHTML = ''; return; }
+  const missing = partyGstins.filter(g => !partyNames[g]);
+  let html = '<div class="names"><h2>Party names</h2>' +
+    '<div class="sub">' + (partyGstins.length - missing.length) + ' of ' + partyGstins.length +
+    ' GSTINs have names' + (missing.length ? ' \u2014 click Fetch to get the rest automatically.' : '.') + '</div>';
+  if (msg) html += '<div class="ok">' + msg + '</div>';
+  if (missing.length) {
+    html += '<div class="btns" style="margin:10px 0"><button class="primary" id="capStart">Fetch from GST portal (type captcha)</button>' +
+      '<button class="ghost" id="fetchNames">Try without captcha</button>' +
+      '<button class="ghost" id="saveNames">Save typed names</button></div>';
+    html += '<div class="row"><code>API key' + (hasApiKey ? ' \u2713' : '') + '</code>' +
+      '<input type="text" id="apiKey" placeholder="' + (hasApiKey ? 'key saved \u2014 paste a new one to replace' : 'free GSTIN API key \u2014 makes fetching fully automatic') + '">' +
+      '<a href="https://gstincheck.co.in" target="_blank" rel="noopener">get free key \u2197</a></div>' +
+      '<div class="sub" style="margin:2px 0 10px">One-time setup: sign up free at gstincheck.co.in (or appyflow.in), paste the key, press Save. ' +
+      'After that every new GSTIN\u2019s name is fetched automatically \u2014 the same direct fetch GST softwares use. Names are cached forever.</div>';
+    for (const g of missing) {
+      html += '<div class="row"><code>' + g + '</code>' +
+        '<input type="text" data-gstin="' + g + '" placeholder="party name (only if automatic fetch fails)">' +
+        '<a href="https://services.gst.gov.in/services/searchtp" target="_blank" rel="noopener">search on portal \u2197</a></div>';
+    }
+  }
+  html += '</div>';
+  namesDiv.innerHTML = html;
+  const fetchBtn = document.getElementById('fetchNames');
+  if (fetchBtn) fetchBtn.onclick = fetchNames;
+  const saveBtn = document.getElementById('saveNames');
+  if (saveBtn) saveBtn.onclick = saveNames;
+  const capBtn = document.getElementById('capStart');
+  if (capBtn) capBtn.onclick = capStart;
+}
+
+/* Captcha wizard: for each unnamed GSTIN the portal's captcha is shown,
+   you type it, and the legal + trade name arrive and are saved. */
+let capQueue = [], capData = null, capMsg = '';
+async function capStart() { capMsg = ''; capQueue = partyGstins.filter(g => !partyNames[g]); await capNext(); }
+async function capNext(sameGstin) {
+  const g = sameGstin || capQueue[0];
+  if (!g) { capData = null; renderNames('Portal fetching finished.'); return; }
+  namesDiv.querySelectorAll('button').forEach(b => b.disabled = true);
+  try {
+    const res = await fetch('/gstr1-api/api/captcha', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'captcha failed');
+    capData = { gstin: g, token: d.token, image: d.image };
+    renderCap();
+  } catch (e) {
+    capData = null;
+    renderNames('Could not load a captcha: ' + e.message + '. ' +
+      'Best fix: get a free API key (link above), paste it in the API key box, press Save, then click \u201CTry without captcha\u201D \u2014 names will come automatically. Or type names manually below.');
+  }
+}
+function renderCap() {
+  const done = partyGstins.filter(g => partyNames[g]).length;
+  let html = '<div class="names"><h2>Party names \u2014 fetching from GST portal</h2>' +
+    '<div class="sub">' + done + ' of ' + partyGstins.length + ' done \u00b7 now fetching <b>' + capData.gstin + '</b>' +
+    ' \u2014 type the captcha exactly as shown and press Enter.</div>' +
+    (capMsg ? '<div class="ok">' + capMsg + '</div>' : '') +
+    '<div class="row"><img src="' + capData.image + '" alt="captcha" style="height:44px;border:1px solid #b8c4d0;border-radius:6px">' +
+    '<input type="text" id="capIn" placeholder="captcha" autocomplete="off" style="max-width:140px">' +
+    '<button class="primary" id="capOk">OK</button>' +
+    '<button class="ghost" id="capNew">New image</button>' +
+    '<button class="ghost" id="capSkip">Skip</button>' +
+    '<button class="ghost" id="capStop">Stop</button></div></div>';
+  namesDiv.innerHTML = html;
+  const inp = document.getElementById('capIn');
+  inp.focus();
+  inp.onkeydown = e => { if (e.key === 'Enter') capSubmit(); };
+  document.getElementById('capOk').onclick = capSubmit;
+  document.getElementById('capNew').onclick = () => { capMsg = ''; capNext(capData.gstin); };
+  document.getElementById('capSkip').onclick = () => { capQueue = capQueue.filter(x => x !== capData.gstin); capMsg = ''; capNext(); };
+  document.getElementById('capStop').onclick = () => { capData = null; capMsg = ''; renderNames(); };
+}
+async function capSubmit() {
+  const code = document.getElementById('capIn').value.trim();
+  if (!code) return;
+  document.getElementById('capOk').disabled = true;
+  try {
+    const res = await fetch('/gstr1-api/api/names/captcha-search', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: capData.token, gstin: capData.gstin, captcha: code }) });
+    const d = await res.json();
+    if (!res.ok) throw new Error(d.error || 'search failed');
+    partyNames[capData.gstin] = { legal: d.legal || '', trade: d.trade || '' };
+    capQueue = capQueue.filter(x => x !== capData.gstin);
+    capMsg = '\u2713 ' + capData.gstin + ': ' + (d.legal || d.trade);
+    await capNext();
+  } catch (e) {
+    capMsg = capData.gstin + ': ' + e.message;
+    await capNext(capData.gstin);
+  }
+}
+async function saveKeyIfTyped() {
+  const keyInput = document.getElementById('apiKey');
+  const key = keyInput ? keyInput.value.trim() : '';
+  if (!key) return false;
+  await fetch('/gstr1-api/api/names/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ names: {}, apiKey: key }) });
+  hasApiKey = true;
+  return true;
+}
+async function fetchNames() {
+  const btn = document.getElementById('fetchNames');
+  btn.disabled = true; btn.textContent = 'Fetching\u2026';
+  try {
+    await saveKeyIfTyped();
+    const res = await fetch('/gstr1-api/api/names/lookup', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gstins: partyGstins }) });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'lookup failed');
+    Object.assign(partyNames, data.names || {});
+    const still = (data.unresolved || []).length;
+    renderNames(still ? 'Automatic lookup done \u2014 ' + still + ' GSTIN(s) still unnamed. ' +
+      (hasApiKey ? 'Type those below and press Save.' : 'Paste a free API key above (one-time) and press Fetch again, or type them below and press Save.') :
+      'All names fetched and saved.');
+  } catch (e) {
+    renderNames('Lookup failed: ' + e.message + ' \u2014 type the names below and press Save.');
+  }
+}
+async function saveNames() {
+  const keySaved = await saveKeyIfTyped();
+  const typed = {};
+  namesDiv.querySelectorAll('input[data-gstin]').forEach(i => { if (i.value.trim()) typed[i.dataset.gstin] = i.value.trim(); });
+  if (!Object.keys(typed).length) { if (keySaved) renderNames('API key saved \u2014 press \u201CFetch names automatically\u201D.'); return; }
+  const res = await fetch('/gstr1-api/api/names/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ names: typed }) });
+  if (res.ok) {
+    Object.assign(partyNames, typed);
+    renderNames(Object.keys(typed).length + ' name(s) saved' + (keySaved ? ' and API key stored' : '') + ' \u2014 used in every future Excel.');
+  }
+}
+go.onclick = async () => {
+  go.disabled = true; go.textContent = 'Building…';
+  try {
+    const res = await fetch('/gstr1-api/api/xlsx', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: await payload() });
+    if (!res.ok) throw new Error((await res.json()).error || 'failed');
+    const blob = await res.blob();
+    const cd = res.headers.get('Content-Disposition') || '';
+    const fname = (cd.match(/filename="([^"]+)"/) || [])[1] || 'GSTR1-Summary.xlsx';
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = fname;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch (e) {
+    out.insertAdjacentHTML('beforeend', '<div class="err">' + e.message + '</div>');
+  }
+  go.disabled = false; go.textContent = 'Download Excel';
+};
+</script>
+</body>
+</html>

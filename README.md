@@ -16,7 +16,7 @@ Sibling sites: [teamhub.knapadvisory.com](https://teamhub.knapadvisory.com) ·
 | AR / Customer Dashboard | Web app (link) | `Dashboard` repo `main`, deployed at <https://dashboard-knap1.vercel.app> |
 | Tally Statutory Audit Assistant | **Hosted here** at `/audit/` + local connector | This repo — page `audit/`, engine `connector/knap-tally-audit-engine.mjs` (ported from `Dashboard` branch `claude/tally-audit-tool-24lawp` v1.2) |
 | GSTR-2B ⇄ Tally Poster | **Hosted here** at `/gstr2b/` + local connector | This repo — page `gstr2b/`, engine `connector/knap-tally-connector.mjs` (ported from `Dashboard` branch `claude/gstr2b-tally-posting-mqt7zn` v1.7) |
-| GSTR-1 Excel Summary | Desktop download | `Dashboard` repo, branch `claude/pdf-excel-extraction-tool-izu1zp` (`tools/`) |
+| GSTR-1 Excel Summary | **Hosted here** at `/gstr1/` | This repo — page `gstr1/`, engine `gstr1-engine/` run unmodified as an internal child process, proxied at `/gstr1-api` (from `Dashboard` branch `claude/pdf-excel-extraction-tool-izu1zp`) |
 
 The desktop tools in `downloads/` are **copies** of the branch files above —
 they are what the page serves. When a tool gets a new version, copy the new
@@ -31,6 +31,10 @@ fee-parser/           the hosted Marketplace Fee Register tool page
 parser/               amazon_invoice_parser.py (Python, pdfplumber + openpyxl)
 gstr2b/               the hosted GSTR-2B ⇄ Tally Poster page (UI only)
 audit/                the hosted Tally Statutory Audit Assistant page (UI only)
+gstr1/                the hosted GSTR-1 Excel Summary page (UI only)
+gstr1-engine/         the GSTR-1 engine, UNMODIFIED single-file tool; server.js
+                      runs it as a child on 127.0.0.1:8788 and proxies
+                      /gstr1-api to it (state persists in the /data volume)
 connector/            KNAP Tally Connector: gstr2b engine + supervised audit
                       engine + installer, served OPEN at /connector/
                       (self-update needs no key)

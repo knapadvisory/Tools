@@ -15,7 +15,8 @@
 // everyone out. Unset = fully open. (A stand-in until proper login arrives.)
 import express from 'express';
 import multer from 'multer';
-import { execFile } from 'child_process';
+import http from 'http';
+import { execFile, spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -208,6 +209,44 @@ app.use('/gstr2b', express.static(path.join(__dirname, 'gstr2b'), {
 app.use('/audit', express.static(path.join(__dirname, 'audit'), {
   setHeaders: (res) => res.set(NO_CACHE),
 }));
+
+// ------------------------------------------------------ GSTR-1 summary tool
+// The proven single-file tool runs UNMODIFIED as an internal child process on
+// 127.0.0.1:8788; its page is hosted at /gstr1/ and its API reached through
+// this gated proxy. Its state (party-name cache, API key) is written next to
+// its script, which we place in GSTR1_DATA so a volume can persist it.
+
+const GSTR1_DATA = process.env.KNAP_DATA
+  ? path.join(process.env.KNAP_DATA, 'gstr1')
+  : path.join(__dirname, 'gstr1-data');
+const GSTR1_SRC = path.join(__dirname, 'gstr1-engine', 'gstr1-excel-summary.mjs');
+const GSTR1_RUN = path.join(GSTR1_DATA, 'gstr1-excel-summary.mjs');
+
+function startGstr1() {
+  try {
+    fs.mkdirSync(GSTR1_DATA, { recursive: true });
+    fs.copyFileSync(GSTR1_SRC, GSTR1_RUN); // refresh engine each boot; cache files stay
+    const child = spawn(process.execPath, [GSTR1_RUN], { stdio: 'inherit' });
+    child.on('exit', () => setTimeout(startGstr1, 5000).unref());
+  } catch (e) {
+    console.error('gstr1 engine failed to start:', e.message);
+    setTimeout(startGstr1, 15000).unref();
+  }
+}
+startGstr1();
+
+app.use('/gstr1', express.static(path.join(__dirname, 'gstr1'), {
+  setHeaders: (res) => res.set(NO_CACHE),
+}));
+
+app.use('/gstr1-api', (req, res) => {
+  const fwd = http.request(
+    { host: '127.0.0.1', port: 8788, path: req.url, method: req.method, headers: { ...req.headers, host: '127.0.0.1:8788' } },
+    (r) => { res.writeHead(r.statusCode || 502, r.headers); r.pipe(res); },
+  );
+  fwd.on('error', () => res.status(502).json({ error: 'The GSTR-1 engine is restarting — try again in a few seconds.' }));
+  req.pipe(fwd);
+});
 
 // Tool files get replaced in-place on redeploys — never cache stale copies.
 // .bat / .mjs must download, not render as text in the browser.
