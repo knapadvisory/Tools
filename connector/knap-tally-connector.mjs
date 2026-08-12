@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '2.1';
+const VERSION = '2.2';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -1796,6 +1796,14 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // One-click "Update now" from a tool page: check the hub immediately,
+    // ignoring the idle guard — the user explicitly asked for it.
+    if (req.method === 'POST' && url.pathname === '/update') {
+      json(res, 200, { ok: true, version: VERSION });
+      setTimeout(() => selfUpdate(true), 200);
+      return;
+    }
+
     if (req.method === 'GET' && url.pathname === '/') {
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
       res.end('<!doctype html><meta charset="utf-8"><title>KNAP Tally Connector</title>' +
@@ -2118,10 +2126,10 @@ function startAudit() {
   });
 }
 
-async function ensureAudit(wantVersion) {
+async function ensureAudit(wantVersion, force) {
   try {
     if (fs.existsSync(AUDIT_FILE) && (!wantVersion || auditLocalVersion() === wantVersion)) { startAudit(); return; }
-    if (auditChild && lastActivity && Date.now() - lastActivity < 10 * 60 * 1000) return; // busy — later
+    if (!force && auditChild && lastActivity && Date.now() - lastActivity < 10 * 60 * 1000) return; // busy — later
     const code = await fetch(HUB + '/connector/knap-tally-audit-engine.mjs', { signal: AbortSignal.timeout(30000) })
       .then((r) => (r.ok ? r.text() : null));
     if (!code || !code.includes('KNAP Tally Audit Engine')) return; // sanity check
@@ -2141,14 +2149,14 @@ process.on('SIGTERM', () => process.exit(0));
 // Checks the hub for a newer connector when idle; writes the new file over
 // itself and exits 0 — the installer's run-loop restarts the fresh copy.
 let lastActivity = 0;
-async function selfUpdate() {
+async function selfUpdate(force) {
   try {
     const v = await fetch(HUB + '/connector/version.json', { signal: AbortSignal.timeout(10000) })
       .then((r) => (r.ok ? r.json() : null));
     if (!v) { startAudit(); return; }
-    await ensureAudit(v.audit || '');
+    await ensureAudit(v.audit || '', force);
     if (!v.version || v.version === VERSION) return;
-    if (lastActivity && Date.now() - lastActivity < 10 * 60 * 1000) return; // someone is working — not now
+    if (!force && lastActivity && Date.now() - lastActivity < 10 * 60 * 1000) return; // someone is working — not now
     const code = await fetch(HUB + '/connector/knap-tally-connector.mjs', { signal: AbortSignal.timeout(30000) })
       .then((r) => (r.ok ? r.text() : null));
     if (!code || !code.includes('KNAP Tally Connector')) return; // sanity check

@@ -180,11 +180,54 @@ var AUDIT_API = localStorage.getItem('knap_audit_url') || 'http://127.0.0.1:8799
       '</div></div>';
     document.body.appendChild(d);
   }
+  // Connector present but audit engine missing (older connector): offer a
+  // one-click update instead of the full install steps.
+  function updateOverlay(connVer) {
+    var d = document.createElement('div');
+    d.id = 'conn-setup';
+    d.style.cssText = 'position:fixed;inset:0;background:var(--bg,#f4f6f9);z-index:900;display:flex;align-items:center;justify-content:center;padding:24px';
+    d.innerHTML =
+      '<div style="max-width:520px;background:#fff;border:1px solid var(--line,#e3e8ef);border-radius:14px;padding:32px;box-shadow:0 8px 30px rgba(20,25,45,.12)">' +
+      '<h2 style="margin:0 0 6px;font-size:18px">⬆ Your Tally connector needs a quick update</h2>' +
+      '<p style="margin:0 0 18px;color:var(--muted,#68788c);font-size:13.5px">The connector on this computer (v' + connVer + ') is missing the audit engine. One click fixes it — takes under a minute, nothing else to do.</p>' +
+      '<div style="display:flex;gap:10px;align-items:center">' +
+      '<button id="upd-go" style="font:inherit;font-weight:600;padding:10px 20px;border-radius:9px;border:0;background:#1a56db;color:#fff;cursor:pointer">⬆ Update now</button>' +
+      '<span id="upd-msg" style="font-size:13px;color:var(--muted,#68788c)"></span>' +
+      '</div></div>';
+    document.body.appendChild(d);
+    document.getElementById('upd-go').onclick = function () {
+      var btn = this, msg = document.getElementById('upd-msg');
+      btn.disabled = true; btn.style.opacity = '.6';
+      msg.textContent = 'Updating… the page will continue by itself.';
+      fetch('http://127.0.0.1:8797/update', { method: 'POST' }).catch(function () {});
+      var tries = 0;
+      var t = setInterval(function () {
+        tries++;
+        fetch(AUDIT_API + '/health').then(function (r) {
+          if (r.ok) { clearInterval(t); location.reload(); }
+        }).catch(function () {});
+        if (tries > 40) { // ~2 minutes
+          clearInterval(t);
+          msg.textContent = 'Still starting… restart this computer once (or re-run the installer), then reload this page.';
+        }
+      }, 3000);
+    };
+  }
+
   var ctl = new AbortController();
   setTimeout(function () { ctl.abort(); }, 3000);
   fetch(AUDIT_API + '/health', { signal: ctl.signal })
     .then(function (r) { if (!r.ok) throw 0; })
-    .catch(function () { overlay('Tally audit engine not found on this computer'); });
+    .catch(function () {
+      // Engine missing. Is the connector itself alive?
+      fetch('http://127.0.0.1:8797/health', { signal: AbortSignal.timeout(3000) })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (h) {
+          if (h && h.version) updateOverlay(h.version);
+          else overlay('Tally audit engine not found on this computer');
+        })
+        .catch(function () { overlay('Tally audit engine not found on this computer'); });
+    });
 })();
 'use strict';
 var STATE = null, RESULT = null, TICKS = {};
