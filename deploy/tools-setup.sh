@@ -17,8 +17,9 @@
 #
 # Optional env:
 #   TOOLS_DOMAIN     defaults to apps.knapadvisory.com
-#   TOOLS_PASSCODE   set to require a shared passcode for the fee-parser API
-#                    (remembered in /root/knap-tools.env for redeploys)
+#   TOOLS_PASSCODE   the shared access key the whole site asks for before
+#                    showing anything (remembered in /root/knap-tools.env for
+#                    redeploys; prompted for on first run; blank = open site)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."   # repo root (Dockerfile lives here)
@@ -30,6 +31,9 @@ _cli_DOMAIN="${TOOLS_DOMAIN:-}"; _cli_PASS="${TOOLS_PASSCODE:-}"
 [ -n "$_cli_DOMAIN" ] && TOOLS_DOMAIN="$_cli_DOMAIN"
 [ -n "$_cli_PASS" ] && TOOLS_PASSCODE="$_cli_PASS"
 TOOLS_DOMAIN="${TOOLS_DOMAIN:-apps.knapadvisory.com}"
+if [ -z "${TOOLS_PASSCODE:-}" ]; then
+  read -rp "Access key for the site (users must enter this; blank = open): " TOOLS_PASSCODE
+fi
 TOOLS_PASSCODE="${TOOLS_PASSCODE:-}"
 umask 077
 cat > "$TOOLS_CONFIG" <<EOF

@@ -41,10 +41,19 @@ deploy/tools-setup.sh one-command deploy on the TeamHub VPS
   temp dir → returns a reconciliation summary + download token.
 - `GET /api/fee-parser/download/<token>` — the `Fee_Register.xlsx`. Tokens and
   temp files expire after 15 minutes; nothing is kept.
-- **Access**: open by default. To require a shared team passcode, deploy with
-  `TOOLS_PASSCODE=something bash deploy/tools-setup.sh` — the page then asks
-  for it once and remembers it in the browser. (The passcode is remembered in
-  `/root/knap-tools.env` on the VPS for future redeploys.)
+## Access (site-wide key)
+
+The whole site sits behind one shared **access key**: every page and download
+serves a key screen (`gate.html`) until the right key is entered, after which
+a long-lived HttpOnly cookie remembers the browser. Enforced on the server
+(`server.js`), so downloads and the parser API are covered too — a stand-in
+until proper login is wired up.
+
+- The deploy script prompts for the key the first time (and remembers it in
+  `/root/knap-tools.env`); change it with
+  `TOOLS_PASSCODE=newkey bash deploy/tools-setup.sh`. Changing the key signs
+  every browser out. A blank key at the prompt leaves the site open.
+- Scripts/curl can send the key as an `x-passcode` header instead of the cookie.
 
 The parser itself is the same tested file TeamHub uses
 (`tools/amazon_invoice_parser.py` in the `Management-tool` repo). If it's

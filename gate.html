@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KNAP Tools — access</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧰</text></svg>">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --accent: #4f46e5; --accent-hover: #4338ca; --on-accent: #fff;
+    --bg: #f4f5f8; --surface: #ffffff; --border: #e4e6ec;
+    --text: #1d1c1d; --muted: #6b7280; --shadow: rgba(20, 25, 45, .08);
+    --danger: #dc2626; --danger-soft: #fdecec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1117; --surface: #171a22; --border: #2b303c;
+      --text: #e7e9ee; --muted: #9aa3b2; --shadow: rgba(0, 0, 0, .45);
+      --danger: #f87171; --danger-soft: rgba(248, 113, 113, .16);
+    }
+  }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px;
+  }
+  .card {
+    width: 100%; max-width: 380px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 16px;
+    box-shadow: 0 8px 30px var(--shadow); padding: 36px 32px; text-align: center;
+  }
+  .logo { font-size: 44px; }
+  h1 { font-size: 20px; margin-top: 10px; letter-spacing: -.01em; }
+  p { color: var(--muted); font-size: 13.5px; margin: 6px 0 22px; }
+  input {
+    width: 100%; font: inherit; padding: 11px 14px; border-radius: 10px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+    text-align: center; letter-spacing: .04em;
+  }
+  input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+  button {
+    width: 100%; margin-top: 12px; font: inherit; font-weight: 600;
+    padding: 11px 14px; border-radius: 10px; border: 0;
+    background: var(--accent); color: var(--on-accent); cursor: pointer;
+  }
+  button:hover { background: var(--accent-hover); }
+  button:disabled { opacity: .6; cursor: default; }
+  .err {
+    display: none; margin-top: 14px; padding: 9px 12px; border-radius: 9px;
+    font-size: 13px; background: var(--danger-soft); color: var(--danger);
+  }
+  .err.show { display: block; }
+  footer { margin-top: 22px; font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+  <form class="card" id="f">
+    <div class="logo">🧰</div>
+    <h1>KNAP Tools</h1>
+    <p>Enter the access key to continue.</p>
+    <input type="password" id="key" placeholder="Access key" autocomplete="current-password" autofocus>
+    <button id="go" type="submit">Enter</button>
+    <div class="err" id="err">That key is not right — try again.</div>
+    <footer>KNAP Advisory · internal tools</footer>
+  </form>
+<script>
+  var f = document.getElementById('f'), key = document.getElementById('key'),
+      go = document.getElementById('go'), err = document.getElementById('err');
+  f.onsubmit = function (e) {
+    e.preventDefault();
+    if (!key.value) return;
+    go.disabled = true; err.classList.remove('show');
+    fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: key.value })
+    }).then(function (r) {
+      if (r.ok) { location.reload(); return; }
+      err.classList.add('show'); go.disabled = false; key.select();
+    }).catch(function () { err.classList.add('show'); go.disabled = false; });
+  };
+</script>
+</body>
+</html>
