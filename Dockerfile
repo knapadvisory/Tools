@@ -17,6 +17,8 @@ COPY server.js ./
 COPY parser/ ./parser/
 COPY index.html gate.html session.js ./
 COPY fee-parser/ ./fee-parser/
+COPY gstr2b/ ./gstr2b/
+COPY connector/ ./connector/
 COPY downloads/ ./downloads/
 
 ENV PORT=80

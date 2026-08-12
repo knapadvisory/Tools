@@ -93,6 +93,15 @@ app.post('/api/auth/logout', (_req, res) => {
   res.status(204).end();
 });
 
+// The Tally connector's install + self-update files stay OPEN (no key): the
+// connector on a Tally PC fetches these unattended, and they contain no data.
+app.use('/connector', express.static(path.join(__dirname, 'connector'), {
+  setHeaders: (res, filePath) => {
+    res.set('Cache-Control', 'no-cache');
+    if (/\.bat$/i.test(filePath)) res.set('Content-Disposition', 'attachment');
+  },
+}));
+
 // Everything below this point requires the key (when one is set).
 app.use((req, res, next) => {
   if (req.path === '/healthz' || hasAccess(req)) return next();
@@ -189,6 +198,10 @@ app.get('/', (_req, res) => res.set(NO_CACHE).sendFile(path.join(__dirname, 'ind
 app.get('/session.js', (_req, res) => res.set(NO_CACHE).sendFile(path.join(__dirname, 'session.js')));
 
 app.use('/fee-parser', express.static(path.join(__dirname, 'fee-parser'), {
+  setHeaders: (res) => res.set(NO_CACHE),
+}));
+
+app.use('/gstr2b', express.static(path.join(__dirname, 'gstr2b'), {
   setHeaders: (res) => res.set(NO_CACHE),
 }));
 

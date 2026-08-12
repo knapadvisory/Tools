@@ -15,7 +15,7 @@ Sibling sites: [teamhub.knapadvisory.com](https://teamhub.knapadvisory.com) ·
 | Marketplace Invoice Parser (Amazon/Flipkart/Myntra/Nykaa) | **Hosted here** at `/fee-parser/` | This repo — page `fee-parser/`, API in `server.js`, parser `parser/amazon_invoice_parser.py` (ported from the `Management-tool` repo) |
 | AR / Customer Dashboard | Web app (link) | `Dashboard` repo `main`, deployed at <https://dashboard-knap1.vercel.app> |
 | Tally Statutory Audit Assistant | Desktop download | `Dashboard` repo, branch `claude/tally-audit-tool-24lawp` (`tools/`) |
-| GSTR-2B ⇄ Tally Poster (v1.7) | Desktop download | `Dashboard` repo, branch `claude/gstr2b-tally-posting-mqt7zn` (`tools/`) |
+| GSTR-2B ⇄ Tally Poster | **Hosted here** at `/gstr2b/` + local connector | This repo — page `gstr2b/`, engine `connector/knap-tally-connector.mjs` (ported from `Dashboard` branch `claude/gstr2b-tally-posting-mqt7zn` v1.7) |
 | GSTR-1 Excel Summary | Desktop download | `Dashboard` repo, branch `claude/pdf-excel-extraction-tool-izu1zp` (`tools/`) |
 
 The desktop tools in `downloads/` are **copies** of the branch files above —
@@ -29,11 +29,34 @@ redeploy.
 index.html            the hub page (self-contained, no build step)
 fee-parser/           the hosted Marketplace Fee Register tool page
 parser/               amazon_invoice_parser.py (Python, pdfplumber + openpyxl)
+gstr2b/               the hosted GSTR-2B ⇄ Tally Poster page (UI only)
+connector/            KNAP Tally Connector: engine + installer, served OPEN
+                      at /connector/ (self-update needs no key)
 server.js             Express: static site + /api/fee-parser (runs the parser)
 downloads/            the files the page serves for download (+ their READMEs)
 Dockerfile            node:22-slim + python3, runs server.js on :80
 deploy/tools-setup.sh one-command deploy on the TeamHub VPS
 ```
+
+## The GSTR-2B poster (hosted page + local connector)
+
+The page at `/gstr2b/` is UI only. Everything that must happen next to Tally
+(reading the books, posting vouchers, the supplier mappings and the
+posted-documents register) runs in the **KNAP Tally Connector** — a single
+Node file installed once per Tally PC by `Install-Tally-Connector.bat`
+(auto-starts with Windows, listens on `127.0.0.1:8797`, answers only to
+pages from this site via CORS). Books data flows browser ↔ connector ↔ Tally
+on that machine; the server only serves the page.
+
+The connector self-updates: every 6 hours (when idle) it compares
+`/connector/version.json` with its own version and replaces itself. The old
+standalone poster's data file is carried over by the installer if found in
+`C:\TallyPoster`.
+
+**Releasing a connector change:** edit `connector/knap-tally-connector.mjs`,
+bump `VERSION` inside it AND in `connector/version.json` (keep them equal),
+commit, redeploy. Installed connectors pick it up within ~6 hours, or
+instantly on their next restart.
 
 ## The hosted fee parser
 

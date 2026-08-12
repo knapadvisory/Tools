@@ -1,0 +1,30 @@
+{
+ "settings": {
+  "tallyUrl": "http://localhost:9000",
+  "company": "",
+  "purchaseLedger": "Purchase",
+  "igstLedger": "Input IGST",
+  "cgstLedger": "Input CGST",
+  "sgstLedger": "Input SGST",
+  "cessLedger": "",
+  "roundOffLedger": "",
+  "billwise": true,
+  "tolerance": 5,
+  "rcmIgstLedger": "RCM Payable IGST",
+  "rcmCgstLedger": "RCM Payable CGST",
+  "rcmSgstLedger": "RCM Payable SGST",
+  "selfWorker": false,
+  "watchFolder": "/root/Downloads",
+  "ownGstin": "",
+  "companyGuard": true,
+  "freshStart": true
+ },
+ "mappings": {},
+ "posted": {},
+ "manualLog": [],
+ "docs": {},
+ "fileGstin": "",
+ "reco": null,
+ "ingested": {},
+ "epoch": 2
+}

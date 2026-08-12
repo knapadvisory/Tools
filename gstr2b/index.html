@@ -1,0 +1,2128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GSTR-2B → Tally Poster — KNAP Tools</title>
+<style>
+  :root { --bg:#f4f6f9; --card:#fff; --line:#e3e8ef; --text:#1c2733; --muted:#68788c;
+          --brand:#155eef; --ok:#0e9f6e; --bad:#d92d20; --warn:#b54708; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.5 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  .wrap { max-width:1180px; margin:0 auto; padding:20px 16px 60px; }
+  h1 { font-size:20px; margin:8px 0 2px; }
+  .sub { color:var(--muted); font-size:13px; margin:0 0 18px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 18px; margin-bottom:16px; }
+  .card h2 { font-size:14.5px; margin:0 0 10px; }
+  label { font-size:12px; color:var(--muted); display:block; margin-bottom:2px; }
+  input[type=text] { width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:7px; font:inherit; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px 14px; }
+  .btn { display:inline-block; padding:8px 14px; border-radius:8px; border:1px solid var(--line); background:#fff;
+         font:inherit; font-weight:600; cursor:pointer; }
+  .btn:disabled { opacity:.45; cursor:default; }
+  .btn.primary { background:var(--brand); border-color:var(--brand); color:#fff; }
+  .btn.danger { color:var(--bad); }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { padding:7px 8px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+  th { font-size:11.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  td.r,th.r { text-align:right; font-variant-numeric:tabular-nums; }
+  .muted { color:var(--muted); font-size:12px; }
+  .mono { font-family:ui-monospace,Consolas,monospace; font-size:12px; }
+  .pill { display:inline-block; padding:2px 9px; border-radius:99px; font-size:11.5px; font-weight:600; }
+  .pill.ok { background:#e6f6ef; color:var(--ok); } .pill.bad { background:#fdecea; color:var(--bad); }
+  .pill.warn { background:#fdf3e7; color:var(--warn); } .pill.idle { background:#eef1f5; color:var(--muted); }
+  .tag { display:inline-block; padding:1px 7px; border-radius:5px; font-size:10.5px; font-weight:700; letter-spacing:.02em; }
+  .tag.inv { background:#e8f0fe; color:#155eef; } .tag.cn { background:#fdecea; color:#d92d20; }
+  .tag.dn { background:#fdf3e7; color:#b54708; } .tag.amd { background:#f3e8fd; color:#7a2ea0; }
+  .bar { position:sticky; top:0; z-index:5; background:var(--card); border:1px solid var(--line); border-radius:10px;
+         padding:10px 14px; margin-bottom:16px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .flag { font-size:10.5px; font-weight:700; color:var(--warn); }
+  .drop { border:2px dashed var(--line); border-radius:10px; padding:22px; text-align:center; color:var(--muted); }
+  .drop.hot { border-color:var(--brand); color:var(--brand); }
+  .phead { display:flex; justify-content:space-between; align-items:baseline; gap:10px; flex-wrap:wrap; margin:4px 0 8px; }
+  .msg { font-size:13px; padding:7px 10px; border-radius:8px; margin:8px 0; }
+  .msg.ok { background:#e6f6ef; color:var(--ok); } .msg.bad { background:#fdecea; color:var(--bad); }
+  #tally-dot { width:9px; height:9px; border-radius:50%; display:inline-block; background:#c3ccd8; margin-right:5px; }
+  #tally-dot.up { background:var(--ok); } #tally-dot.down { background:var(--bad); }
+  details summary { cursor:pointer; font-weight:600; font-size:14.5px; }
+  .tbl-scroll { overflow-x:auto; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>GSTR-2B → Tally poster <span class="muted" style="font-size:13px;font-weight:400" id="conn-ver"></span>
+  <a href="/" class="muted" style="font-size:12.5px;font-weight:400;float:right;text-decoration:none">← All tools</a></h1>
+  <p class="sub">Everything runs on this computer only. Upload the portal's GSTR-2B JSON, review, tick, post to the open Tally company.
+    <span style="white-space:nowrap"><span id="tally-dot"></span><span id="tally-status">checking Tally…</span></span></p>
+  <div id="jarvis" class="muted" style="display:none;font-size:12px;margin:-12px 0 14px;line-height:1.7"></div>
+
+  <div class="card"><details id="settings-box">
+    <summary>Settings — Tally URL &amp; ledger names <span id="settings-hint" class="muted"></span></summary>
+    <div class="grid" style="margin-top:12px">
+      <div><label>Tally gateway URL</label><input type="text" id="s-tallyUrl"></div>
+      <div><label>Company name (only if several companies are open in Tally)</label><input type="text" id="s-company" placeholder="exactly as shown in Tally"></div>
+      <div><label>Purchase ledger *</label><input type="text" id="s-purchaseLedger" list="ledger-list"></div>
+      <div><label>Input IGST ledger *</label><input type="text" id="s-igstLedger" list="ledger-list"></div>
+      <div><label>Input CGST ledger *</label><input type="text" id="s-cgstLedger" list="ledger-list"></div>
+      <div><label>Input SGST ledger *</label><input type="text" id="s-sgstLedger" list="ledger-list"></div>
+      <div><label>Cess ledger (optional)</label><input type="text" id="s-cessLedger" list="ledger-list"></div>
+      <div><label>Round-off ledger (optional)</label><input type="text" id="s-roundOffLedger" list="ledger-list"></div>
+      <div><label>Matching tolerance ₹ (reconciliation)</label><input type="text" id="s-tolerance" placeholder="5"></div>
+      <div><label>RCM payable IGST ledger</label><input type="text" id="s-rcmIgstLedger" list="ledger-list"></div>
+      <div><label>RCM payable CGST ledger</label><input type="text" id="s-rcmCgstLedger" list="ledger-list"></div>
+      <div><label>RCM payable SGST ledger</label><input type="text" id="s-rcmSgstLedger" list="ledger-list"></div>
+      <div><label>🤖 Watch folder (auto-read new GSTR-2B JSONs from here)</label><input type="text" id="s-watchFolder"></div>
+      <div><label>Your GSTIN(s) — comma-separate multiple registrations of one PAN</label><input type="text" id="s-ownGstin" placeholder="e.g. 09AMMPA3129Q1ZN, 27AMMPA3129Q1Z1"></div>
+      <div style="align-self:end"><label style="display:inline"><input type="checkbox" id="s-selfWorker"> 🤖 Self-worker (auto-read + auto-reconcile) — off by default</label></div>
+      <div style="align-self:end"><label style="display:inline"><input type="checkbox" id="s-freshStart"> 🧹 Start fresh on every launch (clear loaded documents)</label></div>
+      <div style="align-self:end"><label style="display:inline"><input type="checkbox" id="s-companyGuard"> 🛡 Company guard — block posting when the open Tally company&apos;s GSTIN doesn&apos;t match the loaded data</label></div>
+      <div style="align-self:end"><label style="display:inline"><input type="checkbox" id="s-billwise"> Bill-wise New Ref on supplier</label></div>
+    </div>
+    <p class="muted" style="margin:10px 0 6px">Ledger names must match the Tally company exactly, including capitals (Gateway → Chart of Accounts → Ledgers).</p>
+    <button class="btn primary" onclick="saveSettings()">Save settings</button>
+    <span id="settings-msg" class="muted"></span>
+  </details></div>
+
+  <div class="card"><details id="manual-box">
+    <summary>Manual voucher entry — post any entry to Tally <span class="muted" id="ledger-count"></span></summary>
+    <div class="grid" style="margin-top:12px">
+      <div><label>Voucher type</label>
+        <select id="m-type" onchange="typeChanged()" style="width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:7px;font:inherit">
+          <option>Purchase</option><option>Payment</option><option>Receipt</option><option>Journal</option>
+          <option>Contra</option><option>Sales</option><option>Debit Note</option><option>Credit Note</option>
+          <option value="__custom">Custom…</option>
+        </select>
+        <input type="text" id="m-type-custom" placeholder="Voucher type name as in Tally" style="display:none;margin-top:6px">
+      </div>
+      <div><label>Date</label><input type="date" id="m-date" style="width:100%;padding:6px 9px;border:1px solid var(--line);border-radius:7px;font:inherit"></div>
+      <div><label>Voucher no (optional — blank = Tally numbers it)</label><input type="text" id="m-no"></div>
+      <div><label>Party ledger (pick from Tally list — used as the voucher party)</label><input type="text" id="m-party" list="ledger-list" placeholder="auto if left blank"></div>
+      <div><label>Narration (optional)</label><input type="text" id="m-narr"></div>
+    </div>
+    <div class="tbl-scroll" style="margin-top:12px"><table id="m-lines"></table></div>
+    <div style="margin-top:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="btn" onclick="addLine()">+ Add line</button>
+      <span id="m-totals" class="muted"></span>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="btn primary" id="m-post" onclick="postManual()">▶ Post voucher to Tally</button>
+      <button class="btn" onclick="downloadManual()">⬇ XML</button>
+      <button class="btn" onclick="loadLedgers(true)">↻ Refresh ledger list from Tally</button>
+      <span id="m-msg"></span>
+    </div>
+    <div id="m-log" style="margin-top:10px"></div>
+  </details></div>
+  <datalist id="ledger-list"></datalist>
+
+  <div class="card">
+    <h2>Upload GSTR-2B JSON</h2>
+    <div class="drop" id="drop">
+      Drop one or MANY GSTR-2B .json files here at once, or
+      <label style="display:inline;color:var(--brand);cursor:pointer;text-decoration:underline">browse<input type="file" id="file" accept=".json,application/json" multiple style="display:none"></label>
+      (hold Ctrl to pick several). Documents accumulate below.
+    </div>
+    <div id="upload-msg"></div>
+  </div>
+
+  <div class="card" id="map-card" style="display:none"><details id="map-box">
+    <summary style="cursor:pointer;font-weight:600;font-size:14.5px">Supplier → Tally ledger <span class="muted" id="map-count"></span></summary>
+    <div class="tbl-scroll" style="margin-top:10px"><table id="map-table"></table></div>
+  </details></div>
+
+  <div class="bar" id="bar" style="display:none">
+    <b><span id="sel-count">0</span> selected</b>
+    <button class="btn primary" id="post-btn" onclick="postSelected()">▶ Post to Tally</button>
+    <button class="btn" onclick="downloadXml()">⬇ Download XML instead</button>
+    <button class="btn danger" onclick="unmarkSelected()" title="If a document shows Posted but was never actually imported into Tally">Un-mark posted</button>
+    <button class="btn danger" onclick="deleteFromTally()" title="Deletes the selected vouchers OUT of Tally — only works for vouchers posted by this tool">🗑 Delete from Tally</button>
+    <button class="btn" onclick="startFresh()" title="Clears every loaded document and reconciliation result — upload again to start over. Mappings, settings and the posted register are kept.">🧹 Start fresh</button>
+    <button class="btn" id="reco-btn" onclick="runReco()" title="Compare every document below against what is actually booked in Tally">🔁 Reconcile with Tally</button>
+    <button class="btn" id="reco-select" onclick="selectNotBooked()" style="display:none">☑ Select not booked</button>
+    <input type="text" id="filter" list="party-list" placeholder="🔍 Filter — party / GSTIN / invoice no"
+      oninput="setFilter(this.value)" style="min-width:250px;padding:7px 10px;border:1px solid var(--line);border-radius:7px;font:inherit">
+    <span id="filter-count" class="muted"></span>
+    <span id="bar-msg" class="muted"></span>
+    <div id="bucket-chips" style="flex-basis:100%;display:flex;gap:6px;flex-wrap:wrap"></div>
+  </div>
+  <datalist id="party-list"></datalist>
+
+  <div class="card card-pad" id="post-panel" style="display:none;margin-bottom:14px;padding:12px 16px"></div>
+
+  <div class="card" id="reco-progress" style="display:none;padding:12px 16px;margin-bottom:14px">
+    <div id="reco-ptext" style="font-size:12.5px;margin-bottom:7px"><b>Reconciling…</b> starting</div>
+    <div style="height:10px;background:var(--line);border-radius:99px;overflow:hidden">
+      <div id="reco-fill" style="height:100%;width:0%;background:var(--brand);transition:width .5s"></div>
+    </div>
+  </div>
+
+  <p class="muted" id="legend" style="display:none;font-size:12px;margin:-4px 2px 12px;line-height:2">
+    <span class="tag inv">INVOICE</span> supplier's bill → posts as a <b>Purchase</b> voucher &nbsp;·&nbsp;
+    <span class="tag cn">CREDIT NOTE</span> supplier reduced your bill → posts as a <b>Debit Note</b> (payable goes down) &nbsp;·&nbsp;
+    <span class="tag dn">DEBIT NOTE</span> supplier charged extra → posts as a <b>Purchase</b> &nbsp;·&nbsp;
+    <span class="tag amd">AMENDED</span> revised on the portal — shown for review, never auto-posted (adjust the original entry in Tally) &nbsp;·&nbsp;
+    <b>RCM</b> reverse charge &nbsp;·&nbsp; <b>ITC N/A</b> input credit not available
+  </p>
+
+  <div id="reco-summary"></div>
+  <div id="rcm-card"></div>
+  <div id="docs"></div>
+</div>
+
+<script src="/session.js" defer></script>
+<script>
+// The page is served from apps.knapadvisory.com; the engine (this page's API)
+// is the KNAP Tally Connector running on THIS computer, next to Tally. All
+// books data flows browser ↔ connector ↔ Tally — nothing reaches the server.
+var API = localStorage.getItem('knap_connector_url') || 'http://127.0.0.1:8797';
+
+// One-time setup screen when no connector answers on this machine.
+(function () {
+  function overlay() {
+    var d = document.createElement('div');
+    d.id = 'conn-setup';
+    d.style.cssText = 'position:fixed;inset:0;background:var(--bg,#f4f6f9);z-index:900;display:flex;align-items:center;justify-content:center;padding:24px';
+    d.innerHTML =
+      '<div style="max-width:520px;background:var(--card,#fff);border:1px solid var(--line,#e3e8ef);border-radius:14px;padding:32px;box-shadow:0 8px 30px rgba(20,25,45,.12)">' +
+      '<h2 style="margin:0 0 6px;font-size:18px">🔌 Tally connector not found on this computer</h2>' +
+      '<p style="margin:0 0 16px;color:var(--muted,#68788c);font-size:13.5px">This tool works with Tally Prime on the computer it runs on. A small connector must be installed once — after that, this page just works.</p>' +
+      '<ol style="margin:0 0 18px 18px;font-size:13.5px;line-height:1.9">' +
+      '<li>Install <b>Node.js (LTS)</b> from <a href="https://nodejs.org" target="_blank" rel="noopener">nodejs.org</a> (one time, skip if done)</li>' +
+      '<li><a href="/connector/Install-Tally-Connector.bat" download><b>Download the connector installer</b></a> and double-click it</li>' +
+      '<li>Make sure Tally Prime is open with the company loaded</li>' +
+      '<li>Press <b>Retry</b> below</li></ol>' +
+      '<div style="display:flex;gap:10px">' +
+      '<button onclick="location.reload()" style="font:inherit;font-weight:600;padding:9px 18px;border-radius:9px;border:0;background:#155eef;color:#fff;cursor:pointer">↻ Retry</button>' +
+      '<a href="/" style="font:inherit;font-weight:600;font-size:13.5px;padding:9px 18px;border-radius:9px;border:1px solid var(--line,#e3e8ef);color:var(--text,#1c2733);text-decoration:none">← All tools</a>' +
+      '</div></div>';
+    document.body.appendChild(d);
+  }
+  var ctl = new AbortController();
+  setTimeout(function () { ctl.abort(); }, 3000);
+  fetch(API + '/health', { signal: ctl.signal })
+    .then(function (r) { if (!r.ok) throw 0; })
+    .catch(function () { overlay(); });
+})();
+'use strict';
+// ------------------------------ shared state ------------------------------
+var settings = {}, mappings = {}, postedReg = {};
+var docs = [];        // flattened parsed rows (all uploads this session)
+var ownGstin = '';    // the client's GSTIN as per the uploaded 2B file
+var selected = {};    // key -> true
+var live = {};        // key -> {status:'posting'|'ok'|'fail', error}
+
+function key(d) { return d.gstin + '|' + d.type + '|' + d.no + (d.amended ? '|A' : ''); }
+function normKey(s) { return String(s).toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]/g, ''); }
+function shiftDate(iso, days) {
+  var d = new Date(iso + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+// Ask Tally for everything on its books in a window and index it for
+// duplicate checks: number+party, number alone, and party+amount+date.
+async function tallyIndex(fromIso, toIso) {
+  var j = await fetch(API + '/api/tally-verify', { method:'POST', headers:{'content-type':'application/json'},
+    body: JSON.stringify({ from: fromIso, to: toIso }) }).then(function (r) { return r.json(); });
+  if (!j.ok) return { ok: false, error: j.error || 'Tally did not answer' };
+  var numParty = {}, numAny = {}, pad = {};
+  (j.vouchers || []).forEach(function (v) {
+    var n = normKey(v.number), rf = normKey(v.reference), p = normKey(v.party);
+    var a = (v.amount || 0).toFixed(2);
+    if (n) { numAny[n] = true; if (p) numParty[n + '|' + p] = true; }
+    if (rf) { numAny[rf] = true; if (p) numParty[rf + '|' + p] = true; }
+    if (p) pad[p + '|' + a + '|' + v.date] = true;
+  });
+  return { ok: true, numParty: numParty, numAny: numAny, pad: pad, count: (j.vouchers || []).length };
+}
+// Taxable figure a voucher would use: normally the item-wise taxable value,
+// but when a document carries no breakup at all, fall back to the invoice
+// value (exempt/nil-rated purchase — books as purchase + party only).
+function taxableOf(d) {
+  if (r2(d.txval + d.igst + d.cgst + d.sgst + d.cess) > 0) return d.txval;
+  return d.val;
+}
+// The party-side value this 2B document would post with (mirrors voucherXml).
+function partyAmountOf(d) {
+  // Reverse charge: the supplier is owed only the taxable value — the tax is
+  // payable to the government (RCM liability journal), never to the party.
+  if (d.rcm) return r2(taxableOf(d));
+  var base = r2(taxableOf(d) + d.igst + d.cgst + d.sgst + (settings.cessLedger ? d.cess : 0));
+  var diff = r2(d.val - base);
+  if (settings.roundOffLedger && diff !== 0 && Math.abs(diff) <= 1) return d.val;
+  return base;
+}
+function inr(n) { return n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&apos;');
+}
+function escAttr(s) { return esc(s); }
+
+// ------------------------------ boot ------------------------------
+fetch(API + '/api/data').then(function (r) { return r.json(); }).then(function (d) {
+  // The page is hosted; the engine's version comes from the local connector.
+  if (d.version) { document.getElementById('conn-ver').textContent = 'connector v' + d.version; }
+  settings = d.settings; mappings = d.mappings; postedReg = d.posted;
+  srvEpoch = d.epoch || 1;
+  var ids = ['tallyUrl','company','purchaseLedger','igstLedger','cgstLedger','sgstLedger','cessLedger','roundOffLedger','tolerance','rcmIgstLedger','rcmCgstLedger','rcmSgstLedger','watchFolder','ownGstin'];
+  ids.forEach(function (k) { document.getElementById('s-' + k).value = settings[k] || ''; });
+  // Self-heal: a required ledger name that is blank (older data file / bad
+  // save) blocks every post — restore the default and persist it.
+  var healed = false;
+  var REQ = { purchaseLedger: 'Purchase', igstLedger: 'Input IGST', cgstLedger: 'Input CGST', sgstLedger: 'Input SGST' };
+  Object.keys(REQ).forEach(function (k) {
+    if (!String(settings[k] || '').trim()) { settings[k] = REQ[k]; document.getElementById('s-' + k).value = REQ[k]; healed = true; }
+  });
+  if (healed) {
+    fetch(API + '/api/data', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ settings: settings }) });
+    document.getElementById('settings-msg').textContent = '⚠ Some ledger names were blank and have been reset to defaults — check they match your Tally.';
+    document.getElementById('settings-box').open = true;
+  }
+  document.getElementById('s-billwise').checked = !!settings.billwise;
+  document.getElementById('s-selfWorker').checked = settings.selfWorker === true;
+  document.getElementById('s-freshStart').checked = settings.freshStart !== false;
+  document.getElementById('s-companyGuard').checked = settings.companyGuard !== false;
+  document.getElementById('settings-hint').textContent = '(purchase: ' + (settings.purchaseLedger || '—') + ')';
+  docs = d.docs || [];
+  docs.forEach(function (r) { if (!r.key) r.key = key(r); });
+  if (docs.length && docs[0].gstin) { /* own GSTIN unknown from rows; kept from uploads */ }
+  manualLog = d.manualLog || [];
+  renderManualLog();
+  document.getElementById('m-date').value = new Date().toISOString().slice(0, 10);
+  mlines = [blankLine(), blankLine()];
+  renderLines();
+  loadLedgers(false);
+  loadVchTypes();
+  checkTally();
+  render();
+  if (d.reco && d.reco.ok) {
+    applyReco(d.reco);
+    document.getElementById('bar-msg').textContent =
+      'Showing the reconciliation from ' + new Date(d.reco.at).toLocaleString('en-IN') + ' — 🔁 Reconcile to refresh.';
+  }
+  updateJarvis(d.autopilot);
+  if (d.autopilot && d.autopilot.running) ensureProgressWatcher();
+  setInterval(autoPoll, 25000);
+});
+
+// ---------------------- 🤖 self-worker sync (browser) ----------------------
+function updateJarvis(a) {
+  var el = document.getElementById('jarvis');
+  if (!a) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  var t = '🤖 <b>Self-worker ' + (a.on ? 'ON' : 'off — switch on under Settings if wanted') + '</b>';
+  if (a.on) t += ' — watching <span class="mono">' + esc(a.watchFolder || '—') + '</span> for new GSTR-2B files';
+  t += ' · last reconcile: <b>' + (a.lastRecoAt ? new Date(a.lastRecoAt).toLocaleString('en-IN') : 'never') + '</b>';
+  if (a.running) t += ' · <b style="color:var(--brand)">reconciling now…</b>';
+  else if (a.dirty) t += ' · <b style="color:var(--warn)">new data waiting — will auto-reconcile when Tally is open</b>';
+  var okFiles = (a.recent || []).filter(function (f) { return !f.error; });
+  if (okFiles.length) t += ' · auto-read: ' + okFiles.slice(0, 3).map(function (f) { return esc(f.file); }).join(', ');
+  el.innerHTML = t;
+}
+var lastRecoAt = null;
+var srvEpoch = null; // server's clear-generation — guards stale tabs from re-seeding cleared docs
+var polling = false;
+var progWatch = null;
+var progT0 = 0;
+function paintProgress(p) {
+  var secs = Math.round((Date.now() - progT0) / 1000);
+  var pct = 2, txt = 'starting…';
+  if (p.phase === 'reading' && p.monthsTotal) {
+    pct = Math.max(2, Math.round((p.monthsDone / p.monthsTotal) * 90));
+    txt = 'reading the Tally books (' + p.mode + '): month <b>' + p.monthsDone + ' of ' + p.monthsTotal + '</b> · ' +
+      p.vouchers.toLocaleString('en-IN') + ' purchase-side vouchers found · ' + secs + 's';
+  } else if (p.phase === 'masters') {
+    pct = 92;
+    txt = 'reading ledger masters (GSTINs)… · ' + secs + 's';
+  } else if (p.phase === 'matching') {
+    pct = 96;
+    txt = 'matching every document (3 passes)… · ' + secs + 's';
+  }
+  document.getElementById('reco-fill').style.width = pct + '%';
+  document.getElementById('reco-ptext').innerHTML = '<b>Reconciling…</b> ' + txt;
+}
+function ensureProgressWatcher() {
+  if (progWatch) return;
+  progT0 = Date.now();
+  var prog = document.getElementById('reco-progress');
+  prog.style.display = '';
+  document.getElementById('reco-fill').style.width = '2%';
+  document.getElementById('reco-ptext').innerHTML = '<b>Reconciling…</b> contacting Tally';
+  progWatch = setInterval(function () {
+    fetch(API + '/api/reco-progress').then(function (r) { return r.json(); }).then(function (p) {
+      if (!p.active) {
+        clearInterval(progWatch);
+        progWatch = null;
+        prog.style.display = 'none';
+        autoPoll();
+        checkTally();
+        return;
+      }
+      paintProgress(p);
+    }).catch(function () {});
+  }, 800);
+}
+async function autoPoll() {
+  if (polling) return;
+  polling = true;
+  try {
+    var d = await fetch(API + '/api/data').then(function (r) { return r.json(); });
+    updateJarvis(d.autopilot);
+    if (d.autopilot && d.autopilot.running) ensureProgressWatcher();
+    var docsChanged = (d.docs || []).length !== docs.length;
+    // Server cleared / restarted since this tab loaded — take ITS documents
+    // as the truth (never keep showing rows the server no longer has).
+    if (d.epoch && d.epoch !== srvEpoch) { srvEpoch = d.epoch; docsChanged = true; }
+    var recoChanged = d.reco && d.reco.ok && d.reco.at !== lastRecoAt;
+    if (docsChanged) {
+      docs = d.docs || [];
+      docs.forEach(function (r) { if (!r.key) r.key = key(r); });
+    }
+    if (recoChanged || docsChanged) {
+      postedReg = d.posted || {};
+      mappings = d.mappings || mappings;
+      manualLog = d.manualLog || manualLog;
+      render();
+      renderManualLog();
+    }
+    if (recoChanged) {
+      applyReco(d.reco);
+      document.getElementById('bar-msg').textContent = '🤖 Auto-reconciled at ' + new Date(d.reco.at).toLocaleTimeString('en-IN') + '.';
+    }
+  } catch (e) { /* server briefly busy */ }
+  polling = false;
+}
+function applyReco(j) {
+  lastRecoAt = j.at || null;
+  reco = { byKey: {}, raw: j, booksOnly: j.booksOnly || [], duplicates: j.duplicates || [],
+    opinions: j.opinions || [], summary: j.summary || {} };
+  var c = { booked: 0, probable: 0, mismatch: 0, notbooked: 0 };
+  (j.docs || []).forEach(function (r) {
+    var st = r.status === 'matched' || r.status === 'grouped' ? 'booked'
+      : r.status === 'probable' ? 'probable'
+      : r.status === 'mismatch' ? 'mismatch' : 'notbooked';
+    // A portal revision whose ORIGINAL is matched in the books is not "not
+    // booked" — file it under the Amended chip with the pointer note.
+    if (r.amendedOfMatched) st = 'amended';
+    c[st] = (c[st] || 0) + 1;
+    reco.byKey[r.key] = { st: st, note: r.note || '', gap: r.readGap || null, wrongReg: r.wrongReg || null, bookRef: r.bookRef, tallyAmt: r.bookAmount, headSwap: r.headSwap,
+      bookAmount: r.bookAmount, bookTaxable: r.bookTaxable, bookIgst: r.bookIgst, bookCgst: r.bookCgst,
+      bookSgst: r.bookSgst, bookGstComb: r.bookGstComb, bookTds: r.bookTds, bookTax: r.bookTax };
+  });
+  document.getElementById('reco-select').style.display = c.notbooked ? '' : 'none';
+  renderRecoSummary(c);
+  renderRcm();
+  renderDocs();
+  return c;
+}
+
+var tallyRetryT = null;
+function checkTally() {
+  fetch(API + '/api/tally-check').then(function (r) { return r.json(); }).then(function (j) {
+    var dot = document.getElementById('tally-dot');
+    var stEl = document.getElementById('tally-status');
+    var again = function (ms) { if (tallyRetryT) clearTimeout(tallyRetryT); tallyRetryT = setTimeout(checkTally, ms); };
+    if (j.busy) {
+      dot.className = 'up';
+      stEl.innerHTML = 'Tally connected — <b>busy reading the books (reconciliation in progress)…</b>';
+      again(15000);
+      return;
+    }
+    if (!j.ok) {
+      dot.className = 'down';
+      stEl.innerHTML = 'Tally not reachable — open Tally Prime with the company loaded <span class="muted">(rechecking every 20s…)</span>';
+      again(20000);
+      return;
+    }
+    var g = j.guard || {};
+    if (g.ok === false) {
+      dot.className = 'down';
+      stEl.innerHTML = '<b style="color:var(--bad)">' + esc(g.reason || 'Wrong company open in Tally') + '</b>';
+    } else if (g.match) {
+      dot.className = 'up';
+      stEl.innerHTML = 'Tally connected — <b>' + esc(g.company || 'company') + '</b> · GSTIN matches the loaded data ✓';
+    } else {
+      dot.className = 'up';
+      stEl.innerHTML = 'Tally connected' + (g.warn ? ' · <span style="color:var(--warn)">⚠ ' + esc(g.warn) + '</span>' : '');
+    }
+  });
+}
+setInterval(checkTally, 30000);
+
+function saveSettings() {
+  var ids = ['tallyUrl','company','purchaseLedger','igstLedger','cgstLedger','sgstLedger','cessLedger','roundOffLedger','tolerance','rcmIgstLedger','rcmCgstLedger','rcmSgstLedger','watchFolder','ownGstin'];
+  var next = {};
+  ids.forEach(function (k) { next[k] = document.getElementById('s-' + k).value.trim(); });
+  next.billwise = document.getElementById('s-billwise').checked;
+  next.selfWorker = document.getElementById('s-selfWorker').checked;
+  next.freshStart = document.getElementById('s-freshStart').checked;
+  next.companyGuard = document.getElementById('s-companyGuard').checked;
+  if (!next.purchaseLedger || !next.igstLedger || !next.cgstLedger || !next.sgstLedger) {
+    document.getElementById('settings-msg').textContent = '✖ NOT saved — Purchase, IGST, CGST and SGST ledger names are all required.';
+    return;
+  }
+  ids.forEach(function (k) { settings[k] = next[k]; });
+  settings.billwise = next.billwise;
+  settings.selfWorker = next.selfWorker;
+  settings.freshStart = next.freshStart;
+  settings.companyGuard = next.companyGuard;
+  fetch(API + '/api/data', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ settings: settings }) })
+    .then(function () {
+      document.getElementById('settings-msg').textContent = '✓ saved';
+      document.getElementById('settings-hint').textContent = '(purchase: ' + settings.purchaseLedger + ')';
+      checkTally();
+    });
+}
+
+// ------------------------------ GSTR-2B parsing ------------------------------
+// Amounts can arrive as numbers or as "1,18,000.00" strings depending on how
+// the file was produced — strip formatting before converting.
+function num(v) { var n = Number(String(v === undefined || v === null ? '' : v).replace(/[₹,\s]/g, '')); return isFinite(n) ? n : 0; }
+function r2(n) { return Math.round(n * 100) / 100; }
+function firstNum(o, keys) {
+  for (var i = 0; i < keys.length; i++) {
+    if (o[keys[i]] !== undefined && o[keys[i]] !== null && o[keys[i]] !== '') return num(o[keys[i]]);
+  }
+  return 0;
+}
+// Item-wise totals, then document-level fallbacks: some 2B exports carry the
+// taxes on the document itself (igst/iamt/...) rather than inside items.
+function docTotals(doc) {
+  var t = sumItems(doc.items || doc.itms);
+  if (t.igst + t.cgst + t.sgst + t.cess === 0) {
+    t.igst = firstNum(doc, ['igst', 'iamt']);
+    t.cgst = firstNum(doc, ['cgst', 'camt']);
+    t.sgst = firstNum(doc, ['sgst', 'samt']);
+    t.cess = t.cess || firstNum(doc, ['cess', 'csamt']);
+  }
+  if (!t.txval) t.txval = firstNum(doc, ['txval', 'taxval', 'txblval']);
+  Object.keys(t).forEach(function (k) { t[k] = r2(t[k]); });
+  return t;
+}
+function sumItems(items) {
+  var t = { txval:0, igst:0, cgst:0, sgst:0, cess:0 };
+  (items || []).forEach(function (it) {
+    // GSTR-2B uses txval/igst/cgst/sgst/cess directly on the item; some
+    // exports nest them under itm_det and/or use 2A-style iamt/camt/samt.
+    var d = it && it.itm_det ? it.itm_det : (it || {});
+    t.txval += firstNum(d, ['txval', 'taxval', 'txblval']);
+    t.igst += firstNum(d, ['igst', 'iamt']);
+    t.cgst += firstNum(d, ['cgst', 'camt']);
+    t.sgst += firstNum(d, ['sgst', 'samt']);
+    t.cess += firstNum(d, ['cess', 'csamt', 'cs']);
+  });
+  Object.keys(t).forEach(function (k) { t[k] = r2(t[k]); });
+  return t;
+}
+function periodLabel(p) {
+  var m = /^(\d{2})(\d{4})$/.exec(p || '');
+  if (!m) return p || '—';
+  var mo = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+m[1] - 1];
+  return (mo || m[1]) + ' ' + m[2];
+}
+function parse2b(text) {
+  var root = JSON.parse(text);
+  var data = root.data || root;
+  var dd = data.docdata || data.docData;
+  if (!dd) throw new Error('No GSTR-2B document data in this file (expected data.docdata).');
+  var period = String(data.rtnprd || data.ret_period || '');
+  var rows = [], skipped = [];
+  (dd.b2b || []).forEach(function (sup) {
+    var gstin = String(sup.ctin || '').toUpperCase();
+    var name = String(sup.trdnm || gstin);
+    (sup.inv || []).forEach(function (inv) {
+      var dm = /^(\d{2})-(\d{2})-(\d{4})$/.exec(String(inv.dt || ''));
+      if (!gstin || !inv.inum || !dm) return;
+      var t = docTotals(inv);
+      rows.push({ period: period, type: 'invoice', gstin: gstin, name: name, no: String(inv.inum),
+        date: dm[3] + '-' + dm[2] + '-' + dm[1], val: r2(num(inv.val)), rcm: inv.rev === 'Y', itc: inv.itcavl !== 'N',
+        txval: t.txval, igst: t.igst, cgst: t.cgst, sgst: t.sgst, cess: t.cess });
+    });
+  });
+  (dd.cdnr || []).forEach(function (sup) {
+    var gstin = String(sup.ctin || '').toUpperCase();
+    var name = String(sup.trdnm || gstin);
+    (sup.nt || []).forEach(function (nt) {
+      var dm = /^(\d{2})-(\d{2})-(\d{4})$/.exec(String(nt.dt || ''));
+      var no = String(nt.ntnum || nt.nt_num || '');
+      if (!gstin || !no || !dm) return;
+      var t = docTotals(nt);
+      rows.push({ period: period, type: nt.typ === 'C' ? 'creditnote' : 'debitnote', gstin: gstin, name: name, no: no,
+        date: dm[3] + '-' + dm[2] + '-' + dm[1], val: r2(num(nt.val)), rcm: nt.rev === 'Y', itc: nt.itcavl !== 'N',
+        txval: t.txval, igst: t.igst, cgst: t.cgst, sgst: t.sgst, cess: t.cess });
+    });
+  });
+  // Amended documents: shown so nothing is invisible, but never auto-posted —
+  // a revision must be adjusted against the original entry in Tally.
+  (dd.b2ba || []).forEach(function (sup) {
+    var gstin = String(sup.ctin || '').toUpperCase();
+    var name = String(sup.trdnm || gstin);
+    (sup.inv || []).forEach(function (inv) {
+      var dm = /^(\d{2})-(\d{2})-(\d{4})$/.exec(String(inv.dt || ''));
+      if (!gstin || !inv.inum || !dm) return;
+      var t = docTotals(inv);
+      rows.push({ period: period, type: 'invoice', gstin: gstin, name: name, no: String(inv.inum),
+        date: dm[3] + '-' + dm[2] + '-' + dm[1], val: r2(num(inv.val)), rcm: inv.rev === 'Y', itc: inv.itcavl !== 'N',
+        amended: true, orig: String(inv.oinum || ''),
+        txval: t.txval, igst: t.igst, cgst: t.cgst, sgst: t.sgst, cess: t.cess });
+    });
+  });
+  (dd.cdnra || []).forEach(function (sup) {
+    var gstin = String(sup.ctin || '').toUpperCase();
+    var name = String(sup.trdnm || gstin);
+    (sup.nt || []).forEach(function (nt) {
+      var dm = /^(\d{2})-(\d{2})-(\d{4})$/.exec(String(nt.dt || ''));
+      var no = String(nt.ntnum || nt.nt_num || '');
+      if (!gstin || !no || !dm) return;
+      var t = docTotals(nt);
+      rows.push({ period: period, type: nt.typ === 'C' ? 'creditnote' : 'debitnote', gstin: gstin, name: name, no: no,
+        date: dm[3] + '-' + dm[2] + '-' + dm[1], val: r2(num(nt.val)), rcm: nt.rev === 'Y', itc: nt.itcavl !== 'N',
+        amended: true, orig: String(nt.ontnum || ''),
+        txval: t.txval, igst: t.igst, cgst: t.cgst, sgst: t.sgst, cess: t.cess });
+    });
+  });
+  var labels = { isd:'ISD credits', isda:'amended ISD credits', impg:'import of goods (IMPG)', impgsez:'imports from SEZ' };
+  Object.keys(labels).forEach(function (k) { if (Array.isArray(dd[k]) && dd[k].length) skipped.push(labels[k]); });
+  return { gstin: String(data.gstin || ''), period: period, rows: rows, skipped: skipped };
+}
+
+// ------------------------------ upload ------------------------------
+var drop = document.getElementById('drop');
+drop.addEventListener('dragover', function (e) { e.preventDefault(); drop.classList.add('hot'); });
+drop.addEventListener('dragleave', function () { drop.classList.remove('hot'); });
+drop.addEventListener('drop', function (e) {
+  e.preventDefault(); drop.classList.remove('hot');
+  if (e.dataTransfer.files.length) readFiles(e.dataTransfer.files);
+});
+document.getElementById('file').addEventListener('change', function (e) {
+  if (e.target.files.length) readFiles(e.target.files);
+  e.target.value = '';
+});
+function readOne(f) {
+  return new Promise(function (resolve) {
+    var rd = new FileReader();
+    rd.onload = async function () {
+      try {
+        var p = parse2b(rd.result);
+        if (p.gstin) ownGstin = p.gstin;
+        // ALL rows go to the server — a row whose key already exists may
+        // carry corrected figures (re-downloaded 2B), and only the server
+        // can tell; locally the newer copy replaces the older one too.
+        var at = {};
+        docs.forEach(function (d, i) { at[key(d)] = i; });
+        var freshN = 0;
+        p.rows.forEach(function (d) {
+          // which of OUR registrations this file belongs to (multi-GSTIN)
+          if (p.gstin) d.own = p.gstin.toUpperCase();
+          d.key = key(d);
+          if (at[d.key] != null) { docs[at[d.key]] = d; }
+          else { at[d.key] = docs.length; docs.push(d); freshN++; }
+        });
+        var srv = null;
+        if (p.rows.length || p.gstin) {
+          try {
+            srv = await fetch(API + '/api/docs', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ rows: p.rows, gstin: p.gstin || '' }) }).then(function (r) { return r.json(); });
+          } catch (e) { /* server briefly busy — local copy is loaded */ }
+        }
+        var loaded = srv && srv.added != null ? srv.added : freshN;
+        var updated = (srv && srv.updated) || 0;
+        var already = Math.max(0, p.rows.length - loaded - updated);
+        resolve('✓ ' + esc(f.name) + ' — ' + periodLabel(p.period) + ': ' + loaded + ' loaded' +
+          (updated ? ', ' + updated + ' UPDATED (figures changed — reconcile again)' : '') +
+          (already ? ', ' + already + ' already present' : '') +
+          (p.skipped.length ? ' (not imported: ' + p.skipped.join(', ') + ')' : ''));
+      } catch (err) {
+        resolve('✖ ' + esc(f.name) + ' — ' + esc(err.message || 'could not read'));
+      }
+    };
+    rd.onerror = function () { resolve('✖ ' + esc(f.name) + ' — read error'); };
+    rd.readAsText(f);
+  });
+}
+async function readFiles(fileList) {
+  var files = [].slice.call(fileList);
+  var box = document.getElementById('upload-msg');
+  box.innerHTML = '<div class="msg ok">Reading ' + files.length + ' file(s)…</div>';
+  var lines = [];
+  for (var i = 0; i < files.length; i++) lines.push(await readOne(files[i]));
+  box.innerHTML = '<div class="msg ok" style="line-height:1.8">' + lines.join('<br>') + '</div>';
+  render();
+}
+
+// ------------------------------ mapping table ------------------------------
+function renderMappings() {
+  var gstins = {};
+  docs.forEach(function (d) { if (!gstins[d.gstin]) gstins[d.gstin] = d.name; });
+  var keys = Object.keys(gstins).sort();
+  var card = document.getElementById('map-card');
+  if (!keys.length) { card.style.display = 'none'; return; }
+  card.style.display = '';
+  var newOnes = keys.filter(function (g) { return !mappings[g]; }).length;
+  document.getElementById('map-count').textContent =
+    '(' + keys.length + ' suppliers, saved for next time' + (newOnes ? ', ' + newOnes + ' NEW — open to map' : '') + ')';
+  if (newOnes) document.getElementById('map-box').open = true;
+  var h = '<tr><th>Supplier (from portal)</th><th>GSTIN</th><th style="width:26%">Party ledger in Tally</th><th style="width:24%">Purchase/expense ledger 🧠</th><th>Create in Tally?</th></tr>';
+  keys.forEach(function (g) {
+    var m = mappings[g] || { ledger: gstins[g], autoCreate: true };
+    h += '<tr><td>' + esc(gstins[g]) + '</td><td class="mono">' + esc(g) + '</td>' +
+      '<td><input type="text" list="ledger-list" value="' + escAttr(m.ledger || '') + '" data-g="' + escAttr(g) + '" onchange="setMap(this.dataset.g, this.value, null)"></td>' +
+      '<td><input type="text" list="ledger-list" value="' + escAttr(m.purchaseLedger || '') + '" placeholder="' + escAttr(settings.purchaseLedger || 'default') + '" data-g="' + escAttr(g) + '" onchange="setMapPurchase(this.dataset.g, this.value)">' +
+        (m.purchaseLedgerLearned && !m.purchaseLedgerManual ? '<div class="muted" style="font-size:11">🧠 learned from this party&apos;s past entries</div>' : '') + '</td>' +
+      '<td><label><input type="checkbox"' + (m.autoCreate ? ' checked' : '') + ' data-g="' + escAttr(g) + '" onchange="setMap(this.dataset.g, null, this.checked)"> create if missing</label></td></tr>';
+  });
+  document.getElementById('map-table').innerHTML = h;
+  // Persist defaults for newly seen suppliers so they survive a restart.
+  var dirty = false;
+  keys.forEach(function (g) { if (!mappings[g]) { mappings[g] = { ledger: gstins[g], autoCreate: true }; dirty = true; } });
+  if (dirty) pushMappings();
+}
+function setMap(gstin, ledger, autoCreate) {
+  var m = mappings[gstin] || { ledger: '', autoCreate: true };
+  if (ledger !== null && ledger !== undefined) m.ledger = ledger.trim();
+  if (autoCreate !== null && autoCreate !== undefined) m.autoCreate = autoCreate;
+  mappings[gstin] = m;
+  pushMappings();
+  renderDocs();
+}
+function setMapPurchase(gstin, ledger) {
+  var m = mappings[gstin] || { ledger: '', autoCreate: true };
+  m.purchaseLedger = String(ledger || '').trim();
+  m.purchaseLedgerManual = !!m.purchaseLedger; // a manual choice sticks; blank = back to auto-learn
+  if (!m.purchaseLedger) { delete m.purchaseLedger; delete m.purchaseLedgerManual; delete m.purchaseLedgerLearned; }
+  mappings[gstin] = m;
+  pushMappings();
+  renderDocs();
+}
+function pushMappings() {
+  fetch(API + '/api/data', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ mappings: mappings }) });
+}
+
+// ------------------------------ docs table ------------------------------
+var filterText = '';
+var bucketFilter = 'all';
+var groupMode = 'month'; // 'month' | 'party'
+var regFilter = ''; // multi-GSTIN: '' = all registrations, else one own GSTIN
+function setGroupMode(m) { groupMode = m; renderDocs(); }
+function setRegFilter(g) { regFilter = g; renderDocs(); }
+function ownList() {
+  var s = {};
+  docs.forEach(function (d) { if (d.own) s[d.own] = 1; });
+  return Object.keys(s).sort();
+}
+function toggleGroup(kind, val, on) {
+  docs.forEach(function (d) {
+    if (!matchesFilter(d)) return;
+    if (kind === 'party' ? d.gstin !== val : d.period !== val) return;
+    if (on) selected[key(d)] = true; else delete selected[key(d)];
+  });
+  renderDocs();
+}
+function setFilter(v) { filterText = v.trim().toLowerCase(); renderDocs(); }
+function setBucket(b) { bucketFilter = b; renderDocs(); }
+// Which review bucket a row belongs to — drives the chips and the filter.
+function rowBucket(d) {
+  var k = key(d);
+  var st = statusOf(d);
+  if (st.status === 'posted') return st.via === 'found-in-tally' ? 'booked' : 'posted';
+  if (st.status === 'ok') return 'posted';
+  if (st.status === 'dup') return 'booked';
+  if (st.status === 'fail') return 'rejected';
+  var rc = reco && reco.byKey[k];
+  if (rc) return rc.st === 'booked' ? 'booked' : rc.st; // notbooked | probable | mismatch
+  if (d.amended) return 'amended';
+  return 'pending';
+}
+var BUCKETS = [
+  ['all', 'All'], ['notbooked', 'Not booked'], ['probable', 'Probable'], ['mismatch', 'Mismatch'],
+  ['booked', 'In Tally'], ['posted', 'Posted by me'], ['rejected', 'Rejected'], ['amended', 'Amended'], ['pending', 'Pending'],
+];
+function renderChips() {
+  var host = document.getElementById('bucket-chips');
+  if (!docs.length) { host.innerHTML = ''; return; }
+  // Bucket counts respect the registration filter — one state at a time.
+  if (regFilter && !docs.some(function (d) { return d.own === regFilter; })) regFilter = '';
+  var inReg = docs.filter(function (d) { return !regFilter || d.own === regFilter; });
+  var counts = { all: inReg.length };
+  inReg.forEach(function (d) { var b = rowBucket(d); counts[b] = (counts[b] || 0) + 1; });
+  if (bucketFilter !== 'all' && !counts[bucketFilter]) bucketFilter = 'all';
+  var h = '';
+  // 🏷 Registration chips (multi-GSTIN books): view one state at a time —
+  // the whole page (lists, counts, select-all, posting) follows this filter.
+  var owns = ownList();
+  if (owns.length > 1) {
+    h += '<span class="muted" style="align-self:center">registration:</span>' +
+      '<button type="button" class="btn' + (regFilter === '' ? ' primary' : '') + '" style="padding:3px 11px;font-size:12px" onclick="setRegFilter(\'\')">All (' + docs.length + ')</button>';
+    owns.forEach(function (g) {
+      var n = 0;
+      docs.forEach(function (d) { if (d.own === g) n++; });
+      h += '<button type="button" class="btn' + (regFilter === g ? ' primary' : '') + '" style="padding:3px 11px;font-size:12px" data-g="' + escAttr(g) + '" onclick="setRegFilter(this.dataset.g)">' +
+        esc(g) + ' (' + n + ')</button>';
+    });
+    h += '<span style="flex-basis:100%;height:0"></span>';
+  }
+  BUCKETS.forEach(function (bl) {
+    var b = bl[0], label = bl[1];
+    if (b !== 'all' && !counts[b]) return;
+    var on = bucketFilter === b;
+    h += '<button type="button" class="btn' + (on ? ' primary' : '') + '" style="padding:3px 11px;font-size:12px" onclick="setBucket(\'' + b + '\')">' +
+      label + ' (' + (counts[b] || 0) + ')</button>';
+  });
+  h += '<span class="muted" style="margin-left:auto;align-self:center">view:</span>' +
+    '<button type="button" class="btn' + (groupMode === 'month' ? ' primary' : '') + '" style="padding:3px 11px;font-size:12px" data-m="month" onclick="setGroupMode(this.dataset.m)">📅 Month-wise</button>' +
+    '<button type="button" class="btn' + (groupMode === 'party' ? ' primary' : '') + '" style="padding:3px 11px;font-size:12px" data-m="party" onclick="setGroupMode(this.dataset.m)">👥 Party-wise</button>';
+  host.innerHTML = h;
+}
+function matchesFilter(d) {
+  // Registration filter first: viewing ONE registration must never surface
+  // another registration's documents (not booked or otherwise).
+  if (regFilter && d.own !== regFilter) return false;
+  if (bucketFilter !== 'all' && rowBucket(d) !== bucketFilter) return false;
+  if (!filterText) return true;
+  return d.name.toLowerCase().indexOf(filterText) >= 0 ||
+         d.gstin.toLowerCase().indexOf(filterText) >= 0 ||
+         d.no.toLowerCase().indexOf(filterText) >= 0;
+}
+// Reads the head-wise pattern of a mismatch and says what probably happened.
+function diagnoseMismatch(d, rc) {
+  var tol = Math.max(Number(settings.tolerance) || 5, 1);
+  var t2 = { tx: taxableOf(d), i: d.igst || 0, c: d.cgst || 0, s: d.sgst || 0 };
+  var tb = { tx: Number(rc.bookTaxable) || 0, i: Number(rc.bookIgst) || 0, c: Number(rc.bookCgst) || 0,
+    s: Number(rc.bookSgst) || 0, g: Number(rc.bookGstComb) || 0 };
+  var tax2 = r2(t2.i + t2.c + t2.s);
+  var taxb = r2(tb.i + tb.c + tb.s + tb.g);
+  var near = function (a, b) { return Math.abs(a - b) <= tol; };
+  if (rc.headSwap) {
+    return '⚠ WRONG TAX HEAD — books show ' + (tb.i > tol ? 'IGST' : 'CGST+SGST') + ' but 2B shows ' +
+      (t2.i > tol ? 'IGST' : 'CGST+SGST') + '. Correct the head in Tally; cross-head claims are recovered with interest in scrutiny.';
+  }
+  if (t2.i > tol && tb.i <= tol && near(r2(tb.c + tb.s), t2.i)) {
+    return '⚠ WRONG HEAD — 2B charges IGST ' + inr(t2.i) + ' but the books split it into CGST+SGST. Re-book under IGST.';
+  }
+  if (t2.i <= tol && (t2.c > tol || t2.s > tol) && tb.c <= tol && tb.s <= tol && near(tb.i, tax2)) {
+    return '⚠ WRONG HEAD — 2B splits CGST+SGST but the books booked the full tax as IGST. Re-book under CGST+SGST.';
+  }
+  if (taxb > tol && near(taxb, r2(2 * tax2))) {
+    if (near(tb.c, r2(2 * t2.c)) && near(tb.s, r2(2 * t2.s))) {
+      return '⚠ CGST and SGST each look booked TWICE — the books carry double the 2B tax. Check for a duplicate tax leg or the invoice entered twice.';
+    }
+    return '⚠ Books GST is about DOUBLE the 2B GST — a tax leg may be entered twice.';
+  }
+  if (tax2 > tol && near(taxb, r2(tax2 / 2))) {
+    return '⚠ Only about HALF the tax is booked — one head (CGST or SGST) looks missing in Tally.';
+  }
+  if (t2.s > tol && tb.s <= tol && near(tb.c, r2(t2.c + t2.s))) {
+    return '⚠ BOTH halves posted to CGST — the SGST amount is sitting in the CGST ledger. Move ' + inr(t2.s) + ' to SGST.';
+  }
+  if (t2.c > tol && tb.c <= tol && near(tb.s, r2(t2.c + t2.s))) {
+    return '⚠ BOTH halves posted to SGST — the CGST amount is sitting in the SGST ledger. Move ' + inr(t2.c) + ' to CGST.';
+  }
+  if (tb.g > tol && tb.i <= tol && tb.c <= tol && tb.s <= tol && near(tb.g, tax2)) {
+    return 'Books use ONE combined GST ledger and the total agrees — split it into CGST/SGST/IGST input ledgers for clean head-wise matching.';
+  }
+  if (near(t2.tx, tb.tx) && !near(tax2, taxb)) {
+    return 'Taxable agrees — only the GST differs by ' + inr(Math.abs(r2(tax2 - taxb))) + '. Check the RATE used in Tally (or a short/extra tax leg).';
+  }
+  if (!near(t2.tx, tb.tx) && near(tax2, taxb)) {
+    return 'GST agrees — only the TAXABLE differs by ' + inr(Math.abs(r2(t2.tx - tb.tx))) + '. Check freight/other charges or a non-GST component on one side.';
+  }
+  return 'Both taxable and tax differ — verify against the physical invoice.';
+}
+// Face-to-face 2B vs Books grid with per-head differences.
+function compareHtml(d, rc, cols) {
+  if (!rc || rc.bookAmount == null || rc.bookAmount === '') return '';
+  var t2 = { tx: taxableOf(d), i: d.igst || 0, c: d.cgst || 0, s: d.sgst || 0 };
+  var tb = { tx: Number(rc.bookTaxable) || 0, i: Number(rc.bookIgst) || 0, c: Number(rc.bookCgst) || 0,
+    s: Number(rc.bookSgst) || 0, g: Number(rc.bookGstComb) || 0, tds: Number(rc.bookTds) || 0 };
+  var row = function (label, a, b) {
+    var diff = r2(a - b);
+    var bad = Math.abs(diff) > 0.01;
+    return '<tr><td>' + label + '</td><td class="r">' + inr(r2(a)) + '</td><td class="r">' + inr(r2(b)) + '</td>' +
+      '<td class="r" style="' + (bad ? 'color:var(--bad);font-weight:700' : 'color:var(--ok)') + '">' + (bad ? inr(diff) : '0.00 ✓') + '</td></tr>';
+  };
+  var body = row('Taxable', t2.tx, tb.tx) + row('IGST', t2.i, tb.i) + row('CGST', t2.c, tb.c) + row('SGST', t2.s, tb.s);
+  if (tb.g > 0.01) body += '<tr><td>GST (combined ledger)</td><td class="r">—</td><td class="r">' + inr(tb.g) + '</td><td class="r">—</td></tr>';
+  if (tb.tds > 0.01) body += '<tr><td>TDS on voucher</td><td class="r">—</td><td class="r">' + inr(tb.tds) + '</td><td class="r">—</td></tr>';
+  body += row('TAX TOTAL', r2(t2.i + t2.c + t2.s), r2(tb.i + tb.c + tb.s + tb.g));
+  return '<tr><td></td><td colspan="' + (cols - 1) + '" style="background:#fffaf3;border-left:3px solid var(--warn);padding:8px 12px">' +
+    '<table style="width:auto;min-width:420px;font-size:12px"><tr><th></th><th class="r">As per 2B ₹</th><th class="r">In books (' + esc(rc.bookRef || '—') + ') ₹</th><th class="r">Difference ₹</th></tr>' +
+    body + '</table>' +
+    '<div style="font-size:12.5px;margin-top:6px"><b>💡 ' + esc(diagnoseMismatch(d, rc)) + '</b></div>' +
+    '</td></tr>';
+}
+function recoNote(rc) {
+  if (!rc || !rc.note) return '';
+  return '<div class="muted" style="font-size:11;max-width:280px">' + esc(rc.note) + '</div>';
+}
+function statusOf(d) {
+  var k = key(d);
+  if (live[k]) return live[k];
+  if (postedReg[k]) return { status: 'posted', at: postedReg[k].at, via: postedReg[k].via };
+  return { status: 'pending' };
+}
+function render() { renderMappings(); renderDocs(); renderRcm(); }
+function renderDocs() {
+  var host = document.getElementById('docs');
+  document.getElementById('bar').style.display = docs.length ? '' : 'none';
+  if (!docs.length) { host.innerHTML = ''; return; }
+  var multiOwn = ownList().length > 1;
+
+  // Party names into the filter's suggestion list.
+  var names = {};
+  docs.forEach(function (d) { names[d.name] = true; });
+  document.getElementById('party-list').innerHTML =
+    Object.keys(names).sort().map(function (n) { return '<option value="' + escAttr(n) + '"></option>'; }).join('');
+
+  renderChips();
+  var visible = docs.filter(matchesFilter);
+  document.getElementById('filter-count').textContent =
+    (filterText || bucketFilter !== 'all') ? 'showing ' + visible.length + ' of ' + docs.length : '';
+  if (!visible.length) {
+    host.innerHTML = '<div class="card"><p class="muted" style="margin:0">No documents match the filter.</p></div>';
+    updateBar();
+    return;
+  }
+
+  var typeTag = {
+    invoice: '<span class="tag inv">INVOICE</span>',
+    creditnote: '<span class="tag cn">CREDIT NOTE</span>',
+    debitnote: '<span class="tag dn">DEBIT NOTE</span>',
+  };
+  var groups = [];
+  if (groupMode === 'party') {
+    var byG = {};
+    visible.forEach(function (d) { (byG[d.gstin] = byG[d.gstin] || []).push(d); });
+    Object.keys(byG).sort(function (a, b) { return byG[a][0].name.localeCompare(byG[b][0].name); }).forEach(function (g) {
+      groups.push({ kind: 'party', val: g,
+        label: esc(byG[g][0].name) + ' <span class="muted mono" style="font-weight:400;font-size:12px">' + esc(g) + '</span>',
+        list: byG[g] });
+    });
+  } else {
+    var byPeriod = {};
+    visible.forEach(function (d) { (byPeriod[d.period] = byPeriod[d.period] || []).push(d); });
+    Object.keys(byPeriod).sort(function (a, b) {
+      return (b.slice(2) + b.slice(0, 2)).localeCompare(a.slice(2) + a.slice(0, 2));
+    }).forEach(function (p) {
+      groups.push({ kind: 'month', val: p, label: esc(periodLabel(p)), list: byPeriod[p] });
+    });
+  }
+  var h = '';
+  groups.forEach(function (grp) {
+    var list = grp.list.slice().sort(function (a, b) { return a.name.localeCompare(b.name) || a.date.localeCompare(b.date); });
+    var totTax = 0, totAll = 0;
+    list.forEach(function (d) { totTax += taxableOf(d); totAll += taxableOf(d) + d.igst + d.cgst + d.sgst + d.cess; });
+    var allOn = list.every(function (d) { return selected[key(d)]; });
+    h += '<div class="card"><div class="phead"><h2 style="margin:0">' + grp.label + ' — ' + list.length + ' document(s)</h2>' +
+      '<span class="muted">Taxable ₹' + inr(r2(totTax)) + ' · Total ₹' + inr(r2(totAll)) + '</span></div>' +
+      '<div class="tbl-scroll"><table><tr>' +
+      '<th><input type="checkbox"' + (allOn ? ' checked' : '') + ' data-k="' + grp.kind + '" data-v="' + escAttr(grp.val) + '" onchange="toggleGroup(this.dataset.k, this.dataset.v, this.checked)" title="select whole group"></th>' +
+      (grp.kind === 'party' ? '' : '<th>Supplier</th>') +
+      '<th>Document</th><th class="r">Taxable</th><th class="r">IGST</th><th class="r">CGST</th><th class="r">SGST</th><th class="r">Total</th><th>Tally ledger</th><th>Status</th></tr>';
+    list.forEach(function (d) {
+      var k = key(d);
+      var st = statusOf(d);
+      var m = mappings[d.gstin];
+      var total = r2(taxableOf(d) + d.igst + d.cgst + d.sgst + d.cess);
+      var rc = reco && reco.byKey[k];
+      var pill = st.status === 'posted' && st.via === 'found-in-tally'
+          ? '<span class="pill ok" title="' + escAttr((rc && rc.note) || 'Found in the Tally books during reconciliation — will never be posted again from here') + '">In Tally ✓</span>'
+        : st.status === 'posted' && rc && rc.st === 'booked' ? '<span class="pill ok" title="' + escAttr(rc.note || '') + '">Posted ✓ in Tally</span>'
+        : st.status === 'posted' && rc && rc.st === 'mismatch' ? '<span class="pill warn" title="' + escAttr(rc.note || '') + '">Posted — but MISMATCH in books</span>' + recoNote(rc)
+        : st.status === 'posted' || st.status === 'ok' ? '<span class="pill ok" title="Posted by this tool — reconcile to verify it against the books">Posted</span>'
+        : st.status === 'dup' ? '<span class="pill warn" title="A matching voucher (same number+party, or same party, amount and date) is already in Tally — skipped">In Tally already</span>'
+        : st.status === 'posting' ? '<span class="pill warn">Posting…</span>'
+        : st.status === 'fail' ? '<span class="pill bad" title="' + escAttr(st.error || '') + '">Rejected</span>'
+        : rc && rc.st === 'notbooked' && rc.gap ? '<span class="pill warn" title="' + escAttr(rc.note || '') + '">MONTH NOT READ — widen Tally period</span>' + recoNote(rc)
+        : rc && rc.st === 'notbooked' ? '<span class="pill bad" title="' + escAttr(rc.note || '') + '">NOT BOOKED</span>' + recoNote(rc)
+        : rc && rc.st === 'probable' ? '<span class="pill warn">PROBABLE</span>' + recoNote(rc)
+        : rc && rc.st === 'mismatch' ? '<span class="pill warn">MISMATCH</span>' + recoNote(rc)
+        : rc && rc.st === 'amended' ? '<span class="pill warn" title="' + escAttr(rc.note || '') + '">REVISED — original in books</span>' + recoNote(rc)
+        : '<span class="pill idle">Pending</span>';
+      if (st.status === 'fail' && st.error) pill += '<div class="muted" style="font-size:11;max-width:230px">' + esc(st.error) + '</div>';
+      // Tags must be added BEFORE the pill is rendered into the row.
+      if (rc && rc.wrongReg) pill += ' <span class="tag dn" title="' + escAttr(rc.note || '') + '">🚩 WRONG REGN — booked in ' + esc(rc.wrongReg) + '</span>';
+      if (rc && rc.headSwap) pill += ' <span class="tag dn" title="IGST vs CGST/SGST heads differ between the books and 2B — see the comparison below">WRONG HEAD</span>';
+      h += '<tr>' +
+        '<td><input type="checkbox" data-k="' + escAttr(k) + '"' + (selected[k] ? ' checked' : '') + ' onchange="toggleOne(this)"></td>' +
+        (grp.kind === 'party' ? '' : '<td>' + esc(d.name) + '<div class="muted mono">' + esc(d.gstin) + '</div></td>') +
+        '<td>' + (typeTag[d.type] || esc(d.type)) + (d.amended ? ' <span class="tag amd" title="Revised on the portal — adjust the original entry in Tally manually; never auto-posted">AMENDED</span>' : '') +
+          ' <b>' + esc(d.no) + '</b><div class="muted">' + esc(d.date) +
+          (grp.kind === 'party' ? ' · <span title=\'The GSTR-2B month this document was reported in (can differ from the invoice date when the supplier files late)\'>2B: ' + esc(periodLabel(d.period)) + '</span>' : '') +
+          (multiOwn && d.own ? ' · <span title=\'Your registration this document was reported to\'>for ' + esc(d.own) + '</span>' : '') +
+          (d.amended && d.orig ? ' · amends ' + esc(d.orig) : '') +
+          (d.rcm ? ' · <span class="flag">RCM</span>' : '') + (!d.itc ? ' · <span class="flag">ITC N/A</span>' : '') + '</div></td>' +
+        '<td class="r">' + inr(taxableOf(d)) + '</td><td class="r">' + (d.igst ? inr(d.igst) : '—') + '</td>' +
+        '<td class="r">' + (d.cgst ? inr(d.cgst) : '—') + '</td><td class="r">' + (d.sgst ? inr(d.sgst) : '—') + '</td>' +
+        '<td class="r"><b>' + inr(total) + '</b></td>' +
+        '<td>' + (m && m.ledger ? esc(m.ledger) : '<span style="color:var(--bad)">⚠ not mapped</span>') +
+          (m && m.purchaseLedger ? '<div class="muted" style="font-size:11">🧠 ' + esc(m.purchaseLedger) + '</div>' : '') + '</td>' +
+        '<td>' + pill + '</td></tr>';
+      var showCompare = rc && (rc.st === 'mismatch' || rc.st === 'probable' || rc.headSwap ||
+        (st.status === 'posted' && rc.st === 'mismatch'));
+      if (showCompare) h += compareHtml(d, rc, grp.kind === 'party' ? 9 : 10);
+    });
+    h += '</table></div></div>';
+  });
+  host.innerHTML = h;
+  updateBar();
+}
+function toggleOne(el) {
+  var k = el.getAttribute('data-k');
+  if (el.checked) selected[k] = true; else delete selected[k];
+  updateBar();
+}
+function togglePeriod(p, on) {
+  // Only the rows currently visible — with a party filter on, this selects
+  // (or clears) just that party's documents for the month.
+  docs.forEach(function (d) {
+    if (d.period !== p || !matchesFilter(d)) return;
+    if (on) selected[key(d)] = true; else delete selected[key(d)];
+  });
+  renderDocs();
+}
+function updateBar() {
+  document.getElementById('sel-count').textContent = Object.keys(selected).length;
+  renderPostPanel();
+}
+var lastPanelKey = '';
+var activeOvr = null; // frozen panel values for the whole posting batch
+function ovrNow() {
+  return { vch: povr('pp-vch'), party: povr('pp-party'), purchase: povr('pp-purchase'),
+    igst: povr('pp-igst'), cgst: povr('pp-cgst'), sgst: povr('pp-sgst') };
+}
+function povr(id) {
+  var el = document.getElementById(id);
+  return el && !el.disabled ? String(el.value || '').trim() : '';
+}
+// Batch posting panel: choose the exact ledgers + voucher type for the
+// SELECTED documents. Blank fields fall back to the learned mapping /
+// Settings defaults. Single-party choices persist to that party's mapping.
+function renderPostPanel() {
+  var host = document.getElementById('post-panel');
+  var sel = docs.filter(function (d) { return selected[key(d)]; });
+  if (!sel.length) { host.style.display = 'none'; lastPanelKey = ''; return; }
+  var gstins = [...new Set(sel.map(function (d) { return d.gstin; }))].sort();
+  var pk = gstins.join(',') + '|' + sel.length;
+  host.style.display = '';
+  if (pk === lastPanelKey) return; // keep the user's edits while ticking more rows
+  lastPanelKey = pk;
+  var single = gstins.length === 1;
+  var m = single ? (mappings[gstins[0]] || {}) : {};
+  var name = single ? (sel[0].name || gstins[0]) : gstins.length + ' parties';
+  var fld = function (id, label, value, ph, dis) {
+    return '<div><label style="font-size:11.5px;color:var(--muted);display:block;margin-bottom:2px">' + label + '</label>' +
+      '<input type="text" id="' + id + '" list="ledger-list" value="' + escAttr(value || '') + '" placeholder="' + escAttr(ph || '') + '"' +
+      (dis ? ' disabled' : '') + ' style="width:100%;padding:6px 9px;border:1px solid var(--line);border-radius:7px;font:inherit;font-size:12.5px"></div>';
+  };
+  var vchOpts = '<option value="">(default: Purchase · CN → Debit Note)</option>';
+  ['Purchase'].concat(vchTypeList).filter(function (v, i, a) { return a.indexOf(v) === i; }).forEach(function (t) {
+    vchOpts += '<option value="' + escAttr(t) + '">' + esc(t) + '</option>';
+  });
+  host.innerHTML =
+    '<b style="font-size:13px">Posting ledgers for the ' + sel.length + ' selected document(s) — ' + esc(name) + '</b>' +
+    '<span class="muted" style="font-size:11.5px"> · blank = learned mapping / Settings default' + (single ? ' · changes are saved to this party&apos;s mapping' : ' · party/purchase come from each party&apos;s own mapping') + '</span>' +
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px 12px;margin-top:8px">' +
+    fld('pp-party', 'Party ledger', single ? (m.ledger || '') : '', single ? '' : 'multiple parties — per mapping', !single) +
+    fld('pp-purchase', 'Expense / purchase ledger', single ? (m.purchaseLedger || '') : '', settings.purchaseLedger + (single && m.purchaseLedgerLearned ? ' (🧠 learned)' : '')) +
+    fld('pp-igst', 'IGST ledger', '', settings.igstLedger) +
+    fld('pp-cgst', 'CGST ledger', '', settings.cgstLedger) +
+    fld('pp-sgst', 'SGST ledger', '', settings.sgstLedger) +
+    '<div><label style="font-size:11.5px;color:var(--muted);display:block;margin-bottom:2px">Voucher type</label>' +
+    '<select id="pp-vch" style="width:100%;padding:6px 9px;border:1px solid var(--line);border-radius:7px;font:inherit;font-size:12.5px">' + vchOpts + '</select></div>' +
+    '</div>';
+}
+
+// ------------------------------ Tally XML ------------------------------
+var STATES = { '01':'Jammu & Kashmir','02':'Himachal Pradesh','03':'Punjab','04':'Chandigarh','05':'Uttarakhand',
+  '06':'Haryana','07':'Delhi','08':'Rajasthan','09':'Uttar Pradesh','10':'Bihar','11':'Sikkim','12':'Arunachal Pradesh',
+  '13':'Nagaland','14':'Manipur','15':'Mizoram','16':'Tripura','17':'Meghalaya','18':'Assam','19':'West Bengal',
+  '20':'Jharkhand','21':'Odisha','22':'Chhattisgarh','23':'Madhya Pradesh','24':'Gujarat',
+  '26':'Dadra & Nagar Haveli and Daman & Diu','27':'Maharashtra','29':'Karnataka','30':'Goa','31':'Lakshadweep',
+  '32':'Kerala','33':'Tamil Nadu','34':'Puducherry','35':'Andaman & Nicobar Islands','36':'Telangana',
+  '37':'Andhra Pradesh','38':'Ladakh','97':'Other Territory' };
+function amt(n) { return n.toFixed(2); }
+function tdate(iso) { return iso.replace(/-/g, ''); }
+function lineXml(ledger, amount, billRef, billType) {
+  var debit = amount < 0;
+  var bills = billRef
+    ? '<BILLALLOCATIONS.LIST><NAME>' + esc(billRef) + '</NAME><BILLTYPE>' + (billType || 'New Ref') + '</BILLTYPE><AMOUNT>' + amt(amount) + '</AMOUNT></BILLALLOCATIONS.LIST>'
+    : '';
+  return '<ALLLEDGERENTRIES.LIST><LEDGERNAME>' + esc(ledger) + '</LEDGERNAME>' +
+    '<ISDEEMEDPOSITIVE>' + (debit ? 'Yes' : 'No') + '</ISDEEMEDPOSITIVE>' +
+    '<AMOUNT>' + amt(amount) + '</AMOUNT>' + bills + '</ALLLEDGERENTRIES.LIST>';
+}
+function remoteIdOf(d) {
+  return ('G2B-' + d.gstin + '-' + (d.type === 'creditnote' ? 'CN' : d.type === 'debitnote' ? 'DN' : 'INV') + '-' + normKey(d.no)).slice(0, 64);
+}
+// Tally's own "Internal Error / Record insertion failure in Database" — a
+// Tally-side condition (dialog pops up IN Tally), not a rejection of the
+// voucher's content.
+function tallyInternalErr(s) { return /internal error|insertion failure|record insertion/i.test(String(s || '')); }
+var TALLY_ERR_HELP = ' → This error comes from TALLY itself. Fix in Tally: 1) click OK on the error box there, 2) come back to the Gateway of Tally (close any open voucher/alteration screen) and try ONE entry again, 3) if it still fails: back up the data, then REWRITE it — at the Select Company screen press Ctrl+Alt+R and pick the company, 4) on Edit Log releases of TallyPrime, update Tally to the latest release.';
+function vchTypeOf(d) { return d.type === 'creditnote' ? 'Debit Note' : 'Purchase'; }
+function purchaseLedgerFor(d) {
+  var m = mappings[d.gstin];
+  return (m && m.purchaseLedger) || settings.purchaseLedger;
+}
+function voucherXml(d, ledger, rid) {
+  rid = rid || remoteIdOf(d);
+  var sign = d.type === 'creditnote' ? -1 : 1;   // supplier credit note reverses the purchase
+  var O = activeOvr || ovrNow();
+  var vch = d.type === 'creditnote' ? 'Debit Note' : (O.vch || 'Purchase');
+  var tx = taxableOf(d);
+  var purLedger = O.purchase || purchaseLedgerFor(d);
+  var igstL = O.igst || settings.igstLedger;
+  var cgstL = O.cgst || settings.cgstLedger;
+  var sgstL = O.sgst || settings.sgstLedger;
+  // RCM document: book Dr Purchase / Cr Party for the taxable value only.
+  // The tax goes through the monthly RCM liability journal (RCM card below).
+  if (d.rcm) {
+    var rl = [lineXml(purLedger, -tx * sign, null),
+      lineXml(ledger, tx * sign, settings.billwise && d.type === 'invoice' ? d.no : null)];
+    var rdate = tdate(d.date);
+    var rnarr = 'GSTR-2B ' + periodLabel(d.period) + ' | ' + d.name + ' ' + d.gstin + ' | RCM — tax via RCM liability journal';
+    return '<TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER REMOTEID="' + escAttr(rid) + '" VCHTYPE="' + vch + '" ACTION="Create" OBJVIEW="Accounting Voucher View">' +
+      '<DATE>' + rdate + '</DATE><EFFECTIVEDATE>' + rdate + '</EFFECTIVEDATE>' +
+      '<VOUCHERTYPENAME>' + vch + '</VOUCHERTYPENAME><VOUCHERNUMBER>' + esc(d.no) + '</VOUCHERNUMBER>' +
+      '<REFERENCE>' + esc(d.no) + '</REFERENCE><REFERENCEDATE>' + rdate + '</REFERENCEDATE>' +
+      '<PARTYLEDGERNAME>' + esc(ledger) + '</PARTYLEDGERNAME><PERSISTEDVIEW>Accounting Voucher View</PERSISTEDVIEW>' +
+      '<ISINVOICE>No</ISINVOICE><NARRATION>' + esc(rnarr) + '</NARRATION>' + rl.join('') + '</VOUCHER></TALLYMESSAGE>';
+  }
+  var lines = [lineXml(purLedger, -tx * sign, null)];
+  if (d.igst > 0) lines.push(lineXml(igstL, -d.igst * sign, null));
+  if (d.cgst > 0) lines.push(lineXml(cgstL, -d.cgst * sign, null));
+  if (d.sgst > 0) lines.push(lineXml(sgstL, -d.sgst * sign, null));
+  if (d.cess > 0 && settings.cessLedger) lines.push(lineXml(settings.cessLedger, -d.cess * sign, null));
+  var party = r2(tx + d.igst + d.cgst + d.sgst + (settings.cessLedger ? d.cess : 0));
+  var diff = r2(d.val - party);
+  if (settings.roundOffLedger && diff !== 0 && Math.abs(diff) <= 1) {
+    lines.push(lineXml(settings.roundOffLedger, -diff * sign, null));
+    party = d.val;
+  }
+  lines.push(lineXml(ledger, party * sign, settings.billwise && d.type === 'invoice' ? d.no : null));
+  var date = tdate(d.date);
+  var narr = 'GSTR-2B ' + periodLabel(d.period) + ' | ' + d.name + ' ' + d.gstin +
+    (d.rcm ? ' | RCM' : '') + (d.itc ? '' : ' | ITC not available');
+  return '<TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER REMOTEID="' + escAttr(rid) + '" VCHTYPE="' + vch + '" ACTION="Create" OBJVIEW="Accounting Voucher View">' +
+    '<DATE>' + date + '</DATE><EFFECTIVEDATE>' + date + '</EFFECTIVEDATE>' +
+    '<VOUCHERTYPENAME>' + vch + '</VOUCHERTYPENAME><VOUCHERNUMBER>' + esc(d.no) + '</VOUCHERNUMBER>' +
+    '<REFERENCE>' + esc(d.no) + '</REFERENCE><REFERENCEDATE>' + date + '</REFERENCEDATE>' +
+    '<PARTYLEDGERNAME>' + esc(ledger) + '</PARTYLEDGERNAME><PERSISTEDVIEW>Accounting Voucher View</PERSISTEDVIEW>' +
+    '<ISINVOICE>No</ISINVOICE><NARRATION>' + esc(narr) + '</NARRATION>' + lines.join('') + '</VOUCHER></TALLYMESSAGE>';
+}
+function ledgerXml(name, gstin) {
+  var st = STATES[gstin.slice(0, 2)] || '';
+  return '<TALLYMESSAGE xmlns:UDF="TallyUDF"><LEDGER NAME="' + escAttr(name) + '" ACTION="Create">' +
+    '<NAME.LIST><NAME>' + esc(name) + '</NAME></NAME.LIST><PARENT>Sundry Creditors</PARENT>' +
+    '<ISBILLWISEON>Yes</ISBILLWISEON><COUNTRYOFRESIDENCE>India</COUNTRYOFRESIDENCE>' +
+    (st ? '<LEDSTATENAME>' + esc(st) + '</LEDSTATENAME>' : '') +
+    '<PARTYGSTIN>' + esc(gstin) + '</PARTYGSTIN><GSTREGISTRATIONTYPE>Regular</GSTREGISTRATIONTYPE></LEDGER></TALLYMESSAGE>';
+}
+function envelope(messages, report) {
+  var comp = (settings.company || '').trim();
+  return '<ENVELOPE><HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER><BODY><IMPORTDATA>' +
+    '<REQUESTDESC><REPORTNAME>' + report + '</REPORTNAME>' +
+    (comp ? '<STATICVARIABLES><SVCURRENTCOMPANY>' + esc(comp) + '</SVCURRENTCOMPANY></STATICVARIABLES>' : '') +
+    '</REQUESTDESC>' +
+    '<REQUESTDATA>' + messages.join('') + '</REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>';
+}
+
+// ------------------------------ actions ------------------------------
+// ------------------------------ reconciliation ------------------------------
+// Compare every loaded 2B document with what is actually booked in Tally:
+//   booked    — found (number+party, or party+amount+date); auto-marked so it
+//               can never be posted again
+//   mismatch  — same number+party exists but the amount differs
+//   notbooked — nothing similar in Tally; candidate for one-click posting
+// Also surfaces the reverse: purchase-side vouchers in Tally that appear in
+// no loaded GSTR-2B (supplier hasn't filed / wrong period / manual entry).
+var reco = null; // { byKey, booksOnly, duplicates, opinions, summary }
+async function runReco() {
+  if (!docs.length) return;
+  var btn = document.getElementById('reco-btn');
+  btn.disabled = true;
+  document.getElementById('bar-msg').textContent = 'Reconciling…';
+  ensureProgressWatcher();
+  var j;
+  try {
+    docs.forEach(function (d) { if (!d.key) d.key = key(d); });
+    j = await fetch(API + '/api/reconcile', { method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify({ docs: docs, epoch: srvEpoch }) }).then(function (r) { return r.json(); });
+  } catch (e) { j = { ok: false, error: String((e && e.message) || e) }; }
+  btn.disabled = false;
+  if (!j.ok) {
+    document.getElementById('bar-msg').textContent = 'Reconciliation failed — ' + (j.error || 'is Tally open?');
+    return;
+  }
+  // The server already locked booked rows and released vanished ones — sync.
+  try {
+    var d2 = await fetch(API + '/api/data').then(function (r) { return r.json(); });
+    postedReg = d2.posted || {};
+    mappings = d2.mappings || mappings;
+    renderMappings();
+    updateJarvis(d2.autopilot);
+  } catch (e) { /* keep local copy */ }
+  var c = applyReco(j);
+  document.getElementById('bar-msg').textContent =
+    'Reconciled: ' + c.booked + ' booked · ' + c.notbooked + ' not booked · ' + c.probable + ' probable · ' + c.mismatch + ' mismatch.' +
+    (j.staleReset ? ' ⚠ ' + j.staleReset + ' row(s) marked Posted earlier are NO LONGER in Tally — reset to Not booked.' : '');
+}
+function renderRecoSummary(c) {
+  var host = document.getElementById('reco-summary');
+  var s = reco.summary || {};
+  var h = '<div class="card card-pad" style="padding:14px 18px"><b>Reconciliation with Tally</b> — ' +
+    '<span class="pill ok">' + c.booked + ' booked</span> ' +
+    '<span class="pill bad">' + c.notbooked + ' not booked</span> ' +
+    '<span class="pill warn">' + c.probable + ' probable</span> ' +
+    '<span class="pill warn">' + c.mismatch + ' mismatch</span>' +
+    ((reco.booksOnly || []).length ? ' <span class="pill warn" title="Open the section below — booked purchases the supplier has not filed (ITC at risk)">' + reco.booksOnly.length + ' in books, not in 2B</span>' : '') +
+    (s.wrongRegCount ? ' <span class="pill bad" title="Booked under another state&#39;s registration — fix the GST Registration on those vouchers in Tally (see the 🚩 rows and the Wrong Registration Excel sheet)">🚩 ' + s.wrongRegCount + ' wrong registration</span>' : '') +
+    (s.matchedPct != null ? ' <span class="muted">· ' + s.matchedPct + '% of eligible ITC matched</span>' : '') +
+    '<span class="muted"> · tick the not-booked ones (☑ button above) and Post to Tally to book them.</span>' +
+    '<div style="margin-top:12px"><button type="button" class="btn primary" style="padding:10px 22px;font-size:14.5px;font-weight:700;box-shadow:0 2px 8px rgba(21,94,239,.35)" onclick="downloadRecoExcel()">📊 Download Excel summary (working paper)</button>' +
+    (ownList().length > 1 ? '<span class="muted" style="font-size:12px;margin-left:10px">the Excel follows the registration chip — pick one GSTIN for a per-registration report, or All for combined (every sheet also carries a Regn column)</span>' : '') +
+    '</div>';
+  if ((s.byOwn || []).length) {
+    h += '<div style="font-size:12.5px;margin-top:10px"><b>Per registration:</b> ' +
+      s.byOwn.map(function (o) {
+        return '<span class="mono">' + esc(o.gstin) + '</span> — ITC ₹' + inr(r2(o.claimable)) +
+          ', matched ₹' + inr(r2(o.matched)) +
+          (o.notBooked ? ', <b style="color:var(--bad)">not booked ₹' + inr(r2(o.notBooked)) + '</b>' : '') +
+          (o.mismatch ? ', ' + o.mismatch + ' mismatch' : '');
+      }).join(' &nbsp;·&nbsp; ') +
+      ' <span class="muted">(use the registration chips above to work one state at a time)</span></div>';
+  }
+  var ri = reco.raw && reco.raw.readInfo;
+  if (ri) {
+    h += '<div class="muted" style="font-size:12px;margin-top:8px">📖 Books read from Tally: ' + esc(ri.from) + ' → ' + esc(ri.to) +
+      ' · ' + Number(ri.vouchers).toLocaleString('en-IN') + ' purchase-side voucher(s) across ' + (ri.monthsWithData || []).length + ' month(s)' +
+      ((ri.monthsWithData || []).length ? ' (' + esc(ri.monthsWithData[0]) + ' → ' + esc(ri.monthsWithData[ri.monthsWithData.length - 1]) + ')' : '') +
+      (Number(ri.vouchers) === 0 ? ' — <b style="color:var(--bad)">the books came back EMPTY: check the open company / Company name in Settings</b>' : '') +
+      (ri.warning ? '<br><b style="color:var(--warn)">' + esc(ri.warning) + '</b>' : '') +
+      (ri.journalsSkipped ? '<br><span style="color:var(--warn)">⚠ ' + ri.journalsSkipped + ' journal-type voucher(s) carried no GST split and no clear supplier leg, so they were not treated as purchases' +
+        (ri.skippedLedgers && ri.skippedLedgers.length ? ' (mostly on: ' + ri.skippedLedgers.map(esc).join(', ') + ')' : '') +
+        ' — if purchases or ITC reversals are booked that way, add the supplier GSTIN on the ledger or use bill-wise references so they can be matched.</span>' : '') + '</div>';
+  }
+  if ((reco.opinions || []).length) {
+    h += '<details style="margin-top:10px" open><summary style="cursor:pointer;font-size:13px"><b>Opinion — what it means and what to do</b></summary>' +
+      '<ul style="margin:8px 0 0 18px;padding:0;font-size:12.5px;line-height:1.6">';
+    reco.opinions.forEach(function (o) {
+      var col = o.tone === 'good' ? 'var(--ok)' : o.tone === 'bad' ? 'var(--bad)' : 'var(--warn)';
+      h += '<li style="margin-bottom:6px"><span style="color:' + col + ';font-weight:700">' +
+        (o.tone === 'good' ? '✔' : o.tone === 'bad' ? '✖' : '⚠') + '</span> ' + esc(o.text) + '</li>';
+    });
+    h += '</ul></details>';
+  }
+  if ((reco.booksOnly || []).length) {
+    h += '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:13px"><b>In Tally but NOT in the loaded GSTR-2B (' + reco.booksOnly.length + ')</b> — ITC at risk until the supplier files</summary>' +
+      '<div class="tbl-scroll"><table style="margin-top:8px"><tr><th>Party</th><th>Bill no</th><th>Type</th><th>Date</th><th class="r">Amount ₹</th><th class="r">GST ₹</th><th>Supplier in this 2B?</th></tr>';
+    reco.booksOnly.slice(0, 100).forEach(function (b) {
+      h += '<tr><td>' + esc(b.party) + (b.gstin ? '<div class="muted mono">' + esc(b.gstin) + '</div>' : '') +
+        (b.cmpGstin ? '<div class="muted mono" style="font-size:10.5px">regn ' + esc(b.cmpGstin) + '</div>' : '') + '</td>' +
+        '<td class="mono">' + esc(b.billNo) + '</td><td>' + esc(b.vtype || '') + '</td><td>' + esc(b.date || '—') + '</td>' +
+        '<td class="r">' + inr(b.amount || 0) + '</td><td class="r">' + (b.tax ? inr(b.tax) : '—') + '</td>' +
+        '<td>' + (b.supplierIn2b ? '<b>Yes</b> — check number/value against their filed docs' : 'No — likely files in a later 2B') + '</td></tr>';
+    });
+    h += '</table></div>' + (reco.booksOnly.length > 100 ? '<p class="muted">Showing first 100.</p>' : '') + '</details>';
+  }
+  if ((reco.duplicates || []).length) {
+    h += '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:13px;color:var(--bad)"><b>Possible DUPLICATE bookings in Tally (' + reco.duplicates.length + ')</b> — same supplier + bill number twice</summary>' +
+      '<div class="tbl-scroll"><table style="margin-top:8px"><tr><th>Party</th><th>Bill no</th><th class="r">Amount ₹</th><th class="r">GST ₹</th><th>Why flagged</th></tr>';
+    reco.duplicates.forEach(function (b) {
+      h += '<tr><td>' + esc(b.party) + '</td><td class="mono">' + esc(b.billNo) + '</td><td class="r">' + inr(b.amount || 0) + '</td>' +
+        '<td class="r">' + (b.tax ? inr(b.tax) : '—') + '</td>' +
+        '<td>' + (b.kind === 'internal' ? 'Entered more than once (none in 2B yet)' : 'Duplicates an entry already matched to the 2B') + '</td></tr>';
+    });
+    h += '</table></div></details>';
+  }
+  host.innerHTML = h + '</div>';
+}
+
+// Excel working paper — the same formatted SpreadsheetML workbook the recon
+// tool's report produces: Summary & Opinion, All Documents (2B vs books side
+// by side), Possible Duplicates, ITC at Risk, Supplier Gaps.
+function downloadRecoExcel() {
+  if (!reco || !reco.raw) return;
+  var R = reco.raw;
+  var S = R.summary || {};
+  var XA = function (s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); };
+  var C = function (v, st, f) {
+    var a = (st ? ' ss:StyleID="' + st + '"' : '') + (f ? ' ss:Formula="' + XA(f) + '"' : '');
+    if ((v === '' || v == null) && !f) return '<Cell' + a + '/>';
+    var isNum = typeof v === 'number' && isFinite(v);
+    var val = isNum ? Math.round(v * 100) / 100 : XA(v);
+    return '<Cell' + a + '><Data ss:Type="' + (isNum ? 'Number' : 'String') + '">' + val + '</Data></Cell>';
+  };
+  var ROW = function (cells) { return '<Row>' + cells.join('') + '</Row>'; };
+  var EMPTY = '<Row/>';
+  var n2 = function (v) { return v == null || v === '' ? '' : Number(v); };
+
+  var docBy = {};
+  docs.forEach(function (d) { docBy[key(d)] = d; });
+  // 🏷 The workbook follows the registration chip: with a chip selected, every
+  // document sheet contains ONLY that registration — one report per GSTIN.
+  var xf = regFilter || '';
+  var multiX = ownList().length > 1;
+  var xDocs = (R.docs || []).filter(function (r) { return !xf || r.own === xf; });
+  var xBook = function (b) { return !xf || !b.cmpGstin || b.cmpGstin === xf; };
+  var periods = {};
+  docs.forEach(function (d) { if (!xf || d.own === xf) periods[periodLabel(d.period)] = 1; });
+  var sheets = [];
+
+  // ---- Sheet 1: Summary & Opinion ----
+  (function () {
+    var rows = [];
+    rows.push(ROW([C('GSTR-2B vs TALLY RECONCILIATION STATEMENT' + (xf ? ' — ' + xf : ''), 'sTitle')]));
+    rows.push(ROW([C('Period', 'sLabel'), C(Object.keys(periods).join(', '))]));
+    var ownsX = ownList();
+    rows.push(ROW([C('GSTIN', 'sLabel'), C(xf || (ownsX.length > 1 ? ownsX.join(', ') : (ownGstin || '—')))]));
+    rows.push(ROW([C('Generated', 'sLabel'), C(new Date().toLocaleString('en-IN'))]));
+    if (xf) {
+      rows.push(ROW([C('⚠ Filtered report: the document sheets contain ONLY registration ' + xf +
+        '. The SUMMARY / ITC BY HEAD / Opinion blocks below cover ALL loaded registrations combined — see PER REGISTRATION for this GSTIN’s own totals.', 'sWarn')]));
+    }
+    rows.push(EMPTY);
+    if ((S.byOwn || []).length) {
+      rows.push(ROW([C('PER REGISTRATION', 'sSection'), C('Eligible ITC', 'sSection'), C('Matched', 'sSection'), C('Not booked', 'sSection')]));
+      S.byOwn.forEach(function (o) {
+        rows.push(ROW([C(o.gstin, 'sLabel'), C(n2(o.claimable), 'sMoney'), C(n2(o.matched), 'sMoney'),
+          C(n2(o.notBooked), o.notBooked ? 'sMoneyBad' : 'sMoney')]));
+      });
+      rows.push(EMPTY);
+    }
+    rows.push(ROW([C('SUMMARY', 'sSection'), C('', 'sSection'), C('', 'sSection'), C('', 'sSection')]));
+    rows.push(ROW([C('Reconciled % (by ITC value)', 'sLabel'), C(n2(S.matchedPct), 'sNum')]));
+    rows.push(ROW([C('Eligible ITC per 2B (net of credit notes)', 'sLabel'), C(n2(S.claimableTax), 'sMoney')]));
+    rows.push(ROW([C('ITC matched invoice-wise', 'sLabel'), C(n2(S.matchedTax), 'sMoney')]));
+    rows.push(ROW([C('ITC matched at supplier level', 'sLabel'), C(n2(S.groupedTax), 'sMoney')]));
+    rows.push(ROW([C('ITC blocked by portal', 'sLabel'), C(n2(S.blockedTax), 'sMoney')]));
+    rows.push(ROW([C('Credit note reduction', 'sLabel'), C(n2(S.creditNoteTax), 'sMoney')]));
+    rows.push(ROW([C('In books not in 2B - value', 'sLabel'), C(n2(S.booksOnlyValue), 'sMoney')]));
+    rows.push(ROW([C('In books not in 2B - GST', 'sLabel'), C(n2(S.booksOnlyTax), 'sMoney')]));
+    if (S.wrongRegCount) rows.push(ROW([C('Booked under WRONG registration (docs)', 'sLabel'), C(n2(S.wrongRegCount), 'sNum'), C(n2(S.wrongRegTax), 'sMoneyBad')]));
+    rows.push(EMPTY);
+    rows.push(ROW([C('ITC BY HEAD', 'sSection'), C('In books', 'sSection'), C('Per 2B (eligible)', 'sSection'), C('Difference', 'sSection')]));
+    var heads = ['igst', 'cgst', 'sgst', 'cess', 'gst'];
+    var bi = S.booksItc || {}, g2 = S.itc2b || {};
+    var hn = 0;
+    heads.forEach(function (h) {
+      var b = bi[h] || 0, g = g2[h] || 0;
+      if ((h === 'cess' || h === 'gst') && !b && !g) return;
+      hn++;
+      rows.push(ROW([C(h === 'gst' ? 'GST (combined ledger)' : h.toUpperCase(), 'sLabel'), C(b, 'sMoney'), C(g, 'sMoney'), C(Math.round((b - g) * 100) / 100, 'sMoney', '=RC[-2]-RC[-1]')]));
+    });
+    rows.push(ROW([C('TOTAL', 'sTotal'), C(n2(S.booksItcTotal), 'sTotalM', '=SUM(R[-' + hn + ']C:R[-1]C)'), C(n2(S.claimableTax), 'sTotalM', '=SUM(R[-' + hn + ']C:R[-1]C)'), C(Math.round(((S.booksItcTotal || 0) - (S.claimableTax || 0)) * 100) / 100, 'sTotalM', '=RC[-2]-RC[-1]')]));
+    rows.push(EMPTY);
+    rows.push(ROW([C('OPINION & RECOMMENDED ACTIONS', 'sSection'), C('', 'sSection'), C('', 'sSection'), C('', 'sSection')]));
+    (reco.opinions || []).forEach(function (o) { rows.push(ROW([C((o.tone === 'good' ? '[OK] ' : o.tone === 'bad' ? '[!!] ' : '[?] ') + o.text, 'sWrap')])); });
+    sheets.push(['Summary', '<Column ss:Width="260"/><Column ss:Width="110"/><Column ss:Width="110"/><Column ss:Width="110"/>', rows]);
+  })();
+
+  // ---- Sheet 2: All documents — SAME columns, diffs and live formulas as
+  // the gstr2b-tally-recon report's Excel export ----
+  (function () {
+    var H = ['Regn (your GSTIN)', '2B Period', 'Status', 'Supplier', 'GSTIN', 'Doc type', 'Doc no', 'Date', '2B Value', '2B Taxable', '2B IGST', '2B CGST', '2B SGST', '2B Cess', '2B ITC total', 'Eligible', 'Books ref', 'Books amount', 'Books taxable', 'Books IGST', 'Books CGST', 'Books SGST', 'Books GST comb', 'Books TDS', 'Reimb/Non-GST', 'Diff Taxable', 'Diff IGST', 'Diff CGST', 'Diff SGST', 'Diff GST total', 'Remark'];
+    var rows = [ROW(H.map(function (x) { return C(x, 'sHead'); }))];
+    xDocs.forEach(function (r) {
+      var d = docBy[r.key] || {};
+      var itc = r2((d.igst || 0) + (d.cgst || 0) + (d.sgst || 0) + (d.cess || 0));
+      var st = r.status === 'matched' || r.status === 'grouped' ? 'sOk' : r.status === 'only2b' || r.status === 'mismatch' ? 'sBad' : 'sWarn';
+      var hasBook = r.bookRef != null && r.bookRef !== '' && r.bookAmount != null && r.bookAmount !== '';
+      var hasHeads = hasBook && r.bookIgst != null && r.bookIgst !== '' && !(Number(r.bookGstComb) > 0);
+      var tx2b = taxableOf(d) || 0;
+      var diffTaxable = (Number(r.bookTaxable) || 0) > 0 && tx2b > 0 ? r2(tx2b - r.bookTaxable) : '';
+      var diffIgst = hasHeads ? r2((d.igst || 0) - (r.bookIgst || 0)) : '';
+      var diffCgst = hasHeads ? r2((d.cgst || 0) - (r.bookCgst || 0)) : '';
+      var diffSgst = hasHeads ? r2((d.sgst || 0) - (r.bookSgst || 0)) : '';
+      var diffGst = (Number(r.bookTax) || 0) > 0 ? r2(itc - r.bookTax) : '';
+      rows.push(ROW([
+        C(r.own || d.own || '', 'sMono'),
+        C(periodLabel(d.period || '')), C(r.status, st), C(d.name || ''), C(d.gstin || '', 'sMono'),
+        C(d.type || ''), C(d.no || '', 'sMono'), C(d.date || ''),
+        C(d.val || 0, 'sMoney'), C(tx2b, 'sMoney'), C(d.igst || 0, 'sMoney'), C(d.cgst || 0, 'sMoney'),
+        C(d.sgst || 0, 'sMoney'), C(d.cess || 0, 'sMoney'), C(itc, 'sMoney', '=SUM(RC[-4]:RC[-1])'),
+        C(r.eligible === false ? 'No' : 'Yes'), C(r.bookRef || '', 'sMono'),
+        C(n2(r.bookAmount), 'sMoney'), C(n2(r.bookTaxable), 'sMoney'), C(n2(r.bookIgst), 'sMoney'),
+        C(n2(r.bookCgst), 'sMoney'), C(n2(r.bookSgst), 'sMoney'), C(n2(r.bookGstComb), 'sMoney'),
+        C(n2(r.bookTds), 'sMoney'), C(n2(r.bookReimb), 'sMoney'),
+        diffTaxable === '' ? C('') : C(diffTaxable, 'sMoney', '=RC[-16]-RC[-7]'),
+        hasHeads ? C(diffIgst, 'sMoney', '=RC[-16]-RC[-7]') : C(''),
+        hasHeads ? C(diffCgst, 'sMoney', '=RC[-16]-RC[-7]') : C(''),
+        hasHeads ? C(diffSgst, 'sMoney', '=RC[-16]-RC[-7]') : C(''),
+        diffGst === '' ? C('') : C(diffGst, 'sMoney', '=RC[-15]-(RC[-10]+RC[-9]+RC[-8]+RC[-7])'),
+        C(r.note || '', 'sWrap'),
+      ]));
+    });
+    var n = xDocs.length;
+    if (n) {
+      var sum = function () { return '=SUM(R[-' + n + ']C:R[-1]C)'; };
+      var tot = [C('TOTALS', 'sTotal'), C('', 'sTotal'), C('', 'sTotal'), C('', 'sTotal'), C('', 'sTotal'), C('', 'sTotal'), C('', 'sTotal'), C('', 'sTotal')];
+      for (var i1 = 7; i1 <= 13; i1++) tot.push(C(0, 'sTotalM', sum()));
+      tot.push(C('', 'sTotal'), C('', 'sTotal'));
+      for (var i2 = 16; i2 <= 28; i2++) tot.push(C(0, 'sTotalM', sum()));
+      tot.push(C('', 'sTotal'));
+      rows.push(ROW(tot));
+    }
+    sheets.push(['All Documents', '<Column ss:Width="120"/><Column ss:Width="62"/><Column ss:Width="62"/><Column ss:Width="170"/><Column ss:Width="120"/><Column ss:Width="70"/><Column ss:Width="110"/><Column ss:Width="72"/>' + '<Column ss:Width="85"/>'.repeat(6) + '<Column ss:Width="90"/><Column ss:Width="52"/><Column ss:Width="110"/>' + '<Column ss:Width="85"/>'.repeat(8) + '<Column ss:Width="85"/>'.repeat(5) + '<Column ss:Width="330"/>', rows]);
+  })();
+
+  // ---- Sheet 3: Possible duplicates ----
+  (function () {
+    var rows = [ROW(['Regn', 'Supplier', 'GSTIN', 'Bill no', 'Voucher type', 'Date', 'Amount', 'IGST', 'CGST', 'SGST', 'TDS', 'ITC booked', 'Why flagged'].map(function (x) { return C(x, 'sHead'); }))];
+    (reco.duplicates || []).filter(xBook).forEach(function (b) {
+      rows.push(ROW([C(b.cmpGstin || '', 'sMono'), C(b.party), C(b.gstin || '', 'sMono'), C(b.billNo, 'sMono'), C(b.vtype || ''), C(b.date || ''), C(b.amount || 0, 'sMoney'), C(b.igst || 0, 'sMoney'), C(b.cgst || 0, 'sMoney'), C(b.sgst || 0, 'sMoney'), C(b.tds || 0, 'sMoney'), C(b.tax || 0, 'sMoney'),
+        C(b.kind === 'internal' ? 'Entered more than once in Tally (none in 2B yet)' : 'Already matched to the 2B document via another entry', 'sWrap')]));
+    });
+    sheets.push(['Possible Duplicates', '<Column ss:Width="120"/><Column ss:Width="170"/><Column ss:Width="120"/><Column ss:Width="110"/><Column ss:Width="100"/><Column ss:Width="72"/>' + '<Column ss:Width="90"/>'.repeat(6) + '<Column ss:Width="300"/>', rows]);
+  })();
+
+  // ---- Sheet 4: ITC at risk (in books, not in 2B) ----
+  (function () {
+    var rows = [ROW(['Regn', 'Supplier', 'GSTIN', 'Bill no', 'Voucher type', 'Date', 'Amount', 'IGST', 'CGST', 'SGST', 'GST comb', 'TDS', 'ITC total', 'Assessment'].map(function (x) { return C(x, 'sHead'); }))];
+    var boX = (reco.booksOnly || []).filter(xBook);
+    boX.forEach(function (b) {
+      rows.push(ROW([C(b.cmpGstin || '', 'sMono'), C(b.party), C(b.gstin || '', 'sMono'), C(b.billNo, 'sMono'), C(b.vtype || ''), C(b.date || ''), C(b.amount || 0, 'sMoney'), C(b.igst || 0, 'sMoney'), C(b.cgst || 0, 'sMoney'), C(b.sgst || 0, 'sMoney'), C(b.gst || 0, 'sMoney'), C(b.tds || 0, 'sMoney'), C(b.tax || 0, 'sMoney'),
+        C(b.supplierIn2b ? 'Supplier IS in this 2B - check number/value against their filed docs' : 'Supplier absent this month - likely appears in a later 2B', 'sWrap')]));
+    });
+    var n = boX.length;
+    if (n) {
+      var t = [C('TOTAL', 'sTotal'), C('', 'sTotal'), C('', 'sTotal'), C('', 'sTotal'), C('', 'sTotal'), C('', 'sTotal')];
+      for (var i = 0; i < 7; i++) t.push(C(0, 'sTotalM', '=SUM(R[-' + n + ']C:R[-1]C)'));
+      t.push(C('', 'sTotal'));
+      rows.push(ROW(t));
+    }
+    sheets.push(['ITC at Risk', '<Column ss:Width="120"/><Column ss:Width="170"/><Column ss:Width="120"/><Column ss:Width="110"/><Column ss:Width="100"/><Column ss:Width="72"/>' + '<Column ss:Width="90"/>'.repeat(7) + '<Column ss:Width="300"/>', rows]);
+  })();
+
+  // ---- Sheet 5: Supplier gaps ----
+  (function () {
+    var rows = [ROW(['Regn', 'Supplier', 'GSTIN', '2B docs', '2B total (gross)', '2B taxable', 'Book entries', 'Books total', 'Gap (2B - books)'].map(function (x) { return C(x, 'sHead'); }))];
+    ((S.supplierGaps) || []).filter(function (g) { return !xf || !g.own || g.own === xf; }).forEach(function (g) {
+      rows.push(ROW([C(g.own || '', 'sMono'), C(g.supplier), C(g.gstin || '', 'sMono'), C(g.count2b || 0, 'sNum'), C(g.sum2b || 0, 'sMoney'), C(g.sum2bTaxable || 0, 'sMoney'), C(g.countBooks || 0, 'sNum'), C(g.sumBooks || 0, 'sMoney'), C(g.diff || 0, 'sMoneyBad', '=RC[-4]-RC[-1]')]));
+    });
+    sheets.push(['Supplier Gaps', '<Column ss:Width="120"/><Column ss:Width="190"/><Column ss:Width="120"/><Column ss:Width="60"/>' + '<Column ss:Width="100"/>'.repeat(5), rows]);
+  })();
+
+  // ---- Sheet 5A: Wrong Registration — booked under another state's GSTIN ----
+  (function () {
+    var wr = xDocs.filter(function (r) { return r.wrongReg; });
+    if (!wr.length) return;
+    var rows = [ROW(['Belongs to (per 2B)', 'Booked under', 'Supplier', 'GSTIN', 'Doc type', 'Doc no', 'Date', 'Taxable', 'IGST', 'CGST', 'SGST', 'Books voucher', 'Action'].map(function (x) { return C(x, 'sHead'); }))];
+    wr.forEach(function (r) {
+      var d = docBy[r.key] || {};
+      rows.push(ROW([
+        C(r.own || d.own || '', 'sMono'), C(r.wrongReg, 'sMono'), C(d.name || ''), C(d.gstin || '', 'sMono'),
+        C(d.type || ''), C(d.no || '', 'sMono'), C(d.date || ''),
+        C(taxableOf(d) || 0, 'sMoney'), C(d.igst || 0, 'sMoney'), C(d.cgst || 0, 'sMoney'), C(d.sgst || 0, 'sMoney'),
+        C(r.bookRef || '', 'sMono'),
+        C('Change the GST Registration on this voucher in Tally to ' + (r.own || d.own || 'the correct registration') + ' — do NOT book it again.', 'sWrap'),
+      ]));
+    });
+    sheets.push(['Wrong Registration', '<Column ss:Width="120"/><Column ss:Width="120"/><Column ss:Width="170"/><Column ss:Width="120"/><Column ss:Width="70"/><Column ss:Width="110"/><Column ss:Width="72"/>' + '<Column ss:Width="85"/>'.repeat(4) + '<Column ss:Width="110"/><Column ss:Width="330"/>', rows]);
+  })();
+
+  // ---- Sheet 6: IMS actions — accept/reject/pending recommendation per doc ----
+  (function () {
+    var rows = [ROW(['Regn', 'Supplier', 'GSTIN', 'Doc type', 'Doc no', 'Date', '2B Value', 'ITC', 'Recon status', 'Recommended IMS action', 'Why'].map(function (x) { return C(x, 'sHead'); }))];
+    xDocs.forEach(function (r) {
+      var d = docBy[r.key] || {};
+      var itc = r2((d.igst || 0) + (d.cgst || 0) + (d.sgst || 0) + (d.cess || 0));
+      var act, why, stl;
+      if (r.status === 'matched' || r.status === 'grouped') {
+        act = 'ACCEPT'; stl = 'sOk';
+        why = 'Matches the books' + (r.status === 'grouped' ? ' (supplier-level total)' : '') + ' — safe to accept.';
+      } else if (r.status === 'mismatch') {
+        act = 'PENDING'; stl = 'sWarn';
+        why = 'Values differ from the books — verify the physical invoice before accepting.';
+      } else if (r.status === 'probable') {
+        act = 'PENDING'; stl = 'sWarn';
+        why = 'Probably booked under a different number — confirm the pair first.';
+      } else {
+        act = 'PENDING'; stl = 'sBad';
+        why = 'Not found in the books — book it in Tally, then accept. If the supplier/invoice is UNKNOWN to you, REJECT it (possible misuse of your GSTIN).';
+      }
+      if (r.eligible === false) why += ' Portal marks ITC as NOT available — credit is blocked either way.';
+      rows.push(ROW([C(r.own || d.own || '', 'sMono'), C(d.name || ''), C(d.gstin || '', 'sMono'), C(d.type || ''), C(d.no || '', 'sMono'), C(d.date || ''),
+        C(d.val || 0, 'sMoney'), C(itc, 'sMoney'), C(r.status), C(act, stl), C(why, 'sWrap')]));
+    });
+    sheets.push(['IMS Actions', '<Column ss:Width="120"/><Column ss:Width="170"/><Column ss:Width="120"/><Column ss:Width="70"/><Column ss:Width="110"/><Column ss:Width="72"/><Column ss:Width="90"/><Column ss:Width="90"/><Column ss:Width="80"/><Column ss:Width="95"/><Column ss:Width="380"/>', rows]);
+  })();
+
+  var styles = '<Styles>' +
+    '<Style ss:ID="Default" ss:Name="Normal"><Font ss:FontName="Calibri" ss:Size="11"/><Alignment ss:Vertical="Top"/></Style>' +
+    '<Style ss:ID="sTitle"><Font ss:Bold="1" ss:Size="14" ss:Color="#10243E"/></Style>' +
+    '<Style ss:ID="sSection"><Font ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#10243E" ss:Pattern="Solid"/></Style>' +
+    '<Style ss:ID="sHead"><Font ss:Bold="1"/><Interior ss:Color="#DCE6F1" ss:Pattern="Solid"/><Borders><Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/></Borders><Alignment ss:Vertical="Bottom" ss:WrapText="1"/></Style>' +
+    '<Style ss:ID="sLabel"><Font ss:Bold="1"/></Style>' +
+    '<Style ss:ID="sMono"><Font ss:FontName="Consolas" ss:Size="10"/></Style>' +
+    '<Style ss:ID="sNum"><NumberFormat ss:Format="#,##0"/></Style>' +
+    '<Style ss:ID="sMoney"><NumberFormat ss:Format="#,##0.00"/></Style>' +
+    '<Style ss:ID="sMoneyBad"><Font ss:Bold="1" ss:Color="#B3261E"/><NumberFormat ss:Format="#,##0.00"/></Style>' +
+    '<Style ss:ID="sOk"><Font ss:Color="#0A7D33" ss:Bold="1"/></Style>' +
+    '<Style ss:ID="sWarn"><Font ss:Color="#B06A00" ss:Bold="1"/></Style>' +
+    '<Style ss:ID="sBad"><Font ss:Color="#B3261E" ss:Bold="1"/></Style>' +
+    '<Style ss:ID="sWrap"><Alignment ss:Vertical="Top" ss:WrapText="1"/></Style>' +
+    '<Style ss:ID="sTotal"><Font ss:Bold="1"/><Interior ss:Color="#EDEFF2" ss:Pattern="Solid"/><Borders><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="2"/></Borders></Style>' +
+    '<Style ss:ID="sTotalM"><Font ss:Bold="1"/><Interior ss:Color="#EDEFF2" ss:Pattern="Solid"/><NumberFormat ss:Format="#,##0.00"/><Borders><Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="2"/></Borders></Style>' +
+    '</Styles>';
+
+  var wb = '<?xml version="1.0"?><?mso-application progid="Excel.Sheet"?>' +
+    '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">' +
+    styles +
+    sheets.map(function (s) { return '<Worksheet ss:Name="' + XA(s[0]) + '"><Table>' + s[1] + s[2].join('') + '</Table></Worksheet>'; }).join('') +
+    '</Workbook>';
+  var blob = new Blob([wb], { type: 'application/vnd.ms-excel' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'gstr2b-tally-recon-' + Object.keys(periods).join('-').replace(/[^A-Za-z0-9-]/g, '') + (xf ? '-' + xf : '') + '.xls';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function selectNotBooked() {
+  var n = 0;
+  docs.forEach(function (d) {
+    var k = key(d);
+    if (!matchesFilter(d)) return;
+    if (reco && reco.byKey[k] && reco.byKey[k].st === 'notbooked' && !reco.byKey[k].gap && !postedReg[k] && !d.amended) { selected[k] = true; n++; }
+  });
+  renderDocs();
+  document.getElementById('bar-msg').textContent = n + ' not-booked document(s) selected — review, then ▶ Post to Tally.';
+}
+
+var pickNotes = '';
+function pickSelected() {
+  var out = [], missing = 0, already = 0, zero = 0, amended = 0, mismatched = 0, gapped = 0;
+  docs.forEach(function (d) {
+    var k = key(d);
+    if (!selected[k]) return;
+    if (d.amended) { amended++; return; }
+    if (postedReg[k]) { already++; return; }
+    // MISMATCH = exists in Tally with different figures; PROBABLE = likely the
+    // same document under another number. Posting either would duplicate the
+    // entry — resolve in Tally (or confirm the probable pair) instead.
+    var rst = reco && reco.byKey[k] && reco.byKey[k].st;
+    if (rst === 'mismatch' || rst === 'probable') { mismatched++; return; }
+    // Its month never came back from Tally — the double-entry guard would be
+    // blind there too, so posting could duplicate an unseen booking.
+    if (reco && reco.byKey[k] && reco.byKey[k].gap) { gapped++; return; }
+    if (partyAmountOf(d) <= 0) { zero++; return; }
+    var m = mappings[d.gstin];
+    if (!m || !m.ledger) { missing++; return; }
+    out.push(d);
+  });
+  return { docs: out, missing: missing, already: already, zero: zero, amended: amended, mismatched: mismatched, gapped: gapped };
+}
+function precheck() {
+  var missing = [];
+  if (!String(settings.purchaseLedger || '').trim()) missing.push('Purchase ledger');
+  if (!String(settings.igstLedger || '').trim()) missing.push('Input IGST ledger');
+  if (!String(settings.cgstLedger || '').trim()) missing.push('Input CGST ledger');
+  if (!String(settings.sgstLedger || '').trim()) missing.push('Input SGST ledger');
+  if (missing.length) {
+    document.getElementById('bar-msg').innerHTML =
+      '<b style="color:var(--bad)">Cannot post — missing under Settings: ' + missing.join(', ') + '. Fill them in and click Save settings.</b>';
+    document.getElementById('settings-box').open = true;
+    document.getElementById('settings-box').scrollIntoView({ behavior: 'smooth' });
+    return null;
+  }
+  var pick = pickSelected();
+  var msg = [];
+  if (pick.already) msg.push(pick.already + ' skipped (already posted)');
+  if (pick.missing) msg.push(pick.missing + ' skipped (supplier not mapped)');
+  if (pick.zero) msg.push(pick.zero + ' skipped (zero value)');
+  if (pick.amended) msg.push(pick.amended + ' skipped (amended — adjust in Tally manually)');
+  if (pick.mismatched) msg.push(pick.mismatched + ' skipped (mismatch/probable — resolve in Tally first)');
+  if (pick.gapped) msg.push(pick.gapped + ' skipped (their month was NOT read from Tally — widen Alt+F2 and reconcile before posting)');
+  pickNotes = msg.join(' · ');
+  document.getElementById('bar-msg').textContent = msg.join(' · ');
+  if (!pick.docs.length) {
+    document.getElementById('bar-msg').textContent =
+      (msg.length ? msg.join(' · ') + ' — ' : '') + 'nothing to do. Tick pending, mapped documents.';
+    return null;
+  }
+  return pick.docs;
+}
+
+async function postSelected() {
+  var list = precheck();
+  if (!list) return;
+  // Single-party panel choices persist to the party's mapping BEFORE posting
+  // (so ledger auto-create and the vouchers use them consistently).
+  var selGstins = [...new Set(list.map(function (d) { return d.gstin; }))];
+  if (selGstins.length === 1) {
+    var pm = mappings[selGstins[0]] || (mappings[selGstins[0]] = { ledger: list[0].name, autoCreate: true });
+    var pv = povr('pp-party');
+    var pu = povr('pp-purchase');
+    var dirty = false;
+    if (pv && pv !== pm.ledger) { pm.ledger = pv; dirty = true; }
+    if (pu && pu !== pm.purchaseLedger) { pm.purchaseLedger = pu; pm.purchaseLedgerManual = true; dirty = true; }
+    if (dirty) { pushMappings(); renderMappings(); }
+  }
+  activeOvr = ovrNow(); // panel re-renders as rows complete — freeze the choices
+  var btn = document.getElementById('post-btn');
+  btn.disabled = true;
+
+  // Double-entry guard: read what is ALREADY in Tally around these dates
+  // (wide window, in case the entry was keyed in on a different day) and
+  // skip anything that matches. If Tally can't be read, post nothing.
+  document.getElementById('bar-msg').textContent = 'Checking Tally for entries already on the books…';
+  var dates = list.map(function (d) { return d.date; }).sort();
+  var idx = await tallyIndex(shiftDate(dates[0], -60), shiftDate(dates[dates.length - 1], 60));
+  if (!idx.ok) {
+    btn.disabled = false;
+    document.getElementById('bar-msg').textContent =
+      'Could not verify against Tally, so nothing was posted — ' + idx.error;
+    return;
+  }
+
+  var okCount = 0, failCount = 0, dupCount = 0;
+  var mastersDone = {};
+  for (var i = 0; i < list.length; i++) {
+    var d = list[i];
+    var k = key(d);
+    var m = mappings[d.gstin];
+    var p = normKey(m.ledger);
+    if (idx.numParty[normKey(d.no) + '|' + p] ||
+        idx.pad[p + '|' + partyAmountOf(d).toFixed(2) + '|' + d.date.replace(/-/g, '')]) {
+      live[k] = { status: 'dup' };
+      postedReg[k] = { at: new Date().toISOString() };
+      delete selected[k];
+      dupCount++;
+      fetch(API + '/api/posted', { method:'POST', headers:{'content-type':'application/json'},
+        body: JSON.stringify({ entries: [{ key: k, meta: { period: d.period, docNo: d.no, supplier: d.name, via: 'found-in-tally' } }] }) });
+      renderDocs();
+      continue;
+    }
+    live[k] = { status: 'posting' };
+    renderDocs();
+    try {
+      // Create the party ledger when the mapping asks for it OR when Tally's
+      // own ledger list says it is missing (restored company / new company —
+      // the stored flag can be stale, Tally is the truth).
+      var needMaster = !mastersDone[d.gstin] && (m.autoCreate || !ledgerKnown(m.ledger));
+      if (needMaster) {
+        var mr = await fetch(API + '/api/tally', { method:'POST', headers:{'content-type':'application/json'},
+          body: JSON.stringify({ kind:'master', xml: envelope([ledgerXml(m.ledger, d.gstin)], 'All Masters') }) }).then(function (r) { return r.json(); });
+        if (!mr.ok) throw new Error('Could not create ledger "' + m.ledger + '": ' + (mr.error || 'unknown'));
+        mastersDone[d.gstin] = true;
+        ledgerSet[normKey(m.ledger)] = true;
+        m.autoCreate = false;
+        pushMappings();
+      }
+      var vr = await fetch(API + '/api/tally', { method:'POST', headers:{'content-type':'application/json'},
+        body: JSON.stringify({ kind:'voucher', xml: envelope([voucherXml(d, m.ledger)], 'Vouchers') }) }).then(function (r) { return r.json(); });
+      // Tally says the party ledger is missing even though we thought it
+      // existed — create it and retry this voucher once.
+      if (!vr.ok && !mastersDone[d.gstin]) {
+        var miss = /ledgers*'([^']+)'s*does not exist/i.exec(vr.error || '');
+        if (miss && normKey(miss[1]) === normKey(m.ledger)) {
+          var mr2 = await fetch(API + '/api/tally', { method:'POST', headers:{'content-type':'application/json'},
+            body: JSON.stringify({ kind:'master', xml: envelope([ledgerXml(m.ledger, d.gstin)], 'All Masters') }) }).then(function (r) { return r.json(); });
+          if (mr2.ok) {
+            mastersDone[d.gstin] = true;
+            ledgerSet[normKey(m.ledger)] = true;
+            vr = await fetch(API + '/api/tally', { method:'POST', headers:{'content-type':'application/json'},
+              body: JSON.stringify({ kind:'voucher', xml: envelope([voucherXml(d, m.ledger)], 'Vouchers') }) }).then(function (r) { return r.json(); });
+          }
+        }
+      }
+      // Tally "Internal Error / Record insertion failure": on Edit Log builds
+      // an internal id used before (posted & deleted earlier, or a restored
+      // backup) can refuse re-insertion — retry ONCE under a fresh id. The
+      // duplicate guard above already confirmed nothing matching is on file.
+      var usedRid = null;
+      if (!vr.ok && tallyInternalErr(vr.error)) {
+        usedRid = (remoteIdOf(d) + '-R2').slice(0, 64);
+        vr = await fetch(API + '/api/tally', { method:'POST', headers:{'content-type':'application/json'},
+          body: JSON.stringify({ kind:'voucher', xml: envelope([voucherXml(d, m.ledger, usedRid)], 'Vouchers') }) }).then(function (r) { return r.json(); });
+      }
+      if (!vr.ok) throw new Error((vr.error || 'Tally rejected the voucher') + (tallyInternalErr(vr.error) ? TALLY_ERR_HELP : ''));
+      live[k] = { status: 'ok' };
+      okCount++;
+      var meta = { period: d.period, docNo: d.no, supplier: d.name, total: r2(d.txval + d.igst + d.cgst + d.sgst + d.cess),
+        remoteId: usedRid || remoteIdOf(d), vch: vchTypeOf(d), dt: d.date.replace(/-/g, '') };
+      postedReg[k] = Object.assign({ at: new Date().toISOString() }, meta);
+      delete selected[k];
+      await fetch(API + '/api/posted', { method:'POST', headers:{'content-type':'application/json'},
+        body: JSON.stringify({ entries: [{ key: k, meta: meta }] }) });
+    } catch (err) {
+      live[k] = { status: 'fail', error: String(err.message || err) };
+      failCount++;
+      // A Tally internal error blocks its whole XML port behind the error
+      // dialog — pushing the rest of the batch would only pile up timeouts.
+      // A timeout mid-batch means the same thing: Tally has stopped answering.
+      if (tallyInternalErr(err.message || err) || /timed?s*out|timeouterror|aborted/i.test(String(err.message || err))) {
+        renderDocs();
+        btn.disabled = false;
+        activeOvr = null;
+        document.getElementById('bar-msg').innerHTML =
+          '<b style="color:var(--bad)">🛑 Posting stopped after ' + okCount + ' — TALLY raised an internal error ("Record insertion failure") or stopped answering (an error box is probably open IN Tally).</b> ' +
+          'Click OK on the error box IN TALLY, return to the Gateway of Tally, then try ONE entry. If it repeats: back up, REWRITE the data (Select Company screen → Ctrl+Alt+R), and update TallyPrime to the latest release (common on Edit Log versions). The remaining documents stay selected.';
+        return;
+      }
+    }
+    renderDocs();
+  }
+  btn.disabled = false;
+  activeOvr = null;
+  document.getElementById('bar-msg').textContent = '✓ ' + okCount + ' posted into Tally' +
+    (dupCount ? ', ' + dupCount + ' skipped — matching entry already in Tally' : '') +
+    (failCount ? ', ' + failCount + ' rejected (see Status column)' : '') + '.' +
+    (pickNotes ? ' Also: ' + pickNotes + '.' : '');
+}
+
+function downloadXml() {
+  var list = precheck();
+  if (!list) return;
+  activeOvr = ovrNow();
+  try {
+  var masters = [], vouchers = [], mastersDone = {}, keys = [];
+  list.forEach(function (d) {
+    var m = mappings[d.gstin];
+    if ((m.autoCreate || !ledgerKnown(m.ledger)) && !mastersDone[d.gstin]) { mastersDone[d.gstin] = true; masters.push(ledgerXml(m.ledger, d.gstin)); }
+    vouchers.push(voucherXml(d, m.ledger));
+    keys.push(key(d));
+  });
+  var xml = envelope(masters.concat(vouchers), 'Vouchers');
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([xml], { type: 'text/xml' }));
+  a.download = 'gstr2b-tally-import.xml';
+  a.click();
+  // Mark as posted so they aren't accidentally posted twice; un-mark if the
+  // file is never imported.
+  var entries = [];
+  list.forEach(function (d) {
+    var k = key(d);
+    var meta = { period: d.period, docNo: d.no, supplier: d.name, via: 'xml-download',
+      remoteId: remoteIdOf(d), vch: vchTypeOf(d), dt: d.date.replace(/-/g, '') };
+    postedReg[k] = Object.assign({ at: new Date().toISOString() }, meta);
+    live[k] = { status: 'ok' };
+    delete selected[k];
+    entries.push({ key: k, meta: meta });
+  });
+  fetch(API + '/api/posted', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ entries: entries }) });
+  Object.keys(mastersDone).forEach(function (g) { mappings[g].autoCreate = false; });
+  pushMappings();
+  renderDocs();
+  document.getElementById('bar-msg').textContent = '✓ ' + vouchers.length + ' voucher(s) in the XML — import in Tally via Alt+O → Import → Vouchers. Marked posted here.';
+  } finally { activeOvr = null; }
+}
+
+// ------------------------------ manual entry ------------------------------
+var mlines = [];
+function blankLine() { return { ledger: '', dc: 'D', amount: '', billRef: '', billType: 'New Ref' }; }
+function addLine() { mlines.push(blankLine()); renderLines(); }
+function rmLine(i) { mlines.splice(i, 1); if (!mlines.length) mlines.push(blankLine()); renderLines(); }
+function lnSet(i, k, v) { mlines[i][k] = v; updateTotals(); }
+function typeChanged() {
+  var custom = document.getElementById('m-type').value === '__custom';
+  document.getElementById('m-type-custom').style.display = custom ? '' : 'none';
+}
+var vchTypeList = [];
+function loadVchTypes() {
+  fetch(API + '/api/vouchertypes').then(function (r) { return r.json(); }).then(function (j) {
+    if (!j.ok || !(j.types || []).length) return;
+    vchTypeList = j.types;
+    var sel = document.getElementById('m-type');
+    var cur = sel.value;
+    var h = '';
+    j.types.forEach(function (t) { h += '<option value="' + escAttr(t) + '">' + esc(t) + '</option>'; });
+    h += '<option value="__custom">Custom…</option>';
+    sel.innerHTML = h;
+    // keep the previous choice if it still exists, else prefer Purchase
+    var names = j.types;
+    sel.value = names.indexOf(cur) >= 0 ? cur : (names.indexOf('Purchase') >= 0 ? 'Purchase' : names[0]);
+    typeChanged();
+  });
+}
+function renderLines() {
+  var h = '<tr><th style="width:38%">Ledger</th><th>Dr / Cr</th><th class="r">Amount ₹</th>' +
+    '<th>Bill ref (optional)</th><th>Bill type</th><th></th></tr>';
+  mlines.forEach(function (l, i) {
+    h += '<tr>' +
+      '<td><input type="text" list="ledger-list" value="' + escAttr(l.ledger) + '" placeholder="exact Tally ledger name" oninput="lnSet(' + i + ',\'ledger\',this.value)"></td>' +
+      '<td><select onchange="lnSet(' + i + ',\'dc\',this.value)" style="padding:6px;border:1px solid var(--line);border-radius:7px;font:inherit">' +
+        '<option value="D"' + (l.dc === 'D' ? ' selected' : '') + '>Dr</option>' +
+        '<option value="C"' + (l.dc === 'C' ? ' selected' : '') + '>Cr</option></select></td>' +
+      '<td class="r"><input type="text" value="' + escAttr(l.amount) + '" style="text-align:right" placeholder="0.00" oninput="lnSet(' + i + ',\'amount\',this.value)"></td>' +
+      '<td><input type="text" value="' + escAttr(l.billRef) + '" placeholder="—" oninput="lnSet(' + i + ',\'billRef\',this.value)"></td>' +
+      '<td><select onchange="lnSet(' + i + ',\'billType\',this.value)" style="padding:6px;border:1px solid var(--line);border-radius:7px;font:inherit">' +
+        '<option' + (l.billType === 'New Ref' ? ' selected' : '') + '>New Ref</option>' +
+        '<option' + (l.billType === 'Agst Ref' ? ' selected' : '') + '>Agst Ref</option>' +
+        '<option' + (l.billType === 'Advance' ? ' selected' : '') + '>Advance</option>' +
+        '<option' + (l.billType === 'On Account' ? ' selected' : '') + '>On Account</option></select></td>' +
+      '<td><button class="btn danger" style="padding:4px 9px" onclick="rmLine(' + i + ')" title="remove line">✕</button></td></tr>';
+  });
+  document.getElementById('m-lines').innerHTML = h;
+  updateTotals();
+}
+function numOf(v) { var n = Number(String(v).replace(/[₹,\s]/g, '')); return isFinite(n) ? n : 0; }
+function manualTotals() {
+  var dr = 0, cr = 0;
+  mlines.forEach(function (l) {
+    var a = numOf(l.amount);
+    if (!l.ledger.trim() || a <= 0) return;
+    if (l.dc === 'D') dr += a; else cr += a;
+  });
+  return { dr: r2(dr), cr: r2(cr), diff: r2(dr - cr) };
+}
+function updateTotals() {
+  var t = manualTotals();
+  var el = document.getElementById('m-totals');
+  el.innerHTML = 'Dr ₹' + inr(t.dr) + ' · Cr ₹' + inr(t.cr) +
+    (Math.abs(t.diff) > 0.005
+      ? ' · <b style="color:var(--bad)">difference ₹' + inr(Math.abs(t.diff)) + ' — must be zero</b>'
+      : (t.dr > 0 ? ' · <b style="color:var(--ok)">balanced ✓</b>' : ''));
+}
+function buildManual(remoteId) {
+  var typeSel = document.getElementById('m-type').value;
+  var vch = typeSel === '__custom' ? document.getElementById('m-type-custom').value.trim() : typeSel;
+  var dateIso = document.getElementById('m-date').value;
+  var no = document.getElementById('m-no').value.trim();
+  var narr = document.getElementById('m-narr').value.trim();
+  if (!vch) return { error: 'Enter the custom voucher type name.' };
+  if (!dateIso) return { error: 'Pick the voucher date.' };
+  var lines = mlines.filter(function (l) { return l.ledger.trim() && numOf(l.amount) > 0; });
+  if (lines.length < 2) return { error: 'Enter at least two lines (a debit and a credit).' };
+  var t = manualTotals();
+  if (Math.abs(t.diff) > 0.005) return { error: 'Voucher does not balance — Dr and Cr must be equal.' };
+  var date = dateIso.replace(/-/g, '');
+  var body = '';
+  lines.forEach(function (l) {
+    var a = numOf(l.amount);
+    body += lineXml(l.ledger.trim(), l.dc === 'D' ? -a : a, l.billRef.trim() || null, l.billType);
+  });
+  // Party ledger: the explicit pick wins; else derived from the lines.
+  var party = document.getElementById('m-party').value.trim();
+  if (!party) {
+    var wantCredit = vch === 'Purchase' || vch === 'Debit Note' || vch === 'Payment';
+    var wantDebit = vch === 'Sales' || vch === 'Credit Note' || vch === 'Receipt';
+    if (wantCredit || wantDebit) {
+      var p = lines.filter(function (l) { return l.dc === (wantCredit ? 'C' : 'D'); })[0];
+      if (p) party = p.ledger.trim();
+    }
+  }
+  var xml = '<TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER ' + (remoteId ? 'REMOTEID="' + escAttr(remoteId) + '" ' : '') + 'VCHTYPE="' + escAttr(vch) + '" ACTION="Create" OBJVIEW="Accounting Voucher View">' +
+    '<DATE>' + date + '</DATE><EFFECTIVEDATE>' + date + '</EFFECTIVEDATE>' +
+    '<VOUCHERTYPENAME>' + esc(vch) + '</VOUCHERTYPENAME>' +
+    (no ? '<VOUCHERNUMBER>' + esc(no) + '</VOUCHERNUMBER><REFERENCE>' + esc(no) + '</REFERENCE>' : '') +
+    (party ? '<PARTYLEDGERNAME>' + esc(party) + '</PARTYLEDGERNAME>' : '') +
+    '<PERSISTEDVIEW>Accounting Voucher View</PERSISTEDVIEW><ISINVOICE>No</ISINVOICE>' +
+    (narr ? '<NARRATION>' + esc(narr) + '</NARRATION>' : '') +
+    body + '</VOUCHER></TALLYMESSAGE>';
+  return { xml: xml, vch: vch, date: dateIso, no: no, total: t.dr, party: party };
+}
+async function postManual() {
+  var rid = 'G2BM-' + Date.now().toString(36) + '-' + Math.floor(Math.random() * 1e9).toString(36);
+  var b = buildManual(rid);
+  var msg = document.getElementById('m-msg');
+  if (b.error) { msg.innerHTML = '<span class="msg bad">' + esc(b.error) + '</span>'; return; }
+  var btn = document.getElementById('m-post');
+  btn.disabled = true;
+
+  // Double-entry guard: look a month either side in Tally before posting.
+  msg.innerHTML = '<span class="pill warn">Checking Tally for duplicates…</span>';
+  var idx = await tallyIndex(shiftDate(b.date, -30), shiftDate(b.date, 30));
+  if (!idx.ok) {
+    btn.disabled = false;
+    msg.innerHTML = '<span class="msg bad">Could not verify against Tally, so nothing was posted — ' + esc(idx.error) + '</span>';
+    return;
+  }
+  var dup = '';
+  if (b.no && idx.numAny[normKey(b.no)]) {
+    dup = 'Voucher / reference number "' + b.no + '" already exists in Tally in this period.';
+  } else if (b.party && idx.pad[normKey(b.party) + '|' + b.total.toFixed(2) + '|' + b.date.replace(/-/g, '')]) {
+    dup = 'Tally already has a voucher for ' + b.party + ' of ₹' + inr(b.total) + ' dated ' + b.date + '.';
+  }
+  if (dup && !confirm(dup + '\n\nThis looks like a double entry. Post anyway?')) {
+    btn.disabled = false;
+    msg.innerHTML = '<span class="msg bad">Not posted — ' + esc(dup) + '</span>';
+    return;
+  }
+
+  msg.innerHTML = '<span class="pill warn">Posting…</span>';
+  var vr = await fetch(API + '/api/tally', { method:'POST', headers:{'content-type':'application/json'},
+    body: JSON.stringify({ kind:'voucher', xml: envelope([b.xml], 'Vouchers') }) }).then(function (r) { return r.json(); });
+  btn.disabled = false;
+  var entry = { at: new Date().toISOString(), type: b.vch, date: b.date, no: b.no, total: b.total, ok: !!vr.ok, error: vr.error || '', remoteId: vr.ok ? rid : '' };
+  manualLog.unshift(entry);
+  fetch(API + '/api/log', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ entry: entry }) });
+  renderManualLog();
+  if (vr.ok) {
+    msg.innerHTML = '<span class="msg ok">✓ ' + esc(b.vch) + ' voucher for ₹' + inr(b.total) + ' posted into Tally.</span>';
+    mlines = [blankLine(), blankLine()];
+    document.getElementById('m-no').value = '';
+    document.getElementById('m-narr').value = '';
+    renderLines();
+  } else {
+    msg.innerHTML = '<span class="msg bad">' + esc((vr.error || 'Tally rejected the voucher') + (tallyInternalErr(vr.error) ? TALLY_ERR_HELP : '')) + '</span>';
+  }
+}
+function downloadManual() {
+  var b = buildManual('');
+  var msg = document.getElementById('m-msg');
+  if (b.error) { msg.innerHTML = '<span class="msg bad">' + esc(b.error) + '</span>'; return; }
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([envelope([b.xml], 'Vouchers')], { type: 'text/xml' }));
+  a.download = 'manual-voucher.xml';
+  a.click();
+  msg.innerHTML = '<span class="msg ok">✓ XML downloaded — import in Tally via Alt+O → Import → Vouchers.</span>';
+}
+function dutyLedgerXml(name) {
+  return '<TALLYMESSAGE xmlns:UDF="TallyUDF"><LEDGER NAME="' + escAttr(name) + '" ACTION="Create">' +
+    '<NAME.LIST><NAME>' + esc(name) + '</NAME></NAME.LIST><PARENT>Duties &amp; Taxes</PARENT></LEDGER></TALLYMESSAGE>';
+}
+// RCM totals per return period, broken down PARTY-WISE (notes subtract).
+function rcmGroups() {
+  var by = {};
+  var multi = ownList().length > 1;
+  docs.forEach(function (d) {
+    if (!d.rcm) return;
+    // RCM liability is per REGISTRATION — separate journals per state, and
+    // the registration chips filter this card like everything else.
+    if (regFilter && d.own !== regFilter) return;
+    var sign = d.type === 'creditnote' ? -1 : 1;
+    var pk = multi ? d.period + '|' + (d.own || '') : d.period;
+    var P = by[pk] = by[pk] || { n: 0, tx: 0, igst: 0, cgst: 0, sgst: 0, parties: {}, period: d.period, ownReg: multi ? (d.own || '') : '' };
+    var g = P.parties[d.gstin] = P.parties[d.gstin] || { name: d.name, n: 0, tx: 0, igst: 0, cgst: 0, sgst: 0 };
+    [P, g].forEach(function (b) {
+      b.n++;
+      b.tx = r2(b.tx + sign * taxableOf(d));
+      b.igst = r2(b.igst + sign * d.igst);
+      b.cgst = r2(b.cgst + sign * d.cgst);
+      b.sgst = r2(b.sgst + sign * d.sgst);
+    });
+  });
+  return by;
+}
+function rcmJournalId(p, g) { return 'G2BRCM-' + p + '-' + g; }
+function rcmDone(p, g) {
+  var id = rcmJournalId(p, g);
+  return manualLog.some(function (e) { return e.remoteId === id && e.ok && !e.deleted; });
+}
+function renderRcm() {
+  var host = document.getElementById('rcm-card');
+  var by = rcmGroups();
+  var periods = Object.keys(by).sort();
+  if (!periods.length) { host.innerHTML = ''; return; }
+  var h = '<div class="card card-pad" style="padding:14px 18px"><details><summary style="cursor:pointer;font-weight:600;font-size:14.5px">' +
+    'RCM — reverse charge liability, party-wise (GSTR-3B Table 3.1(d))</summary>' +
+    '<p class="muted" style="font-size:12.5px;margin:8px 0">RCM purchase vouchers book only the taxable value against the supplier. ' +
+    'Post one journal PER PARTY (Dr Input GST, Cr RCM Payable — with the "Increase in Tax Liability & Input Tax Credit / Purchase Under Reverse Charge" stat flags), pay the tax in cash through GSTR-3B, and the ITC comes back the same month.</p>' +
+    '<div class="tbl-scroll"><table><tr><th>Month / Party</th><th class="r">Docs</th><th class="r">Taxable (3.1d) ₹</th><th class="r">IGST ₹</th><th class="r">CGST ₹</th><th class="r">SGST ₹</th><th class="r">Tax total ₹</th><th></th></tr>';
+  periods.forEach(function (p) {
+    var P = by[p];
+    var mtax = r2(P.igst + P.cgst + P.sgst);
+    var gs = Object.keys(P.parties).sort(function (a, b) { return P.parties[a].name.localeCompare(P.parties[b].name); });
+    var pendingParties = gs.filter(function (g) {
+      var b = P.parties[g];
+      return r2(b.igst + b.cgst + b.sgst) > 0 && !rcmDone(p, g);
+    });
+    h += '<tr style="background:var(--bg)"><td><b>' + esc(periodLabel(P.period || p)) + (P.ownReg ? ' <span class="muted mono" style="font-size:11px">for ' + esc(P.ownReg) + '</span>' : '') + '</b></td><td class="r"><b>' + P.n + '</b></td>' +
+      '<td class="r"><b>' + inr(P.tx) + '</b></td><td class="r"><b>' + inr(P.igst) + '</b></td><td class="r"><b>' + inr(P.cgst) + '</b></td>' +
+      '<td class="r"><b>' + inr(P.sgst) + '</b></td><td class="r"><b>' + inr(mtax) + '</b></td>' +
+      '<td>' + (pendingParties.length
+        ? '<button type="button" class="btn primary" style="padding:4px 12px;font-size:12px" data-p="' + escAttr(p) + '" onclick="postRcmAll(this.dataset.p)">▶ Post all ' + pendingParties.length + ' journal(s)</button>'
+        : mtax > 0 ? '<span class="pill ok">All journals posted</span>' : '<span class="muted">no tax</span>') + '</td></tr>';
+    gs.forEach(function (g) {
+      var b = P.parties[g];
+      var tax = r2(b.igst + b.cgst + b.sgst);
+      h += '<tr><td style="padding-left:26px">' + esc(b.name) + '<div class="muted mono" style="font-size:11px">' + esc(g) + '</div></td>' +
+        '<td class="r">' + b.n + '</td><td class="r">' + inr(b.tx) + '</td><td class="r">' + inr(b.igst) + '</td>' +
+        '<td class="r">' + inr(b.cgst) + '</td><td class="r">' + inr(b.sgst) + '</td><td class="r">' + inr(tax) + '</td>' +
+        '<td>' + (rcmDone(p, g) ? '<span class="pill ok">Journal posted</span>'
+          : tax > 0 ? '<button type="button" class="btn" style="padding:3px 10px;font-size:12px" data-p="' + escAttr(p) + '" data-g="' + escAttr(g) + '" onclick="postRcmJournal(this.dataset.p, this.dataset.g)">▶ Post journal</button>'
+          : '<span class="muted">no tax</span>') + '</td></tr>';
+    });
+  });
+  host.innerHTML = h + '</table></div></details></div>';
+}
+async function postRcmJournalInner(p, g, skipConfirm) {
+  var by = rcmGroups();
+  var P = by[p];
+  var b = P && P.parties[g];
+  if (!b) return false;
+  var heads = [
+    [b.igst, settings.igstLedger, settings.rcmIgstLedger, 'IGST'],
+    [b.cgst, settings.cgstLedger, settings.rcmCgstLedger, 'CGST'],
+    [b.sgst, settings.sgstLedger, settings.rcmSgstLedger, 'SGST'],
+  ].filter(function (x) { return x[0] > 0; });
+  if (!heads.length) return false;
+  var missing = heads.filter(function (x) { return !String(x[2] || '').trim(); }).map(function (x) { return x[3]; });
+  if (missing.length) {
+    alert('Fill the RCM payable ledger name(s) under Settings first: ' + missing.join(', '));
+    document.getElementById('settings-box').open = true;
+    return false;
+  }
+  var per = (P && P.period) || String(p).split('|')[0];
+  var forReg = (P && P.ownReg) ? ' [' + P.ownReg + ']' : '';
+  var tax = r2(heads.reduce(function (s, x) { return s + x[0]; }, 0));
+  if (!skipConfirm && !confirm('Post the RCM liability journal for ' + b.name + ' — ' + periodLabel(per) + forReg + '? Dr Input GST ' + inr(tax) + ' / Cr RCM Payable ' + inr(tax) + ' (3.1(d) taxable ' + inr(b.tx) + ').')) return false;
+  for (var i = 0; i < heads.length; i++) {
+    var ln = heads[i][2];
+    if (!ledgerKnown(ln)) {
+      var mr = await fetch(API + '/api/tally', { method:'POST', headers:{'content-type':'application/json'},
+        body: JSON.stringify({ kind:'master', xml: envelope([dutyLedgerXml(ln)], 'All Masters') }) }).then(function (r) { return r.json(); });
+      if (mr.ok) ledgerSet[normKey(ln)] = true;
+    }
+  }
+  var mm = +per.slice(0, 2), yy = +per.slice(2);
+  var lastDay = new Date(Date.UTC(yy, mm, 0)).getUTCDate();
+  var ymd = String(yy) + String(mm).padStart(2, '0') + String(lastDay).padStart(2, '0');
+  var lines = '';
+  heads.forEach(function (x) { lines += lineXml(x[1], -x[0], null); });
+  heads.forEach(function (x) { lines += lineXml(x[2], x[0], null); });
+  var rid = rcmJournalId(p, g);
+  var narr = 'RCM liability on ' + b.n + ' inward supplies from ' + b.name + ' (' + g + ') as per GSTR-2B ' + periodLabel(per) + forReg + ' — GSTR-3B 3.1(d) taxable ' + inr(b.tx);
+  var xml = '<TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER REMOTEID="' + escAttr(rid) + '" VCHTYPE="Journal" ACTION="Create" OBJVIEW="Accounting Voucher View">' +
+    '<DATE>' + ymd + '</DATE><EFFECTIVEDATE>' + ymd + '</EFFECTIVEDATE><VOUCHERTYPENAME>Journal</VOUCHERTYPENAME>' +
+    '<NATUREOFADJUSTMENT>' + esc('Increase In Tax Liability & Input Tax Credit') + '</NATUREOFADJUSTMENT>' +
+    '<ADDLNATUREOFADJUSTMENT>' + esc('Purchase Under Reverse Charge from Registered Dealer') + '</ADDLNATUREOFADJUSTMENT>' +
+    '<PERSISTEDVIEW>Accounting Voucher View</PERSISTEDVIEW><ISINVOICE>No</ISINVOICE>' +
+    '<NARRATION>' + esc(narr) + '</NARRATION>' + lines + '</VOUCHER></TALLYMESSAGE>';
+  var vr = await fetch(API + '/api/tally', { method:'POST', headers:{'content-type':'application/json'},
+    body: JSON.stringify({ kind:'voucher', xml: envelope([xml], 'Vouchers') }) }).then(function (r) { return r.json(); });
+  var entry = { at: new Date().toISOString(), type: 'RCM Journal', date: ymd.slice(0, 4) + '-' + ymd.slice(4, 6) + '-' + ymd.slice(6, 8),
+    no: 'RCM ' + b.name.slice(0, 18) + ' ' + periodLabel(p), total: tax, ok: !!vr.ok, error: vr.error || '', remoteId: vr.ok ? rid : '' };
+  manualLog.unshift(entry);
+  fetch(API + '/api/log', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ entry: entry }) });
+  if (!vr.ok) alert('Tally rejected the RCM journal for ' + b.name + ': ' + (vr.error || 'unknown') + (tallyInternalErr(vr.error) ? TALLY_ERR_HELP : ''));
+  return !!vr.ok;
+}
+async function postRcmJournal(p, g) {
+  await postRcmJournalInner(p, g, false);
+  renderManualLog();
+  renderRcm();
+}
+async function postRcmAll(p) {
+  var by = rcmGroups();
+  var P = by[p];
+  if (!P) return;
+  var gs = Object.keys(P.parties).filter(function (g) {
+    var b = P.parties[g];
+    return r2(b.igst + b.cgst + b.sgst) > 0 && !rcmDone(p, g);
+  });
+  if (!gs.length) return;
+  var tax = r2(gs.reduce(function (s, g) { var b = P.parties[g]; return s + b.igst + b.cgst + b.sgst; }, 0));
+  if (!confirm('Post ' + gs.length + ' party-wise RCM liability journal(s) for ' + periodLabel(p) + '? Total tax ' + inr(tax) + '.')) return;
+  var ok = 0;
+  for (var i = 0; i < gs.length; i++) {
+    if (await postRcmJournalInner(p, gs[i], true)) ok++;
+    renderRcm();
+  }
+  renderManualLog();
+  document.getElementById('bar-msg').textContent = '✓ ' + ok + ' of ' + gs.length + ' RCM journal(s) posted for ' + periodLabel(p) + '.';
+}
+function delVoucherXml(remoteId, vch, dateYmd, no) {
+  return '<TALLYMESSAGE xmlns:UDF="TallyUDF"><VOUCHER REMOTEID="' + escAttr(remoteId) + '" VCHTYPE="' + escAttr(vch) + '" ACTION="Delete">' +
+    '<DATE>' + dateYmd + '</DATE><VOUCHERTYPENAME>' + esc(vch) + '</VOUCHERTYPENAME>' +
+    (no ? '<VOUCHERNUMBER>' + esc(no) + '</VOUCHERNUMBER>' : '') + '</VOUCHER></TALLYMESSAGE>';
+}
+async function deleteManual(i) {
+  var e = manualLog[i];
+  if (!e || !e.remoteId || e.deleted) return;
+  if (!confirm('Delete this ' + e.type + ' voucher (' + (e.no || 'auto no') + ', ₹' + inr(e.total || 0) + ') from Tally?')) return;
+  var vr = await fetch(API + '/api/tally', { method:'POST', headers:{'content-type':'application/json'},
+    body: JSON.stringify({ kind:'delete', xml: envelope([delVoucherXml(e.remoteId, e.type, e.date.replace(/-/g, ''), e.no)], 'Vouchers') }) })
+    .then(function (r) { return r.json(); });
+  var msg = document.getElementById('m-msg');
+  if (vr.ok) {
+    e.deleted = true;
+    fetch(API + '/api/log', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ markDeleted: e.remoteId }) });
+    renderManualLog();
+    msg.innerHTML = '<span class="msg ok">✓ Voucher deleted from Tally.</span>';
+  } else {
+    msg.innerHTML = '<span class="msg bad">' + esc(vr.error || 'Could not delete') + '</span>';
+  }
+}
+var manualLog = [];
+function renderManualLog() {
+  var host = document.getElementById('m-log');
+  if (!manualLog.length) { host.innerHTML = ''; return; }
+  var h = '<div class="muted" style="margin-bottom:4px">Recent manual entries</div><table><tr><th>When</th><th>Type</th><th>Date</th><th>No</th><th class="r">Amount ₹</th><th>Result</th><th></th></tr>';
+  manualLog.slice(0, 8).forEach(function (e, i) {
+    h += '<tr><td class="muted">' + new Date(e.at).toLocaleString('en-IN') + '</td><td>' + esc(e.type) + '</td>' +
+      '<td>' + esc(e.date) + '</td><td>' + esc(e.no || '—') + '</td><td class="r">' + inr(e.total || 0) + '</td>' +
+      '<td>' + (e.deleted ? '<span class="pill idle">Deleted</span>' : e.ok ? '<span class="pill ok">Posted</span>' : '<span class="pill bad" title="' + escAttr(e.error || '') + '">Rejected</span>') + '</td>' +
+      '<td>' + (e.ok && e.remoteId && !e.deleted ? '<button type="button" class="btn danger" style="padding:2px 8px;font-size:11px" onclick="deleteManual(' + i + ')">Delete from Tally</button>' : '') + '</td></tr>';
+  });
+  host.innerHTML = h + '</table>';
+}
+var ledgerSet = {};   // normalised name -> true, from the live Tally ledger list
+function ledgerKnown(name) {
+  // Only trust the check when a list actually loaded.
+  return Object.keys(ledgerSet).length === 0 || !!ledgerSet[normKey(name)];
+}
+function loadLedgers(manual) {
+  fetch(API + '/api/ledgers').then(function (r) { return r.json(); }).then(function (j) {
+    ledgerSet = {};
+    (j.ledgers || []).forEach(function (n) { ledgerSet[normKey(n)] = true; });
+    var dl = document.getElementById('ledger-list');
+    dl.innerHTML = (j.ledgers || []).map(function (n) { return '<option value="' + escAttr(n) + '"></option>'; }).join('');
+    var c = document.getElementById('ledger-count');
+    c.textContent = j.ok ? '(' + j.ledgers.length + ' ledgers loaded from Tally)' : '(ledger list unavailable — is Tally open?)';
+    if (manual) document.getElementById('m-msg').innerHTML =
+      j.ok ? '<span class="msg ok">✓ ' + j.ledgers.length + ' ledger names loaded.</span>'
+           : '<span class="msg bad">' + esc(j.error || 'Could not read ledgers from Tally') + '</span>';
+  });
+}
+
+async function deleteFromTally() {
+  var keys = Object.keys(selected).filter(function (k) { return postedReg[k] && postedReg[k].remoteId; });
+  var noRid = Object.keys(selected).filter(function (k) { return postedReg[k] && !postedReg[k].remoteId; }).length;
+  if (!keys.length) {
+    document.getElementById('bar-msg').textContent =
+      noRid ? 'Selected entries were not posted by this tool (found in Tally / older posts) — delete those inside Tally itself.'
+            : 'Tick posted documents to delete their vouchers from Tally.';
+    return;
+  }
+  if (!confirm('Delete ' + keys.length + ' voucher(s) OUT of Tally? They will be removed from the Tally company and go back to Pending here.' +
+    (noRid ? '\n(' + noRid + ' selected entries were not posted by this tool and will be skipped.)' : ''))) return;
+  var ok = 0, fail = 0, lastErr = '';
+  for (var i = 0; i < keys.length; i++) {
+    var k = keys[i];
+    var p = postedReg[k];
+    var vr = await fetch(API + '/api/tally', { method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify({ kind:'delete', xml: envelope([delVoucherXml(p.remoteId, p.vch || 'Purchase', p.dt || '', p.docNo || p.no || '')], 'Vouchers') }) })
+      .then(function (r) { return r.json(); });
+    if (vr.ok) {
+      ok++;
+      delete postedReg[k];
+      delete live[k];
+      delete selected[k];
+      fetch(API + '/api/unposted', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ keys: [k] }) });
+    } else {
+      fail++;
+      lastErr = vr.error || '';
+    }
+    renderDocs();
+  }
+  document.getElementById('bar-msg').textContent =
+    '🗑 ' + ok + ' voucher(s) deleted from Tally' + (fail ? ', ' + fail + ' failed — ' + lastErr : '') + '.';
+}
+async function startFresh() {
+  if (!confirm('Clear ALL loaded documents and reconciliation results? Mappings, settings and the posted register are kept. Upload a GSTR-2B JSON afterwards to start over.')) return;
+  await fetch(API + '/api/clear', { method: 'POST' });
+  docs = [];
+  reco = null;
+  selected = {};
+  live = {};
+  filterText = '';
+  bucketFilter = 'all';
+  document.getElementById('filter').value = '';
+  document.getElementById('reco-summary').innerHTML = '';
+  document.getElementById('rcm-card').innerHTML = '';
+  document.getElementById('upload-msg').innerHTML = '';
+  render();
+  document.getElementById('bar-msg').textContent = '🧹 Fresh slate — upload a GSTR-2B JSON to begin.';
+}
+function unmarkSelected() {
+  var keys = Object.keys(selected).filter(function (k) { return postedReg[k]; });
+  if (!keys.length) { document.getElementById('bar-msg').textContent = 'Tick posted documents to un-mark.'; return; }
+  if (!confirm('Un-mark ' + keys.length + ' document(s) as posted? Only do this if they are NOT in Tally — otherwise posting again will duplicate them.')) return;
+  keys.forEach(function (k) { delete postedReg[k]; delete live[k]; });
+  fetch(API + '/api/unposted', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ keys: keys }) });
+  renderDocs();
+  document.getElementById('bar-msg').textContent = keys.length + ' document(s) back to pending.';
+}
+</script>
+</body>
+</html>
