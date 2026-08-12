@@ -34,6 +34,12 @@ echo   %DIR%
 echo.
 if not exist "%DIR%" mkdir "%DIR%"
 
+rem Stop any already-running connector/engine and their run-loops, so a
+rem re-run of this installer always upgrades in place (an old copy would
+rem otherwise keep the port and block the new one).
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and ($_.CommandLine -like '*knap-tally*' -or $_.CommandLine -like '*run-loop.bat*') -and $_.CommandLine -notlike '*Install-Tally*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>nul
+timeout /t 2 /nobreak >nul
+
 echo Downloading the connector...
 curl -fsSL "%HUB%/connector/knap-tally-connector.mjs" -o "%DIR%\knap-tally-connector.mjs"
 if errorlevel 1 (
