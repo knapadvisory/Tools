@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '2.0';
+const VERSION = '2.1';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2090,6 +2090,53 @@ server.on('error', (e) => {
   }
   process.exit(1);
 });
+// --------------------------- audit engine (child) ----------------------------
+// The connector also runs the Tally Audit engine (its page: HUB/audit/) as a
+// supervised child process on 127.0.0.1:8799, downloading it on first run and
+// keeping it current from the hub's version.json ("audit" field).
+import { spawn } from 'node:child_process';
+const AUDIT_FILE = path.join(path.dirname(SELF), 'knap-tally-audit-engine.mjs');
+let auditChild = null;
+let stopping = false;
+
+function auditLocalVersion() {
+  try {
+    const m = /const VERSION = '([^']+)'/.exec(fs.readFileSync(AUDIT_FILE, 'utf8'));
+    return m ? m[1] : '';
+  } catch { return ''; }
+}
+
+function startAudit() {
+  if (auditChild || stopping || !fs.existsSync(AUDIT_FILE)) return;
+  auditChild = spawn(process.execPath, [AUDIT_FILE], {
+    env: { ...process.env, PORT: '8799', KNAP_HUB: HUB },
+    stdio: 'inherit',
+  });
+  auditChild.on('exit', (code) => {
+    auditChild = null;
+    if (!stopping) setTimeout(startAudit, 5000).unref(); // crash → retry
+  });
+}
+
+async function ensureAudit(wantVersion) {
+  try {
+    if (fs.existsSync(AUDIT_FILE) && (!wantVersion || auditLocalVersion() === wantVersion)) { startAudit(); return; }
+    if (auditChild && lastActivity && Date.now() - lastActivity < 10 * 60 * 1000) return; // busy — later
+    const code = await fetch(HUB + '/connector/knap-tally-audit-engine.mjs', { signal: AbortSignal.timeout(30000) })
+      .then((r) => (r.ok ? r.text() : null));
+    if (!code || !code.includes('KNAP Tally Audit Engine')) return; // sanity check
+    fs.writeFileSync(AUDIT_FILE + '.new', code);
+    if (auditChild) { stopping = true; auditChild.kill(); await new Promise((r) => setTimeout(r, 1500)); stopping = false; auditChild = null; }
+    fs.renameSync(AUDIT_FILE + '.new', AUDIT_FILE);
+    console.log('  ⬆ Audit engine ' + (wantVersion ? 'updated to v' + wantVersion : 'installed') + '.');
+    startAudit();
+  } catch { startAudit(); /* offline: run whatever we have */ }
+}
+
+process.on('exit', () => { stopping = true; if (auditChild) auditChild.kill(); });
+process.on('SIGINT', () => process.exit(0));
+process.on('SIGTERM', () => process.exit(0));
+
 // ------------------------------ self-update ---------------------------------
 // Checks the hub for a newer connector when idle; writes the new file over
 // itself and exits 0 — the installer's run-loop restarts the fresh copy.
@@ -2098,7 +2145,9 @@ async function selfUpdate() {
   try {
     const v = await fetch(HUB + '/connector/version.json', { signal: AbortSignal.timeout(10000) })
       .then((r) => (r.ok ? r.json() : null));
-    if (!v || !v.version || v.version === VERSION) return;
+    if (!v) { startAudit(); return; }
+    await ensureAudit(v.audit || '');
+    if (!v.version || v.version === VERSION) return;
     if (lastActivity && Date.now() - lastActivity < 10 * 60 * 1000) return; // someone is working — not now
     const code = await fetch(HUB + '/connector/knap-tally-connector.mjs', { signal: AbortSignal.timeout(30000) })
       .then((r) => (r.ok ? r.text() : null));
@@ -2108,10 +2157,11 @@ async function selfUpdate() {
     console.log('  ⬆ Updated to v' + v.version + ' — restarting.');
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 3000).unref();
-  } catch { /* offline or hub unreachable — try again next round */ }
+  } catch { startAudit(); /* offline or hub unreachable — run what we have */ }
 }
 setTimeout(selfUpdate, 15 * 1000);                       // shortly after start
 setInterval(selfUpdate, 6 * 3600 * 1000).unref();        // then every 6 hours
+startAudit();                                            // run local copy immediately if present
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log('');

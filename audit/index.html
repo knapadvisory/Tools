@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Tally Statutory Audit Assistant</title>
+<style>
+  :root{--ink:#1c2430;--mut:#5b6572;--line:#dfe3e8;--bg:#f4f6f8;--card:#fff;
+    --hi:#c62828;--md:#ef6c00;--lo:#b58900;--in:#607d8b;--ok:#2e7d32;--acc:#1a56db}
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,'Segoe UI',Roboto,Arial,sans-serif;color:var(--ink);background:var(--bg)}
+  header{background:#10233f;color:#fff;padding:10px 18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  header h1{font-size:16px;margin:0;font-weight:600}
+  header .sub{font-size:12px;opacity:.75}
+  .dot{width:9px;height:9px;border-radius:50%;background:#9aa4af;display:inline-block;margin-right:5px}
+  .dot.on{background:#4caf50}.dot.off{background:#e53935}
+  main{max-width:1180px;margin:14px auto;padding:0 14px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin-bottom:14px}
+  .grid{display:grid;gap:10px}
+  .setup{grid-template-columns:2fr 2fr 1fr 1fr auto;align-items:end}
+  label{display:block;font-size:11.5px;color:var(--mut);margin-bottom:3px}
+  input,select{width:100%;padding:7px 8px;border:1px solid var(--line);border-radius:5px;font:inherit;background:#fff}
+  button{padding:8px 16px;border:0;border-radius:5px;background:var(--acc);color:#fff;font:inherit;font-weight:600;cursor:pointer}
+  button.sec{background:#e8ecf1;color:var(--ink);font-weight:500}
+  button:disabled{opacity:.55;cursor:default}
+  .muted{color:var(--mut);font-size:12.5px}
+  .err{background:#fdecea;border:1px solid #f5c6c1;color:#9c1f14;padding:8px 12px;border-radius:6px;margin-top:10px;display:none}
+  .prog{display:none;margin-top:10px;font-size:13px}
+  .steps{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:7px}
+  .stp{font-size:11.5px;padding:2px 10px;border-radius:10px;background:#eef1f5;color:var(--mut);border:1px solid var(--line)}
+  .stp.done{background:#e6f4ea;color:var(--ok);border-color:#bfe3c6}
+  .stp.cur{background:#e8effc;color:var(--acc);border-color:#bcd0f5;animation:pulse 1.2s ease-in-out infinite}
+  @keyframes pulse{50%{opacity:.5}}
+  .pmeta{float:right;color:var(--mut);font-variant-numeric:tabular-nums}
+  .bar{height:8px;background:#e5e9ee;border-radius:4px;overflow:hidden;margin-top:6px}
+  .bar i{display:block;height:100%;width:0%;transition:width .5s;border-radius:4px;
+    background:repeating-linear-gradient(45deg,var(--acc) 0 10px,#4a76e0 10px 20px);
+    background-size:28px 28px;animation:slide 1s linear infinite}
+  @keyframes slide{to{background-position:28px 0}}
+  .kpis{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 14px}
+  .kpi b{display:block;font-size:20px;margin-top:2px}
+  .kpi.hi b{color:var(--hi)}.kpi.md b{color:var(--md)}.kpi.lo b{color:var(--lo)}
+  nav.tabs{display:flex;gap:4px;margin:16px 0 10px;flex-wrap:wrap}
+  nav.tabs button{background:#e8ecf1;color:var(--ink);font-weight:500;border-radius:6px 6px 0 0}
+  nav.tabs button.on{background:var(--card);border:1px solid var(--line);border-bottom-color:var(--card);font-weight:600}
+  .chip{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.4px;padding:2px 8px;border-radius:10px;color:#fff;vertical-align:middle}
+  .chip.high{background:var(--hi)}.chip.medium{background:var(--md)}.chip.low{background:var(--lo)}
+  .chip.info{background:var(--in)}.chip.ok{background:var(--ok)}.chip.na{background:#9aa4af}.chip.error{background:#6a1b9a}
+  details.f{border:1px solid var(--line);border-radius:7px;margin-bottom:8px;background:var(--card)}
+  details.f>summary{padding:10px 14px;cursor:pointer;display:flex;gap:10px;align-items:center;list-style:none;flex-wrap:wrap}
+  details.f>summary::-webkit-details-marker{display:none}
+  details.f .body{padding:2px 14px 12px;border-top:1px solid var(--line)}
+  .cnt{margin-left:auto;font-size:12px;color:var(--mut);white-space:nowrap}
+  table{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:8px}
+  th,td{border:1px solid var(--line);padding:5px 8px;text-align:left;vertical-align:top}
+  th{background:#f0f3f6;font-weight:600;white-space:nowrap}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .tblwrap{overflow-x:auto}
+  .ref{font-size:11.5px;color:var(--mut)}
+  .rec{background:#f6f8fa;border-left:3px solid var(--acc);padding:6px 10px;font-size:12.5px;margin:8px 0}
+  .filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+  .filters input,.filters select{width:auto}
+  .phase{border:1px solid var(--line);border-radius:7px;background:var(--card);margin-bottom:10px}
+  .phase>h3{margin:0;padding:9px 14px;font-size:13.5px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
+  .phase .items{padding:6px 14px 10px}
+  .item{display:flex;gap:9px;padding:6px 0;border-bottom:1px dashed #eceff2;align-items:flex-start}
+  .item:last-child{border-bottom:0}
+  .item input{width:15px;height:15px;margin-top:2px;flex:none}
+  .item .t{flex:1}
+  .auto{font-size:11px;margin-top:2px}
+  .pill{display:inline-block;font-size:10.5px;border-radius:9px;padding:1px 8px;margin:1px 4px 1px 0;border:1px solid var(--line);cursor:pointer}
+  .pill.issue{border-color:var(--md);color:var(--md)}
+  .pill.issue.high{border-color:var(--hi);color:var(--hi)}
+  .pill.okp{border-color:var(--ok);color:var(--ok)}
+  .mat td{border:0;padding:2px 14px 2px 0}
+  .neg{color:var(--hi)}
+  svg text{font:10px sans-serif;fill:var(--mut)}
+  footer{margin:22px 0;text-align:center;color:var(--mut);font-size:12px}
+  @media (max-width:820px){.setup{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<header>
+  <h1>🧾 Tally Statutory Audit Assistant</h1>
+  <span class="sub">every ledger · every voucher · graded findings · <a href="/" style="color:inherit">← all tools</a></span>
+  <span style="margin-left:auto"><span class="dot" id="tdot"></span><span id="tstat" class="sub">checking Tally…</span></span>
+</header>
+<main>
+  <div class="card">
+    <div class="grid setup">
+      <div><label>Tally URL</label><input id="tallyUrl" placeholder="http://localhost:9000"></div>
+      <div><label>Company (leave blank = the open company)</label>
+        <div style="display:flex;gap:6px"><select id="company"><option value="">(the open company)</option></select>
+        <button class="sec" id="refreshCo" title="Re-read companies from Tally">↻</button></div></div>
+      <div><label>From</label><input type="date" id="from"></div>
+      <div><label>To</label><input type="date" id="to"></div>
+      <div><button id="run">Run audit</button></div>
+    </div>
+    <div class="prog" id="prog">
+      <div class="steps" id="psteps"></div>
+      <div><span id="ptext"></span><span class="pmeta" id="pmeta"></span></div>
+      <div class="bar"><i id="pbar"></i></div>
+    </div>
+    <div class="err" id="perr"></div>
+    <details style="margin-top:10px"><summary class="muted">Audit settings — materiality, thresholds, related-party keywords, MSME names</summary>
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr));margin-top:10px" id="setgrid">
+        <div><label>Materiality</label><select id="materialityMode"><option value="auto">Auto (ICAI benchmarks)</option><option value="manual">Manual</option></select></div>
+        <div><label>Manual materiality ₹</label><input type="number" id="materialityValue"></div>
+        <div><label>% of turnover</label><input type="number" id="pctTurnover" step="0.1"></div>
+        <div><label>% of PBT</label><input type="number" id="pctPBT" step="0.1"></div>
+        <div><label>% of total assets</label><input type="number" id="pctAssets" step="0.1"></div>
+        <div><label>Performance materiality %</label><input type="number" id="perfPct"></div>
+        <div><label>Cash payment limit (40A(3)) ₹</label><input type="number" id="cashPaymentLimit"></div>
+        <div><label>Cash receipt limit (269ST) ₹</label><input type="number" id="cashReceiptLimit"></div>
+        <div><label>Cash loan limit (269SS/T) ₹</label><input type="number" id="cashLoanLimit"></div>
+        <div><label>MSME days</label><input type="number" id="msmeDays"></div>
+        <div><label>Narration needed above ₹</label><input type="number" id="narrationMin"></div>
+        <div><label>Round-sum multiple ₹</label><input type="number" id="roundUnit"></div>
+        <div><label>Round-sum minimum ₹</label><input type="number" id="roundMin"></div>
+        <div><label>Year-end window (days)</label><input type="number" id="yearEndDays"></div>
+        <div><label>Dormant balance above ₹</label><input type="number" id="dormantMin"></div>
+        <div><label>Weekly off</label><select id="weeklyOff"><option value="sun">Sunday</option><option value="sat-sun">Sat + Sun</option><option value="none">None</option></select></div>
+        <div style="grid-column:1/-1"><label>Extra holidays (yyyy-mm-dd, comma separated)</label><input id="holidays"></div>
+        <div style="grid-column:1/-1"><label>Related-party keywords (comma separated)</label><input id="rptKeywords"></div>
+        <div style="grid-column:1/-1"><label>Related-party ledger names declared by management</label><input id="rptNames"></div>
+        <div style="grid-column:1/-1"><label>Confirmed MSME supplier ledger names</label><input id="msmeNames"></div>
+      </div>
+      <div style="margin-top:10px"><button class="sec" id="saveSet">Save settings</button> <span class="muted" id="savedMsg"></span></div>
+    </details>
+  </div>
+
+  <div id="overview" style="display:none">
+    <div class="grid kpis" id="kpis"></div>
+    <div class="card" id="matcard" style="margin-top:14px"></div>
+  </div>
+
+  <nav class="tabs" id="tabs" style="display:none">
+    <button data-t="findings" class="on">Findings</button>
+    <button data-t="analytics">Analytics</button>
+    <button data-t="tb">Trial balance</button>
+    <button data-t="sampling">Sampling</button>
+    <button data-t="checklist">Audit checklist</button>
+    <button data-t="report">Report</button>
+  </nav>
+  <div id="tab-findings" class="tab"></div>
+  <div id="tab-analytics" class="tab" style="display:none"></div>
+  <div id="tab-tb" class="tab" style="display:none"></div>
+  <div id="tab-sampling" class="tab" style="display:none"></div>
+  <div id="tab-checklist" class="tab" style="display:none"></div>
+  <div id="tab-report" class="tab" style="display:none"></div>
+  <footer>Runs entirely on this computer — the books never leave it. Findings are audit LEADS for professional judgement, not conclusions.</footer>
+</main>
+<script src="/session.js" defer></script>
+<script>
+// The page is served from apps.knapadvisory.com; the engine (this page's API)
+// is the KNAP Tally Audit Engine, run on THIS computer by the KNAP Tally
+// Connector. All books data flows browser ↔ engine ↔ Tally — never the server.
+var AUDIT_API = localStorage.getItem('knap_audit_url') || 'http://127.0.0.1:8799';
+
+// One-time setup screen when no engine answers on this machine.
+(function () {
+  function overlay(msg) {
+    var d = document.createElement('div');
+    d.id = 'conn-setup';
+    d.style.cssText = 'position:fixed;inset:0;background:var(--bg,#f4f6f9);z-index:900;display:flex;align-items:center;justify-content:center;padding:24px';
+    d.innerHTML =
+      '<div style="max-width:540px;background:#fff;border:1px solid var(--line,#e3e8ef);border-radius:14px;padding:32px;box-shadow:0 8px 30px rgba(20,25,45,.12)">' +
+      '<h2 style="margin:0 0 6px;font-size:18px">🔌 ' + msg + '</h2>' +
+      '<p style="margin:0 0 16px;color:var(--muted,#68788c);font-size:13.5px">This tool works with Tally Prime on the computer it runs on. The KNAP Tally Connector must be installed once — after that, this page just works. Already installed it for the GSTR-2B tool? It adds the audit engine by itself within a few hours — or just re-run the installer to get it now.</p>' +
+      '<ol style="margin:0 0 18px 18px;font-size:13.5px;line-height:1.9">' +
+      '<li>Install <b>Node.js (LTS)</b> from <a href="https://nodejs.org" target="_blank" rel="noopener">nodejs.org</a> (one time, skip if done)</li>' +
+      '<li><a href="/connector/Install-Tally-Connector.bat" download><b>Download the connector installer</b></a> and double-click it</li>' +
+      '<li>Make sure Tally Prime is open with the company loaded</li>' +
+      '<li>Press <b>Retry</b> below</li></ol>' +
+      '<div style="display:flex;gap:10px">' +
+      '<button onclick="location.reload()" style="font:inherit;font-weight:600;padding:9px 18px;border-radius:9px;border:0;background:#1a56db;color:#fff;cursor:pointer">↻ Retry</button>' +
+      '<a href="/" style="font:inherit;font-weight:600;font-size:13.5px;padding:9px 18px;border-radius:9px;border:1px solid var(--line,#e3e8ef);color:var(--text,#1c2733);text-decoration:none">← All tools</a>' +
+      '</div></div>';
+    document.body.appendChild(d);
+  }
+  var ctl = new AbortController();
+  setTimeout(function () { ctl.abort(); }, 3000);
+  fetch(AUDIT_API + '/health', { signal: ctl.signal })
+    .then(function (r) { if (!r.ok) throw 0; })
+    .catch(function () { overlay('Tally audit engine not found on this computer'); });
+})();
+'use strict';
+var STATE = null, RESULT = null, TICKS = {};
+function $(id){ return document.getElementById(id); }
+function h(s){ return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function fmt(v){
+  if (typeof v === 'number') {
+    var s = Math.abs(v).toLocaleString('en-IN', {maximumFractionDigits:2});
+    return v < 0 ? '\u2212' + s : s;
+  }
+  return h(v);
+}
+function isNum(v){ return typeof v === 'number'; }
+function api(path, body){
+  var opt = body ? {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify(body)} : {};
+  return fetch(AUDIT_API + path, opt).then(function(r){ return r.json(); });
+}
+var SEVL = {high:'High', medium:'Medium', low:'Low', info:'Info', ok:'Clean', na:'N/A', error:'Error'};
+function chip(sev){ return '<span class="chip ' + sev + '">' + SEVL[sev] + '</span>'; }
+
+// ------------------------------- boot ---------------------------------------
+function init(){
+  api('/api/state').then(function(st){
+    STATE = st; TICKS = st.ticks || {};
+    var s = st.settings;
+    var ids = ['tallyUrl','materialityMode','materialityValue','pctTurnover','pctPBT','pctAssets','perfPct',
+      'cashPaymentLimit','cashReceiptLimit','cashLoanLimit','msmeDays','narrationMin','roundUnit','roundMin',
+      'yearEndDays','dormantMin','weeklyOff','holidays','rptKeywords','rptNames','msmeNames'];
+    ids.forEach(function(k){ if ($(k)) $(k).value = s[k]; });
+    $('from').value = s.fyFrom || st.defaultFY.from;
+    $('to').value = s.fyTo || st.defaultFY.to;
+    loadCompanies();
+    renderChecklist();
+    if (st.hasResult) loadResult();
+    // If a run is already going (page refreshed mid-audit), pick it back up.
+    api('/api/progress').then(function(p){
+      if (p.active) { $('run').disabled = true; $('prog').style.display = 'block'; poll(); }
+    });
+  });
+}
+function loadCompanies(){
+  $('tstat').textContent = 'checking Tally\u2026';
+  api('/api/companies').then(function(r){
+    var sel = $('company'), keep = STATE.settings.company || '';
+    sel.innerHTML = '<option value="">(the open company)</option>';
+    if (r.ok) {
+      $('tdot').className = 'dot on'; $('tstat').textContent = 'Tally connected \u00b7 ' + r.companies.length + ' company(ies) open';
+      r.companies.forEach(function(c){
+        var o = document.createElement('option'); o.value = c.name; o.textContent = c.name; sel.appendChild(o);
+      });
+    } else {
+      $('tdot').className = 'dot off'; $('tstat').textContent = 'Tally not reachable';
+    }
+    if (keep) { sel.value = keep; if (sel.value !== keep) { var o2 = document.createElement('option'); o2.value = keep; o2.textContent = keep; sel.appendChild(o2); sel.value = keep; } }
+  });
+}
+$('refreshCo').onclick = loadCompanies;
+$('saveSet').onclick = function(){ saveSettings().then(function(){ $('savedMsg').textContent = 'Saved \u2713'; setTimeout(function(){ $('savedMsg').textContent=''; }, 1500); }); };
+function saveSettings(){
+  var body = { company: $('company').value, fyFrom: $('from').value, fyTo: $('to').value };
+  ['tallyUrl','materialityMode','materialityValue','pctTurnover','pctPBT','pctAssets','perfPct',
+   'cashPaymentLimit','cashReceiptLimit','cashLoanLimit','msmeDays','narrationMin','roundUnit','roundMin',
+   'yearEndDays','dormantMin','weeklyOff','holidays','rptKeywords','rptNames','msmeNames'].forEach(function(k){ body[k] = $(k).value; });
+  return api('/api/settings', body).then(function(r){ STATE.settings = r.settings; });
+}
+
+// ------------------------------- run ----------------------------------------
+$('run').onclick = function(){
+  saveSettings().then(function(){
+    return api('/api/run', {from: $('from').value, to: $('to').value});
+  }).then(function(r){
+    if (!r.ok) { showErr(r.error); return; }
+    $('run').disabled = true; $('perr').style.display = 'none';
+    $('prog').style.display = 'block';
+    poll();
+  });
+};
+function showErr(t){ $('perr').textContent = t; $('perr').style.display = 'block'; $('prog').style.display = 'none'; $('run').disabled = false; }
+var STEP_NAMES = ['Group masters', 'Ledger masters', 'Vouchers', 'Bill-wise dues', 'Audit checks'];
+function drawProgress(p){
+  var out = '', i, n, cls, done;
+  for (i = 0; i < STEP_NAMES.length; i++) {
+    n = i + 1;
+    done = p.phase === 'done' || n < p.step;
+    cls = 'stp' + (done ? ' done' : n === p.step ? ' cur' : '');
+    out += '<span class="' + cls + '">' + (done ? '\u2713 ' : '') + n + '. ' + STEP_NAMES[i] + '</span>';
+  }
+  $('psteps').innerHTML = out;
+  var pct = 2;
+  if (p.step === 1) pct = 5;
+  else if (p.step === 2) pct = 14;
+  else if (p.step === 3) pct = 30 + (p.monthsTotal ? Math.round(56 * p.monthsDone / p.monthsTotal) : 0);
+  else if (p.step === 4) pct = 89;
+  else if (p.step === 5) pct = 95;
+  if (p.phase === 'done') pct = 100;
+  $('pbar').style.width = pct + '%';
+  $('ptext').textContent = p.phase +
+    (p.step === 3 && p.monthsTotal ? ' \u2014 month ' + p.monthsDone + '/' + p.monthsTotal : '');
+  var meta = [];
+  if (p.vouchers) meta.push(p.vouchers.toLocaleString('en-IN') + ' vouchers');
+  if (p.bytes) meta.push((p.bytes < 1048576 ? Math.round(p.bytes / 1024) + ' KB' : (p.bytes / 1048576).toFixed(1) + ' MB') + ' from Tally');
+  if (p.startedAt) {
+    var s = Math.max(0, Math.round((Date.now() - p.startedAt) / 1000));
+    meta.push(Math.floor(s / 60) + ':' + ('0' + (s % 60)).slice(-2) + ' elapsed');
+  }
+  $('pmeta').textContent = meta.join(' \u00b7 ');
+}
+function poll(){
+  api('/api/progress').then(function(p){
+    if (p.phase === 'error') { showErr(p.error || 'Run failed'); return; }
+    drawProgress(p);
+    if (p.phase === 'done') { $('run').disabled = false; $('prog').style.display = 'none'; loadResult(); return; }
+    if (!p.active && p.phase !== 'done') { showErr(p.error || 'Run stopped'); return; }
+    setTimeout(poll, 600);
+  });
+}
+function loadResult(){
+  api('/api/result').then(function(r){
+    if (!r.ok) return;
+    RESULT = r.result; RESULT._trimmed = r.trimmed;
+    renderAll();
+  });
+}
+
+// ------------------------------ render --------------------------------------
+function renderAll(){
+  $('overview').style.display = 'block';
+  $('tabs').style.display = 'flex';
+  renderOverview(); renderFindings(); renderAnalytics(); renderTB(); renderSampling(); renderChecklist(); renderReport();
+}
+document.querySelectorAll('nav.tabs button').forEach(function(b){
+  b.onclick = function(){
+    document.querySelectorAll('nav.tabs button').forEach(function(x){ x.className = ''; });
+    b.className = 'on';
+    document.querySelectorAll('.tab').forEach(function(t){ t.style.display = 'none'; });
+    $('tab-' + b.dataset.t).style.display = 'block';
+  };
+});
+function kpi(label, val, cls){ return '<div class="kpi ' + (cls||'') + '"><span class="muted">' + label + '</span><b>' + val + '</b></div>'; }
+function renderOverview(){
+  var c = RESULT.counts, m = RESULT.materiality, t = RESULT.totals;
+  $('kpis').innerHTML =
+    kpi('Vouchers examined', c.vouchers.toLocaleString('en-IN')) +
+    kpi('Ledgers', c.ledgers.toLocaleString('en-IN')) +
+    kpi('High findings', c.high, 'hi') +
+    kpi('Medium findings', c.medium, 'md') +
+    kpi('Low findings', c.low, 'lo') +
+    kpi('Cancelled / optional', c.cancelled + ' / ' + c.optional);
+  $('matcard').innerHTML =
+    '<b>' + h(RESULT.company) + '</b> \u00b7 ' + h(RESULT.from) + ' \u2192 ' + h(RESULT.to) +
+    ' \u00b7 generated ' + h(RESULT.generatedAt.replace('T',' ').slice(0,16)) +
+    (RESULT._trimmed ? ' <span class="chip na">restored — detail rows trimmed, re-run for full drill-down</span>' : '') +
+    '<table class="mat" style="margin-top:8px"><tr>' +
+    '<td>Overall materiality<br><b>\u20b9' + fmt(m.om) + '</b> <span class="muted">(' + h(m.basis) + ')</span></td>' +
+    '<td>Performance materiality<br><b>\u20b9' + fmt(m.pm) + '</b></td>' +
+    '<td>Clearly trivial<br><b>\u20b9' + fmt(m.trivial) + '</b></td>' +
+    '<td>Turnover<br><b>\u20b9' + fmt(t.turnover) + '</b></td>' +
+    '<td>PBT (per books)<br><b class="' + (t.pbt < 0 ? 'neg' : '') + '">\u20b9' + fmt(t.pbt) + '</b></td>' +
+    '<td>Gross assets<br><b>\u20b9' + fmt(t.assets) + '</b></td>' +
+    '</tr></table>';
+}
+function rowsTable(rows){
+  if (!rows || !rows.length) return '';
+  var cols = []; rows.forEach(function(r){ Object.keys(r).forEach(function(k){ if (cols.indexOf(k) < 0) cols.push(k); }); });
+  var out = '<div class="tblwrap"><table><tr>';
+  cols.forEach(function(c){ out += '<th class="' + (rows.some(function(r){ return isNum(r[c]); }) ? 'num' : '') + '">' + h(c) + '</th>'; });
+  out += '</tr>';
+  rows.forEach(function(r){
+    out += '<tr>';
+    cols.forEach(function(c){
+      var v = r[c];
+      out += '<td class="' + (isNum(v) ? 'num' : '') + (isNum(v) && v < 0 ? ' neg' : '') + '">' + (v === undefined ? '' : fmt(v)) + '</td>';
+    });
+    out += '</tr>';
+  });
+  return out + '</table></div>';
+}
+function renderFindings(){
+  var f = RESULT.findings;
+  var areas = []; f.forEach(function(x){ if (areas.indexOf(x.area) < 0) areas.push(x.area); });
+  var el = $('tab-findings');
+  var html = '<div class="filters">' +
+    '<select id="fSev"><option value="">All severities</option><option>high</option><option>medium</option><option>low</option><option>info</option></select>' +
+    '<select id="fArea"><option value="">All areas</option>' + areas.map(function(a){ return '<option>' + h(a) + '</option>'; }).join('') + '</select>' +
+    '<input id="fText" placeholder="search checks…" style="min-width:180px">' +
+    '<label style="display:flex;align-items:center;gap:5px;margin:0"><input type="checkbox" id="fClean" style="width:14px;height:14px"> show passed checks</label>' +
+    '<a class="muted" href="' + AUDIT_API + '/api/export/findings.csv">\u2b07 findings.csv</a>' +
+    '</div><div id="flist"></div>';
+  el.innerHTML = html;
+  ['fSev','fArea','fText','fClean'].forEach(function(id){ $(id).oninput = drawFindings; });
+  drawFindings();
+}
+function drawFindings(){
+  var f = RESULT.findings, sev = $('fSev').value, area = $('fArea').value,
+      q = $('fText').value.toLowerCase(), clean = $('fClean').checked;
+  var out = '';
+  f.forEach(function(x){
+    if (!clean && x.status !== 'issue' && x.status !== 'error') return;
+    if (sev && x.severity !== sev) return;
+    if (area && x.area !== area) return;
+    if (q && (x.title + ' ' + x.area + ' ' + x.ref).toLowerCase().indexOf(q) < 0) return;
+    var st = x.status === 'issue' ? x.severity : x.status;
+    out += '<details class="f" id="chk-' + x.id + '"' + (x.status === 'issue' && x.severity === 'high' ? ' open' : '') + '>' +
+      '<summary>' + chip(st) + '<b>' + h(x.title) + '</b>' +
+      '<span class="muted">' + h(x.area) + ' \u00b7 Phase ' + x.phase + '</span>' +
+      '<span class="cnt">' + (x.status === 'issue' ? x.count.toLocaleString('en-IN') + ' instance(s)' : SEVL[x.status] || x.status) + '</span></summary>' +
+      '<div class="body"><div class="ref">' + h(x.ref) + '</div>' +
+      (x.summary ? '<p style="margin:6px 0">' + h(x.summary) + '</p>' : '') +
+      (x.rows.length ? rowsTable(x.rows) +
+        (x.count > x.rows.length ? '<p class="muted">showing ' + x.rows.length + ' of ' + x.count.toLocaleString('en-IN') + ' \u2014 full list in the CSV</p>' : '') +
+        '<p><a href="' + AUDIT_API + '/api/export/check.csv?id=' + x.id + '">\u2b07 download rows (CSV)</a></p>' : '') +
+      '<div class="rec"><b>Action:</b> ' + h(x.rec) + '</div>' +
+      '</div></details>';
+  });
+  $('flist').innerHTML = out || '<p class="muted">Nothing matches the filter' + (clean ? '' : ' \u2014 tick \u201cshow passed checks\u201d to see the clean ones') + '.</p>';
+}
+function renderAnalytics(){
+  var a = RESULT.analytics, el = $('tab-analytics');
+  var html = '<div class="card"><h3 style="margin:4px 0 8px">Key ratios</h3>' +
+    rowsTable(a.ratios) + '<p class="muted">Computed purely from the books read out of Tally \u2014 recompute after audit adjustments.</p></div>';
+  if (a.trend.length) {
+    var W = 900, H = 190, P = 30, n = a.trend.length;
+    var max = 1; a.trend.forEach(function(m){ max = Math.max(max, m.sales, m.expenses + m.purchases); });
+    var bw = (W - P * 2) / n;
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + (H + 30) + '" style="width:100%;max-width:960px">';
+    a.trend.forEach(function(m, i){
+      var x = P + i * bw;
+      var hs = Math.round((H - 10) * m.sales / max), he = Math.round((H - 10) * (m.expenses + m.purchases) / max);
+      svg += '<rect x="' + (x + bw*0.12) + '" y="' + (H - hs) + '" width="' + bw*0.3 + '" height="' + hs + '" fill="#1a56db" rx="2"><title>Sales ' + m.month + ': ' + fmt(m.sales) + '</title></rect>';
+      svg += '<rect x="' + (x + bw*0.5) + '" y="' + (H - he) + '" width="' + bw*0.3 + '" height="' + he + '" fill="#ef6c00" rx="2"><title>Purchases+expenses ' + m.month + ': ' + fmt(m.purchases + m.expenses) + '</title></rect>';
+      svg += '<text x="' + (x + bw/2) + '" y="' + (H + 14) + '" text-anchor="middle">' + m.month + '</text>';
+    });
+    svg += '</svg>';
+    html += '<div class="card"><h3 style="margin:4px 0 2px">Monthly trend</h3>' +
+      '<p class="muted"><span style="color:#1a56db">\u25a0</span> sales &nbsp; <span style="color:#ef6c00">\u25a0</span> purchases + expenses</p>' + svg + '</div>';
+  }
+  el.innerHTML = html;
+}
+function renderTB(){
+  var el = $('tab-tb');
+  if (!RESULT.tb || !RESULT.tb.length) {
+    el.innerHTML = '<div class="card"><p class="muted">Trial balance detail is kept only in memory \u2014 re-run the audit to load it.</p></div>';
+    return;
+  }
+  el.innerHTML = '<div class="card"><div class="filters"><input id="tbq" placeholder="filter ledgers / groups…" style="min-width:240px">' +
+    '<a class="muted" href="' + AUDIT_API + '/api/export/tb.csv">\u2b07 trial-balance.csv</a></div><div id="tblist"></div></div>';
+  $('tbq').oninput = drawTB;
+  drawTB();
+}
+function drawTB(){
+  var q = $('tbq').value.toLowerCase();
+  var rows = RESULT.tb.filter(function(r){ return !q || (r.Ledger + ' ' + r.Group).toLowerCase().indexOf(q) >= 0; });
+  var tot = {Opening:0, Debit:0, Credit:0, Closing:0};
+  rows.forEach(function(r){ tot.Opening += r.Opening; tot.Debit += r.Debit; tot.Credit += r.Credit; tot.Closing += r.Closing; });
+  var shown = rows.slice(0, 1500);
+  var trs = shown.map(function(r){
+    return '<tr><td>' + h(r.Ledger) + '</td><td>' + h(r.Group) + '</td>' +
+      ['Opening','Debit','Credit','Closing'].map(function(k){ return '<td class="num' + (r[k] < 0 ? ' neg' : '') + '">' + fmt(r[k]) + '</td>'; }).join('') + '</tr>';
+  }).join('');
+  $('tblist').innerHTML = '<p class="muted">' + rows.length.toLocaleString('en-IN') + ' ledger(s)' +
+    (shown.length < rows.length ? ' \u2014 showing first ' + shown.length + ', refine the filter or use the CSV' : '') +
+    ' \u00b7 balances are Dr-positive / Cr-negative for the audit period</p>' +
+    '<div class="tblwrap"><table><tr><th>Ledger</th><th>Group</th><th class="num">Opening</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Closing</th></tr>' +
+    trs + '<tr style="font-weight:700;background:#f0f3f6"><td colspan="2">Totals (filtered)</td>' +
+    ['Opening','Debit','Credit','Closing'].map(function(k){ return '<td class="num">' + fmt(Math.round(tot[k]*100)/100) + '</td>'; }).join('') + '</tr></table></div>';
+}
+function renderSampling(){
+  var s = RESULT.sampling, el = $('tab-sampling');
+  el.innerHTML = '<div class="card"><h3 style="margin:4px 0 8px">SA 530 vouching sample</h3>' +
+    '<p class="muted">Population ' + s.populationCount.toLocaleString('en-IN') + ' vouchers worth \u20b9' + fmt(s.populationValue) +
+    ' \u00b7 ' + s.keyCount + ' key item(s) \u2265 performance materiality (\u20b9' + fmt(RESULT.materiality.pm) + ') worth \u20b9' + fmt(s.keyValue) +
+    ' \u00b7 monetary-unit sampling interval \u20b9' + fmt(s.interval) + '</p>' +
+    rowsTable(s.rows) +
+    '<p><a href="' + AUDIT_API + '/api/export/sampling.csv">\u2b07 sampling.csv</a> \u2014 vouch each item to complete external evidence and note results against it.</p></div>';
+}
+function renderChecklist(){
+  var el = $('tab-checklist');
+  if (!STATE) return;
+  var fmap = {};
+  if (RESULT) RESULT.findings.forEach(function(f){ fmap[f.id] = f; });
+  var html = '<p class="muted">The statutory-audit programme, phase by phase. \u2699 items are tested automatically by this tool \u2014 click a pill to jump to the finding. Ticks save per company + FY.</p>';
+  STATE.checklist.forEach(function(ph){
+    var done = ph.items.filter(function(it){ return TICKS[it.id]; }).length;
+    html += '<div class="phase"><h3>Phase ' + ph.phase + ' \u00b7 ' + h(ph.title) +
+      '<span class="cnt">' + done + '/' + ph.items.length + ' done</span></h3><div class="items">';
+    ph.items.forEach(function(it){
+      var autos = '';
+      (it.auto || []).forEach(function(id){
+        var f = fmap[id];
+        if (!f) { autos += '<span class="pill">\u2699 ' + id + '</span>'; return; }
+        if (f.status === 'issue' && f.severity !== 'info')
+          autos += '<span class="pill issue ' + f.severity + '" onclick="jumpCheck(\'' + id + '\')">\u26a0 ' + h(f.title) + ' (' + f.count + ')</span>';
+        else
+          autos += '<span class="pill okp" onclick="jumpCheck(\'' + id + '\')">\u2713 ' + h(f.title) + '</span>';
+      });
+      html += '<div class="item"><input type="checkbox" data-cl="' + it.id + '"' + (TICKS[it.id] ? ' checked' : '') + '>' +
+        '<div class="t">' + h(it.text) + (autos ? '<div class="auto">' + autos + '</div>' : '') + '</div></div>';
+    });
+    html += '</div></div>';
+  });
+  el.innerHTML = html;
+  el.querySelectorAll('input[data-cl]').forEach(function(cb){
+    cb.onchange = function(){
+      api('/api/checklist', {id: cb.dataset.cl, done: cb.checked}).then(function(r){ TICKS = r.ticks; renderChecklist(); });
+    };
+  });
+}
+function jumpCheck(id){
+  document.querySelector('nav.tabs button[data-t=findings]').click();
+  $('fClean').checked = true; drawFindings();
+  var d = $('chk-' + id);
+  if (d) { d.open = true; d.scrollIntoView({behavior:'smooth', block:'center'}); }
+}
+function renderReport(){
+  var c = RESULT.counts, el = $('tab-report');
+  var his = RESULT.findings.filter(function(f){ return f.status === 'issue' && f.severity === 'high'; });
+  el.innerHTML = '<div class="card"><h3 style="margin:4px 0 8px">Deliverables</h3>' +
+    '<p><a href="' + AUDIT_API + '/api/export/letter.html" target="_blank"><b>\ud83d\udcc4 Management letter (draft)</b></a> \u2014 printable audit-observations letter built from the findings.</p>' +
+    '<p><a href="' + AUDIT_API + '/api/export/findings.csv">\u2b07 All findings (CSV)</a> \u00b7 <a href="' + AUDIT_API + '/api/export/sampling.csv">\u2b07 Vouching sample (CSV)</a> \u00b7 <a href="' + AUDIT_API + '/api/export/tb.csv">\u2b07 Trial balance (CSV)</a></p>' +
+    '<h3>Summary</h3><p>' + c.issues + ' finding(s) need attention: <b class="neg">' + c.high + ' high</b>, ' + c.medium + ' medium, ' + c.low + ' low. ' +
+    (his.length ? 'Deal with the high items first:' : 'No high-severity items \u2014 clear the medium list next.') + '</p>' +
+    (his.length ? '<ul>' + his.map(function(f){ return '<li><b>' + h(f.title) + '</b> \u2014 ' + f.count + ' instance(s) \u00b7 ' + h(f.ref) + '</li>'; }).join('') + '</ul>' : '') +
+    '<p class="muted">Remember: these are automated leads from the books alone. Physical verification, external confirmations, legal files and management explanations remain manual audit work \u2014 track them on the Audit checklist tab.</p></div>';
+}
+init();
+</script>
+</body>
+</html>

@@ -18,6 +18,7 @@ COPY parser/ ./parser/
 COPY index.html gate.html session.js ./
 COPY fee-parser/ ./fee-parser/
 COPY gstr2b/ ./gstr2b/
+COPY audit/ ./audit/
 COPY connector/ ./connector/
 COPY downloads/ ./downloads/
 

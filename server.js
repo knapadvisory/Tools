@@ -205,6 +205,10 @@ app.use('/gstr2b', express.static(path.join(__dirname, 'gstr2b'), {
   setHeaders: (res) => res.set(NO_CACHE),
 }));
 
+app.use('/audit', express.static(path.join(__dirname, 'audit'), {
+  setHeaders: (res) => res.set(NO_CACHE),
+}));
+
 // Tool files get replaced in-place on redeploys — never cache stale copies.
 // .bat / .mjs must download, not render as text in the browser.
 app.use('/downloads', express.static(path.join(__dirname, 'downloads'), {

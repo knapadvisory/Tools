@@ -44,6 +44,9 @@ if errorlevel 1 (
   exit /b 1
 )
 
+echo Downloading the audit engine...
+curl -fsSL "%HUB%/connector/knap-tally-audit-engine.mjs" -o "%DIR%\knap-tally-audit-engine.mjs"
+
 rem Keep the old standalone poster's memory if this PC used it (C:\TallyPoster):
 rem supplier mappings and the posted-documents register carry over.
 if not exist "%DIR%\gstr2b-tally-data.json" (
