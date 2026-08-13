@@ -431,6 +431,8 @@ function detectCompany(){
     company=c;
     if(c.start) document.getElementById('periodFrom').value=c.start;
     var end=c.lastVoucher||c.endingAt; if(end) document.getElementById('periodTo').value=end;
+    // entity name comes straight from Tally — no typing needed
+    var ent=document.getElementById('entity'); if(ent && !ent.value) ent.value=cleanCoName(c.name)||'';
     // chips
     document.getElementById('chipCo').textContent=cleanCoName(c.name)||'company';
     var fy=fyLabels(end); document.getElementById('chipFy').textContent=fy.cur;
@@ -483,8 +485,8 @@ function classifyFull(led){
     if(pg.indexOf('sales')>=0||pg.indexOf('direct income')>=0) return R(23,'high','Sales → Revenue from operations');
     if(pg.indexOf('indirect income')>=0) return R(24,'high','Indirect income → Other income');
     if(pg.indexOf('purchase')>=0) return R(25,'high','Purchases → Cost of materials');
-    if(has(gn,['salary','wages','bonus','staff','employee','provident','gratuity','esi','remuneration','stipend'])) return R(27,'high','Employee benefits');
-    if(has(gn,['interest','finance cost','bank charge','processing fee'])) return R(28,'high','Finance costs');
+    if(has(gn,['salar','wages','bonus','staff','employee','provident',' pf ','gratuity','esi','leave encash','remuneration','stipend','payroll','director sitting'])) return R(27,'high','Employee benefits');
+    if(has(gn,['interest','finance cost','bank charge','processing fee','loan processing'])) return R(28,'high','Finance costs');
     if(has(gn,['depreciation','amortis','amortiz'])) return R(12,'high','Depreciation');
     if(pg.indexOf('direct expense')>=0) return R(29,'high','Direct expense → Other expenses');
     return R(29,'low','Revenue-nature, no specific match → Other expenses');
@@ -535,6 +537,8 @@ function doRead(){
       clearInterval(poll); btn.disabled=false;
       if(!j.ok){ document.getElementById('msgTally').innerHTML='<span class="msg bad">'+(j.error||'Failed — is Tally open?')+'</span>'; return; }
       TB=j;
+      // remembered assignments from the connector become the starting overrides
+      if(j.savedMap){ Object.keys(j.savedMap).forEach(function(k){ overrides[k]=Number(j.savedMap[k]); }); }
       document.getElementById('msgTally').innerHTML='<span class="msg ok">✅ Read '+j.ledgers.length+' ledgers'+(j.voucherCount!=null?(' from '+j.voucherCount.toLocaleString('en-IN')+' vouchers'):'')+'.</span>';
       if(!document.getElementById('entity').value) document.getElementById('entity').value=cleanCoName(company&&company.name)||'';
       prepare();            /* classify + aggregate */
@@ -648,10 +652,10 @@ function renderVerify(){
   var p=prepared, items=[];
   // CRITICAL: balance sheet out
   if(Math.abs(p.diffCur)>=1) items.push(['CRITICAL','Balance Sheet is out by ₹'+acct(p.diffCur),'Assets do not equal equity + liabilities — usually an unmapped or mis-signed ledger.']);
-  // unplaced ledgers
+  // unplaced ledgers — show where Tally has them parked
   var un=TB.ledgers.filter(function(l){return l._note===99;});
   un.forEach(function(l){
-    if(Math.abs(l.current)>0) items.push(['CRITICAL',esc(l.name)+' · ₹'+acct(Math.abs(l.current))+' '+(l.current>=0?'Dr':'Cr'),'No Schedule III head fits — assign it before the set is final.']);
+    if(Math.abs(l.current)>0){ var path=bookedUnder(l); var under=path.length?('booked under '+esc(path.join(' › '))+' — '):''; items.push(['CRITICAL',esc(l.name)+' · ₹'+acct(Math.abs(l.current))+' '+(l.current>=0?'Dr':'Cr'),under+'no Schedule III head fits, assign it before the set is final.']); }
   });
   // low-confidence group
   var low=TB.ledgers.filter(function(l){return l._conf!=='high' && l._note!==99;});
@@ -706,24 +710,44 @@ function buildFinancials(){
   document.getElementById('msgPrep').innerHTML=okC?'<span class="msg ok">✅ Balance sheet tallies for the current period.</span>':'<span class="msg bad">⚠ Difference of ₹'+acct(Math.abs(prepared.diffCur))+' — resolve the flagged ledgers below.</span>';
   goStep(3);
 }
+/* the "Booked under" chain from Tally: ledger's own group … up to the primary
+   group. Falls back to group/primary on older connectors without groupPath. */
+function bookedUnder(l){
+  if(l.groupPath && l.groupPath.length) return l.groupPath;
+  var p=[]; if(l.group) p.push(l.group); if(l.primary && l.primary!==l.group) p.push(l.primary); return p;
+}
 function renderReview(){
   var rows=[];
   TB.ledgers.forEach(function(l){ if(l._note===99||l._conf!=='high'||overrides[l.name]!=null) rows.push(l); });
+  rows.sort(function(a,b){return Math.abs(b.current)-Math.abs(a.current);});
   var wrap=document.getElementById('reviewWrap'), pR=document.getElementById('pReview');
   if(!rows.length){ pR.classList.add('hidden'); return; }
   pR.classList.remove('hidden');
   var opts=NOTE_ORDER.filter(function(n){return n!==99;}).map(function(n){return '<option value="'+n+'">'+n+' · '+NOTES[n].head+'</option>';}).join('');
-  var h='<table class="fin"><thead><tr><th>Ledger</th><th>Tally group</th><th class="r">Amount (CY)</th><th>Placed in</th></tr></thead><tbody>';
+  var h='<table class="fin"><thead><tr><th>Ledger</th><th>Booked under (Tally)</th><th class="r">Amount (CY)</th><th>Remarks</th><th>Placed in</th></tr></thead><tbody>';
   rows.forEach(function(l){
     var cur=overrides[l.name]!=null?overrides[l.name]:classify(l);
-    h+='<tr><td>'+esc(l.name)+(l._note===99?'<span class="pill">unplaced</span>':(l._conf!=='high'?'<span class="pill">low conf.</span>':''))+'</td><td class="led">'+esc(l.primary||l.group)+'</td><td class="r">'+fmt(l.current)+'</td><td><select class="assign" data-n="'+esc(l.name)+'"><option value="">— keep guess ('+cur+') —</option>'+opts+'</select></td></tr>';
+    var path=bookedUnder(l);
+    var under=path.length?esc(path[0])+(path.length>1?('<span class="led"> › '+esc(path.slice(1).join(' › '))+'</span>'):''):'<span class="led">(no group)</span>';
+    var flag=l._note===99?'<span class="pill">unplaced</span>':(overrides[l.name]!=null?'<span class="pill" style="background:var(--ok-soft);color:var(--ok)">assigned</span>':(l._conf!=='high'?'<span class="pill">low conf.</span>':''));
+    var remark = l._note===99 ? 'No Schedule III head fits — pick one' :
+                 (overrides[l.name]!=null ? 'Your assignment' :
+                 (l._reason||'best guess')+' — confirm');
+    h+='<tr><td>'+esc(l.name)+' '+flag+'</td><td>'+under+'</td><td class="r">'+fmt(l.current)+'</td>'+
+       '<td class="led">'+remark+'</td>'+
+       '<td><select class="assign" data-n="'+esc(l.name)+'"><option value="">— keep guess ('+cur+' · '+esc(NOTES[cur].head)+') —</option>'+opts+'</select></td></tr>';
   });
   h+='</tbody></table>'; wrap.innerHTML=h;
   wrap.querySelectorAll('select.assign').forEach(function(s){ var c=overrides[s.getAttribute('data-n')]; if(c!=null)s.value=String(c); });
 }
 document.getElementById('saveMapBtn').onclick=function(){
-  document.querySelectorAll('#reviewWrap select.assign').forEach(function(s){ var name=s.getAttribute('data-n'); if(s.value) overrides[name]=Number(s.value); else delete overrides[name]; });
-  document.getElementById('msgMap').textContent='Re-prepared with your assignments.';
+  var changed={};
+  document.querySelectorAll('#reviewWrap select.assign').forEach(function(s){ var name=s.getAttribute('data-n'); if(s.value){ overrides[name]=Number(s.value); changed[name]=Number(s.value); } else { delete overrides[name]; changed[name]=''; } });
+  document.getElementById('msgMap').textContent='Saving to the connector…';
+  // persist on this machine so the assignments stick next time
+  fetch(API+'/api/fin/map',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({map:changed})})
+    .then(function(r){return r.json();}).then(function(){ document.getElementById('msgMap').textContent='Saved & re-prepared — remembered for next time.'; })
+    .catch(function(){ document.getElementById('msgMap').textContent='Re-prepared (couldn’t reach the connector to save).'; });
   prepare(); renderBS(); renderPL(); renderNotes(); renderReview(); renderReviewStep2();
 };
 function bsRow(label,note,cur,pri){ var c=(cur<0?'r neg':'r'), pc=(pri<0?'r neg py':'r py'); return '<tr><td>'+label+'</td><td class="note">'+(note||'')+'</td><td class="'+c+'">'+acct(cur)+'</td><td class="'+pc+'">'+acct(pri)+'</td></tr>'; }

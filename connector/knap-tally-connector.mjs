@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '3.7';
+const VERSION = '3.8';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -619,12 +619,31 @@ function parseGroups(xml) {
   return out;
 }
 
-// Walk a ledger's parent groups up to the reserved primary group.
+// A Tally primary (reserved top-level) group: no parent, or its parent is
+// Tally's "Primary" sentinel. Some Tally builds export the 28 reserved groups
+// with <PARENT>Primary</PARENT> rather than an empty parent, so we must stop
+// there — otherwise the walk climbs one step too far and returns "Primary" for
+// EVERY ledger, which then classifies nothing (all land in note 99).
+function isPrimaryGroup(g) {
+  return !g || !g.parent || /^primary$/i.test(g.parent);
+}
+// Walk a ledger's parent groups up to (and stopping at) the reserved primary
+// group — e.g. "Sundry Creditors" → "Current Liabilities", "AAJ ..." →
+// "Current Liabilities". Returns the primary group's name.
 function primaryGroupOf(groupName, groups, depth = 0) {
   if (!groupName || depth > 30) return groupName || '';
   const g = groups[groupName];
-  if (!g || !g.parent) return groupName; // no parent => this IS a primary group
+  if (isPrimaryGroup(g)) return groupName; // this group IS a primary group
   return primaryGroupOf(g.parent, groups, depth + 1);
+}
+// The full "Booked under" path from the ledger's own group up to the primary
+// group, e.g. ["Sundry Creditors","Current Liabilities"]. Lets the page show
+// exactly where a ledger is parked in Tally.
+function groupPathOf(groupName, groups, depth = 0) {
+  if (!groupName || depth > 30) return groupName ? [groupName] : [];
+  const g = groups[groupName];
+  if (isPrimaryGroup(g)) return [groupName];
+  return [groupName, ...groupPathOf(g.parent, groups, depth + 1)];
 }
 
 const LEDGER_GSTIN_REQUEST = () => `<ENVELOPE>
@@ -2201,6 +2220,26 @@ const server = http.createServer(async (req, res) => {
       }
       return;
     }
+    // Saved ledger → Schedule III note map, remembered on THIS machine so the
+    // reviewer's assignments stick across sessions and future reads.
+    if (req.method === 'GET' && url.pathname === '/api/fin/map') {
+      json(res, 200, { ok: true, map: state.finMap || {} });
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/api/fin/map') {
+      const body = JSON.parse(await readBody(req));
+      state.finMap = state.finMap || {};
+      if (body && body.map && typeof body.map === 'object') {
+        for (const k of Object.keys(body.map)) {
+          const v = body.map[k];
+          if (v == null || v === '') delete state.finMap[k];
+          else state.finMap[k] = Number(v);
+        }
+      }
+      saveState();
+      json(res, 200, { ok: true, map: state.finMap });
+      return;
+    }
     // Diagnostic: probe the FAST candidate ways to get balances (the bulk
     // ClosingBalance collection is known-slow), returning exactly what Tally
     // replies so we can pick the working method and parse its real structure.
@@ -2309,8 +2348,11 @@ const server = http.createServer(async (req, res) => {
           const m = masters[name] || { parent: '', openingDr: 0 };
           const mv = sums[name] || { dr: 0, priorDr: 0 };
           const open = m.openingDr || 0;
+          const path = groupPathOf(m.parent, groups); // ["Sundry Creditors","Current Liabilities"]
           return {
             name, group: m.parent, primary: primaryGroupOf(m.parent, groups),
+            groupPath: path,                  // full "Booked under" chain, ledger → primary
+            opening: r2(open),                // stored master opening balance (Dr +)
             isRevenue: !!(groups[m.parent] && anyRevenueAncestor(m.parent)),
             current: r2(open + mv.dr),        // closing at period-to
             prior: r2(open + mv.priorDr),     // balance at period-from
@@ -2331,6 +2373,7 @@ const server = http.createServer(async (req, res) => {
           voucherCount: cal.vouchers, duplicatesDropped: cal.dupes,
           monthsRead: monthsTotal, unflaggedEntries: cal.noFlag,
           tieCurrent, tiePrior,
+          savedMap: state.finMap || {},   // ledger → Schedule III note, remembered here
           ledgers,
         });
       } catch (e) {
