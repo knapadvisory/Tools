@@ -53,7 +53,8 @@
   <h1>GSTR-2B → Tally poster <span class="muted" style="font-size:13px;font-weight:400" id="conn-ver"></span>
   <a href="/" class="muted" style="font-size:12.5px;font-weight:400;float:right;text-decoration:none">← All tools</a></h1>
   <p class="sub">Everything runs on this computer only. Upload the portal's GSTR-2B JSON, review, tick, post to the open Tally company.
-    <span style="white-space:nowrap"><span id="tally-dot"></span><span id="tally-status">checking Tally…</span></span></p>
+    <span style="white-space:nowrap"><span id="tally-dot"></span><span id="tally-status">checking Tally…</span></span>
+    <button type="button" id="conn-upd" class="btn" style="margin-left:10px;padding:4px 12px;font-size:12px" onclick="updateConnector()" title="Fetch the newest connector/engine from the server right now — otherwise it updates itself within a few hours">⟳ Update connector</button></p>
   <div id="jarvis" class="muted" style="display:none;font-size:12px;margin:-12px 0 14px;line-height:1.7"></div>
 
   <div class="card"><details id="settings-box">
@@ -1266,9 +1267,48 @@ function rsRemark(r) {
   if (r.eligible === false) base += ' [ITC blocked]';
   return base;
 }
+// Update the local connector on demand: POST /update, then watch /health until
+// the version changes (or time out with advice). Wired to the header button.
+function updateConnector() {
+  var el = document.getElementById('conn-upd');
+  var was = '';
+  fetch(API + '/health').then(function (r) { return r.json(); }).then(function (h) {
+    was = h.version || '';
+    el.disabled = true; el.textContent = '⏳ Updating…';
+    return fetch(API + '/update', { method: 'POST' });
+  }).then(function () {
+    var tries = 0;
+    var t = setInterval(function () {
+      tries++;
+      fetch(API + '/health').then(function (r) { return r.json(); }).then(function (h) {
+        if (h.version && h.version !== was) {
+          clearInterval(t); el.disabled = false; el.textContent = '⟳ Update connector';
+          document.getElementById('bar-msg').textContent = '✅ Connector updated to v' + h.version + ' — press 🔁 Reconcile with Tally to refresh the data.';
+        }
+      }).catch(function () { /* restarting between versions — keep polling */ });
+      if (tries > 30) { // ~90s: either already newest or the run-loop is not running
+        clearInterval(t); el.disabled = false; el.textContent = '⟳ Update connector';
+        document.getElementById('bar-msg').textContent = 'Connector is v' + was + ' — already the newest, or it could not restart (re-run the installer on this PC if an update was expected).';
+      }
+    }, 3000);
+  }).catch(function () {
+    el.disabled = false; el.textContent = '⟳ Update connector';
+    document.getElementById('bar-msg').textContent = 'Connector not reachable on this computer.';
+  });
+}
+
 function downloadRecoSheet() {
   if (typeof ExcelJS === 'undefined') { alert('Excel library still loading — try again in a moment.'); return; }
   if (!reco || !reco.raw || !(reco.raw.docs || []).length) { alert('Run 🔁 Reconcile with Tally first.'); return; }
+  // The build takes a few seconds on big reconciles — say so, then build on
+  // the next tick so the message actually paints before the work starts.
+  document.getElementById('bar-msg').textContent = '⏳ Generating the reco sheet — please wait, the download starts by itself…';
+  setTimeout(function () {
+    try { buildRecoSheet(); }
+    catch (e) { document.getElementById('bar-msg').textContent = 'Could not build the sheet: ' + e.message; }
+  }, 60);
+}
+function buildRecoSheet() {
   // Books-side names/dates arrive with connector v2.3+ — older reconcile data
   // has the amounts but not the identity. Say so instead of exporting blanks.
   var matchedRows = (reco.raw.docs || []).filter(function (r) { return r.bookRef; });
@@ -1282,7 +1322,7 @@ function downloadRecoSheet() {
     var tax2b = r2((d.igst || 0) + (d.cgst || 0) + (d.sgst || 0) + (d.cess || 0));
     var docNo = (d.type === 'creditnote' ? 'CN: ' : d.type === 'debitnote' ? 'DN: ' : '') + (d.no || '');
     rows.push({
-      x: { own: d.own || r.own || '', gstin: d.gstin || '', party: d.name || '', no: docNo, pd: rsDate(d.dt), val: d.val ?? '', txval: d.txval ?? '', igst: d.igst || 0, cgst: d.cgst || 0, sgst: d.sgst || 0, tax: tax2b, rcm: d.rcm ? 'Yes' : '', period: d.period || '' },
+      x: { own: d.own || r.own || '', gstin: d.gstin || '', party: d.name || '', no: docNo, pd: rsDate(d.date || d.dt), val: d.val ?? '', txval: d.txval ?? '', igst: d.igst || 0, cgst: d.cgst || 0, sgst: d.sgst || 0, tax: tax2b, rcm: d.rcm ? 'Yes' : '', period: d.period || '' },
       b: r.bookRef != null && r.bookRef !== '' ? { regn: r.bookRegn || '', gstin: r.bookGstin || '', pd: rsDate(r.bookDate), party: r.bookParty || '', vch: r.bookRef || '', igst: (typeof r.bookIgst === 'number' ? r.bookIgst : null), cgst: (typeof r.bookCgst === 'number' ? r.bookCgst : null), sgst: (typeof r.bookSgst === 'number' ? r.bookSgst : null), tax: (typeof r.bookTax === 'number' ? r.bookTax : null), txval: (typeof r.bookTaxable === 'number' ? r.bookTaxable : null) } : null,
       rem: rsRemark(r), note: r.note || '',
     });
@@ -1383,6 +1423,31 @@ function downloadRecoSheet() {
   ws.getCell('D' + rr).value = { formula: 'SUM(D' + first + ':D' + (rr - 1) + ')', result: r2(sTax) }; ws.getCell('D' + rr).numFmt = '#,##0.00';
   ws.getCell('E' + rr).value = { formula: 'SUM(E' + first + ':E' + (rr - 1) + ')', result: r2(sAc) }; ws.getCell('E' + rr).numFmt = '#,##0.00';
   ['B', 'C', 'D', 'E'].forEach(function (col) { var c = ws.getCell(col + rr); c.font = { bold: true, size: 9 }; c.border = { top: { style: 'thin' } }; });
+  // ---- How the gap is made up (the original tool's on-screen bridge, as live formulas)
+  var nbAc = 0, boAc = 0;
+  rows.forEach(function (r) {
+    var ac = ((r.x ? r.x.tax : 0) || 0) - ((r.b && typeof r.b.tax === 'number') ? r.b.tax : 0);
+    if (r.rem.indexOf('not booked in tally') === 0) nbAc += ac;
+    else if (r.rem === 'booked, but not in 2B') boAc += ac;
+  });
+  var mnAc = sAc - nbAc - boAc;
+  rr += 2;
+  ws.getCell('B' + rr).value = 'How the gap is made up'; ws.getCell('B' + rr).font = { bold: true, size: 10, color: { argb: 'FF1F4E78' } }; rr++;
+  var b1 = rr, b2 = rr + 1, b3 = rr + 2, b4 = rr + 3;
+  var bridge = [
+    ['In 2B, not booked in tally', 'SUMIF($T$2:$T$' + last + ',"not booked in tally*",$Q$2:$Q$' + last + ')', r2(nbAc)],
+    ['Booked, but not in 2B (books only)', 'SUMIF($T$2:$T$' + last + ',"booked, but not in 2B",$Q$2:$Q$' + last + ')', r2(boAc)],
+    ['Net mismatch on matched rows', 'SUM($Q$2:$Q$' + last + ')-E' + b1 + '-E' + b2, r2(mnAc)],
+    ['= Total gap (GST 2B − GST as per Books)', 'SUM($Q$2:$Q$' + last + ')', r2(sAc)],
+  ];
+  bridge.forEach(function (br, i) {
+    var R = rr + i;
+    ws.getCell('B' + R).value = br[0]; ws.getCell('B' + R).font = { size: 9, bold: i === 3 };
+    ws.getCell('E' + R).value = { formula: br[1], result: br[2] };
+    ws.getCell('E' + R).numFmt = '#,##0.00'; ws.getCell('E' + R).font = { size: 9, bold: i === 3 }; ws.getCell('E' + R).alignment = { horizontal: 'right' };
+    if (i === 3) { ws.getCell('B' + R).border = { top: { style: 'thin' } }; ws.getCell('E' + R).border = { top: { style: 'thin' } }; }
+  });
+  rr = b4 + 1;
   ws.getCell('B' + (rr + 1)).value = 'GST-check total = Σ(GST 2B − GST as per Books) = the reconciliation gap. Filter column T (remarks) or A (registration) and the TOTAL row follows. The +/− buttons above the sheet collapse the IGST/CGST/SGST columns.';
   ws.getCell('B' + (rr + 1)).font = { italic: true, size: 8, color: { argb: 'FF6B7280' } };
   ws.autoFilter = 'A1:AE' + last;
@@ -1393,6 +1458,7 @@ function downloadRecoSheet() {
     a.download = 'gstr2b-books-reco-sheet.xlsx'; a.style.display = 'none';
     document.body.appendChild(a); a.click();
     setTimeout(function () { a.remove(); URL.revokeObjectURL(a.href); }, 1500);
+    document.getElementById('bar-msg').textContent = '✅ Reco sheet downloaded.';
   });
 }
 
