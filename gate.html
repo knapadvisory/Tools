@@ -10,61 +10,135 @@
   * { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
     --accent: #4f46e5; --accent-hover: #4338ca; --on-accent: #fff;
-    --bg: #f4f5f8; --surface: #ffffff; --border: #e4e6ec;
+    --bg: #f4f5f8; --surface: #ffffff; --surface-2: #f5f6f9; --border: #e4e6ec;
     --text: #1d1c1d; --muted: #6b7280; --shadow: rgba(20, 25, 45, .08);
     --danger: #dc2626; --danger-soft: #fdecec;
+    --header-bg: #1e1b4b; --header-text: rgba(255,255,255,.82);
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #0f1117; --surface: #171a22; --border: #2b303c;
-      --text: #e7e9ee; --muted: #9aa3b2; --shadow: rgba(0, 0, 0, .45);
-      --danger: #f87171; --danger-soft: rgba(248, 113, 113, .16);
+      --bg: #0f1117; --surface: #171a22; --surface-2: #20242e; --border: #2b303c;
+      --text: #e7e9ee; --muted: #9aa3b2; --shadow: rgba(0,0,0,.45);
+      --danger: #f87171; --danger-soft: rgba(248,113,113,.16);
+      --header-bg: #14122e;
     }
   }
   body {
     background: var(--bg); color: var(--text);
     font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px;
+    min-height: 100vh; display: flex; flex-direction: column;
   }
-  .card {
-    width: 100%; max-width: 380px; background: var(--surface);
-    border: 1px solid var(--border); border-radius: 16px;
-    box-shadow: 0 8px 30px var(--shadow); padding: 36px 32px; text-align: center;
+  a { color: var(--accent); text-decoration: none; }
+
+  .site-head { background: var(--header-bg); }
+  .site-head-inner {
+    max-width: 1060px; margin: 0 auto; padding: 14px 24px;
+    display: flex; align-items: center; gap: 16px;
   }
-  .logo { font-size: 44px; }
-  h1 { font-size: 20px; margin-top: 10px; letter-spacing: -.01em; }
-  p { color: var(--muted); font-size: 13.5px; margin: 6px 0 22px; }
-  input {
-    width: 100%; font: inherit; padding: 11px 14px; border-radius: 10px;
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; color: #fff; }
+  .brand .logo { font-size: 22px; }
+  .fam { margin-left: auto; display: flex; gap: 4px; }
+  .fam a { color: var(--header-text); font-size: 13px; padding: 6px 12px; border-radius: 8px; }
+  .fam a:hover { background: rgba(255,255,255,.1); }
+
+  .hero {
+    max-width: 1060px; margin: 0 auto; padding: 56px 24px 34px; width: 100%;
+    display: flex; gap: 48px; align-items: center; flex-wrap: wrap;
+  }
+  .hero-copy { flex: 1 1 380px; }
+  .eyebrow { font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); }
+  .hero h1 { font-size: 34px; line-height: 1.15; letter-spacing: -.02em; margin: 10px 0 14px; }
+  .hero p { color: var(--muted); font-size: 15px; max-width: 480px; }
+  .hero-points { margin-top: 18px; display: flex; flex-direction: column; gap: 8px; font-size: 13.5px; color: var(--muted); }
+  .hero-points span b { color: var(--text); font-weight: 600; }
+
+  .keycard {
+    flex: 0 1 380px; background: var(--surface); border: 1px solid var(--border);
+    border-radius: 18px; box-shadow: 0 10px 40px var(--shadow); padding: 30px 28px;
+  }
+  .keycard h2 { font-size: 16px; margin-bottom: 4px; }
+  .keycard .sub { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
+  .keycard input {
+    width: 100%; font: inherit; padding: 12px 14px; border-radius: 10px;
     border: 1px solid var(--border); background: var(--bg); color: var(--text);
     text-align: center; letter-spacing: .04em;
   }
-  input:focus { outline: 2px solid var(--accent); border-color: transparent; }
-  button {
-    width: 100%; margin-top: 12px; font: inherit; font-weight: 600;
-    padding: 11px 14px; border-radius: 10px; border: 0;
+  .keycard input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+  .keycard button {
+    width: 100%; margin-top: 12px; font: inherit; font-weight: 700; font-size: 14.5px;
+    padding: 12px 14px; border-radius: 10px; border: 0;
     background: var(--accent); color: var(--on-accent); cursor: pointer;
   }
-  button:hover { background: var(--accent-hover); }
-  button:disabled { opacity: .6; cursor: default; }
+  .keycard button:hover { background: var(--accent-hover); }
+  .keycard button:disabled { opacity: .6; cursor: default; }
   .err {
     display: none; margin-top: 14px; padding: 9px 12px; border-radius: 9px;
     font-size: 13px; background: var(--danger-soft); color: var(--danger);
   }
   .err.show { display: block; }
-  footer { margin-top: 22px; font-size: 12px; color: var(--muted); }
+  .keycard .note { margin-top: 14px; font-size: 11.5px; color: var(--muted); text-align: center; }
+
+  .showcase { max-width: 1060px; margin: 0 auto; padding: 6px 24px 30px; width: 100%; }
+  .section-label { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }
+  .tools-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+  .tool {
+    display: flex; gap: 12px; align-items: flex-start;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px;
+  }
+  .tool .ic { font-size: 24px; line-height: 1.2; }
+  .tool .nm { font-weight: 700; font-size: 13.5px; }
+  .tool .ds { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+  footer { border-top: 1px solid var(--border); margin-top: auto; padding: 18px 24px; text-align: center; font-size: 12.5px; color: var(--muted); }
 </style>
 </head>
 <body>
-  <form class="card" id="f">
-    <div class="logo">🧰</div>
-    <h1>KNAP Tools</h1>
-    <p>Enter the access key to continue.</p>
+
+<header class="site-head"><div class="site-head-inner">
+  <span class="brand"><span class="logo">🧰</span> KNAP Tools</span>
+  <nav class="fam">
+    <a href="https://teamhub.knapadvisory.com">TeamHub</a>
+    <a href="https://hr.teamhub.knapadvisory.com">HR</a>
+  </nav>
+</div></header>
+
+<div class="hero">
+  <div class="hero-copy">
+    <div class="eyebrow">KNAP Advisory · internal platform</div>
+    <h1>Every tool for the practice.<br>One address.</h1>
+    <p>GST reconciliation, statutory audit, TDS matching, marketplace fee registers —
+    built in-house, working directly with Tally and the portals, under one login.</p>
+    <div class="hero-points">
+      <span>🔐 <b>Team access key</b> — one key, remembered per tab for 3 hours</span>
+      <span>🔌 <b>Tally connector</b> — books read live on your own PC, never uploaded</span>
+      <span>⚙️ <b>Self-updating</b> — tools and connector stay current on their own</span>
+    </div>
+  </div>
+
+  <form class="keycard" id="f">
+    <h2>Enter the workspace</h2>
+    <div class="sub">Type the team access key to continue.</div>
     <input type="password" id="key" placeholder="Access key" autocomplete="current-password" autofocus>
-    <button id="go" type="submit">Enter</button>
+    <button id="go" type="submit">Continue →</button>
     <div class="err" id="err">That key is not right — try again.</div>
-    <footer>KNAP Advisory · internal tools</footer>
+    <div class="note">Don't have the key? Ask the admin. Sessions end when the tab closes.</div>
   </form>
+</div>
+
+<div class="showcase">
+  <div class="section-label">Inside</div>
+  <div class="tools-grid">
+    <div class="tool"><span class="ic">🔁</span><div><div class="nm">GSTR-2B ⇄ Tally Poster</div><div class="ds">Reconcile 2B with the books, post what's missing, formula-checked reco sheets.</div></div></div>
+    <div class="tool"><span class="ic">🧮</span><div><div class="nm">TDS × 26AS Reconciler</div><div class="ds">Fresh 26AS vs the TDS Receivable ledger, TAN memory, working paper.</div></div></div>
+    <div class="tool"><span class="ic">🔍</span><div><div class="nm">Tally Statutory Audit Assistant</div><div class="ds">44 CA checks over every ledger and voucher, graded with statute references.</div></div></div>
+    <div class="tool"><span class="ic">🧾</span><div><div class="nm">Marketplace Invoice Parser</div><div class="ds">Amazon / Flipkart / Myntra / Nykaa fee PDFs into one reconciled register.</div></div></div>
+    <div class="tool"><span class="ic">📊</span><div><div class="nm">GSTR-1 Excel Summary</div><div class="ds">Portal files to section-wise bill sheets, amendments handled, 1-vs-3B reco.</div></div></div>
+    <div class="tool"><span class="ic">📒</span><div><div class="nm">AR / Customer Dashboard</div><div class="ds">Receivables, Schedule III ageing, per-customer statements and disputes.</div></div></div>
+  </div>
+</div>
+
+<footer>KNAP Advisory · internal tools · <a href="https://teamhub.knapadvisory.com">teamhub.knapadvisory.com</a></footer>
+
 <script>
   var f = document.getElementById('f'), key = document.getElementById('key'),
       go = document.getElementById('go'), err = document.getElementById('err');
@@ -78,8 +152,7 @@
       body: JSON.stringify({ key: key.value })
     }).then(function (r) {
       if (r.ok) {
-        // Mark THIS tab as signed in (session.js checks it; dies with the tab).
-        try { sessionStorage.setItem('knap_tab', '1'); } catch (e) {}
+        try { sessionStorage.setItem('knap_tab', '1'); } catch (e2) {}
         location.reload(); return;
       }
       err.classList.add('show'); go.disabled = false; key.select();

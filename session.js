@@ -34,6 +34,15 @@
     '.sess-card{width:100%;max-width:400px;background:var(--surface,#fff);color:var(--text,#1d1c1d);',
     'border:1px solid var(--border,#e4e6ec);border-radius:16px;padding:28px;text-align:center;',
     'box-shadow:0 12px 40px rgba(0,0,0,.35)}',
+    '.sess-overlay.lock .sess-card{max-width:440px;padding:36px 32px}',
+    '.sess-logo{display:none;font-size:44px;margin-bottom:8px}',
+    '.sess-overlay.lock .sess-logo{display:block}',
+    '.sess-eyebrow{display:none;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;',
+    'color:var(--accent,#4f46e5);margin-bottom:4px}',
+    '.sess-overlay.lock .sess-eyebrow{display:block}',
+    '.sess-tools{display:none;justify-content:center;gap:16px;font-size:21px;margin:2px 0 16px;',
+    'filter:grayscale(.15);opacity:.9}',
+    '.sess-overlay.lock .sess-tools{display:flex}',
     '.sess-card h2{font-size:18px;margin:0 0 6px}',
     '.sess-card p{color:var(--muted,#6b7280);font-size:13.5px;margin:0 0 18px}',
     '.sess-count{font-size:30px;font-weight:700;letter-spacing:.02em;margin:2px 0 18px}',
@@ -60,6 +69,12 @@
   // ---------- popup ----------
   var overlay = el('div', 'sess-overlay');
   var card = el('div', 'sess-card');
+  var logo = el('div', 'sess-logo', '🧰');
+  var eyebrow = el('div', 'sess-eyebrow', 'KNAP Advisory · internal platform');
+  var toolsStrip = el('div', 'sess-tools');
+  [['🔁', 'GSTR-2B ⇄ Tally Poster'], ['🧮', 'TDS × 26AS Reconciler'], ['🔍', 'Tally Audit Assistant'],
+   ['🧾', 'Marketplace Invoice Parser'], ['📊', 'GSTR-1 Excel Summary'], ['📒', 'AR Dashboard']]
+    .forEach(function (t) { var s = el('span', '', t[0]); s.title = t[1]; toolsStrip.appendChild(s); });
   var h = el('h2', '', 'Your session is about to end');
   var p = el('p', '', 'Continue working, or sign out? Continuing keeps everything on this page exactly as it is.');
   var count = el('div', 'sess-count', '');
@@ -71,7 +86,8 @@
   var btnGo = el('button', 'sess-btn primary', 'Continue');
   var btnOut = el('button', 'sess-btn', 'Sign out & close');
   row.appendChild(btnGo); row.appendChild(btnOut);
-  card.appendChild(h); card.appendChild(p); card.appendChild(count);
+  card.appendChild(logo); card.appendChild(eyebrow);
+  card.appendChild(h); card.appendChild(p); card.appendChild(toolsStrip); card.appendChild(count);
   card.appendChild(keyInput); card.appendChild(err); card.appendChild(row);
   overlay.appendChild(card);
 
