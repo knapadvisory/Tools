@@ -115,8 +115,11 @@
   .statc .v{font-size:23px;font-weight:800;font-family:var(--mono);letter-spacing:-.01em}
   .statc .k{font-size:12px;color:var(--muted);margin-top:3px}
   .statc.good .v{color:var(--green)} .statc.warnv .v{color:var(--warn)}
-  .prog{height:8px;background:var(--surface-3);border-radius:999px;overflow:hidden;margin-top:12px}
-  .prog>i{display:block;height:100%;background:var(--green);width:0;transition:width .3s}
+  .prog{height:10px;background:var(--surface-3);border-radius:999px;overflow:hidden;margin-top:12px}
+  .prog>i{display:block;height:100%;background:var(--green);width:0;transition:width .4s}
+  .prog-line{font-size:12px;color:var(--muted);margin-top:6px;font-family:var(--mono)}
+  .cascade{font-size:12.5px;color:var(--muted);margin-top:12px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:11px 14px;line-height:1.7}
+  .cascade b{color:var(--green)}
   .sug{border:1px solid var(--warn-line);background:var(--warn-soft);border-radius:12px;padding:12px 14px;margin-top:10px}
   .sug .sh{font-size:12px;color:var(--warn);font-weight:700;margin-bottom:8px}
   .sug .pair{display:flex;align-items:center;gap:12px;padding:8px 0;border-top:1px solid var(--warn-line);flex-wrap:wrap}
@@ -216,26 +219,11 @@
       <label class="lbl">as on</label>
       <input type="date" id="asOn">
       <button class="btn primary" id="btnExtract" onclick="extract()">Extract &amp; match →</button>
+      <button class="btn ghost" id="btnReset" onclick="resetData()">↺ Reset data</button>
     </div>
-    <div class="opts">
-      <div class="og">
-        <span class="ot">Primary match key</span>
-        <label><input type="radio" name="mk" value="pan" checked> PAN <span class="mono" style="color:var(--faint)">(merges a party's many GSTINs)</span></label>
-        <label><input type="radio" name="mk" value="gstin"> GSTIN <span class="mono" style="color:var(--faint)">(each registration separate)</span></label>
-        <label><input type="radio" name="mk" value="name"> Name only</label>
-      </div>
-      <div class="og">
-        <span class="ot">Name handling</span>
-        <label><input type="radio" name="nm" value="smart" checked> Smart (pvt = private, ltd = limited…)</label>
-        <label><input type="radio" name="nm" value="exact"> Exact only</label>
-      </div>
-      <div class="og">
-        <span class="ot">Extras</span>
-        <label><input type="checkbox" id="optFuzzy" checked> Suggest fuzzy look-alikes to review</label>
-        <label><input type="checkbox" id="optInter" checked> Flag inter-company parties (your own group)</label>
-      </div>
-    </div>
+    <div class="cascade">Every party is matched automatically, in this order — <b>1.</b> GSTIN &nbsp;→&nbsp; <b>2.</b> PAN &nbsp;→&nbsp; <b>3.</b> exact name &nbsp;→&nbsp; <b>4.</b> smart name (pvt = private, ltd = limited, &amp; = and…) &nbsp;→&nbsp; <b>5.</b> similar names (surfaced for you to confirm). Parties belonging to your own group companies are flagged <span class="tag multi" style="margin:0">INTER-CO</span>.</div>
     <div class="prog hidden" id="progWrap"><i id="progBar"></i></div>
+    <div class="prog-line hidden" id="progLine"></div>
     <div class="msg" id="msgExtract"></div>
   </div>
 
@@ -283,8 +271,8 @@ function verGE(v,min){ var a=String(v).split('.').map(Number),b=String(min).spli
 function checkConn(){
   fetch(API+'/health',{signal:AbortSignal.timeout(3000)}).then(function(r){return r.json();}).then(function(h){
     connVer=h.version||''; setPill('on','connector v'+connVer+' · connected');
-    if(!verGE(connVer,'4.1')){
-      banner('off','Connector needs updating','This tool needs connector v4.1+. Press ⟳ Update connector, then reload.');
+    if(!verGE(connVer,'4.2')){
+      banner('off','Connector needs updating','This tool needs connector v4.2+. Press ⟳ Update connector, then reload.');
       document.getElementById('btnUpdate').style.display='';
     } else {
       banner('wait','Connector ready','Add your Tally ports below, then scan for companies. Keep each Tally on the Gateway screen (not inside a report).');
@@ -297,7 +285,7 @@ function checkConn(){
 }
 function doUpdate(){
   banner('wait','Updating…','Fetching the latest connector.');
-  fetch(API+'/update',{method:'POST'}).then(function(){ setTimeout(function(){ var t=setInterval(function(){ fetch(API+'/health').then(function(r){return r.json();}).then(function(h){ if(verGE(h.version||'0','4.1')){ clearInterval(t); checkConn(); } }).catch(function(){}); },1500); },1500); }).catch(function(){});
+  fetch(API+'/update',{method:'POST'}).then(function(){ setTimeout(function(){ var t=setInterval(function(){ fetch(API+'/health').then(function(r){return r.json();}).then(function(h){ if(verGE(h.version||'0','4.2')){ clearInterval(t); checkConn(); } }).catch(function(){}); },1500); },1500); }).catch(function(){});
 }
 function releaseTally(){ fetch(API+'/api/tally/release',{method:'POST'}).then(function(r){return r.json();}).then(function(){ setMsg('msgScan','Released.','ok'); }).catch(function(){}); }
 function setMsg(id,txt,cls){ var e=document.getElementById(id); e.className='msg'+(cls?' '+cls:''); e.innerHTML=txt; }
@@ -353,36 +341,58 @@ function selectedTargets(){
 }
 
 /* ============================ step 2: extract ============================ */
-var KIND='debtors', RESULT=null, groupKeyBasis='pan', nameMode='smart', ownPans={}, ownGstins={};
+var KIND='debtors', RESULT=null, ownPans={}, ownGstins={}, POLL=null;
 function setKind(k){ KIND=k; Array.prototype.forEach.call(document.querySelectorAll('#kindSeg button'),function(b){ b.classList.toggle('on', b.getAttribute('data-kind')===k); }); }
+function fmtEta(s){ if(s==null)return ''; if(s<60)return '~'+s+'s left'; var m=Math.floor(s/60),ss=s%60; return '~'+m+'m '+(ss<10?'0':'')+ss+'s left'; }
+function resetData(){
+  if(POLL){ clearInterval(POLL); POLL=null; }
+  RESULT=null; PARTIES=[]; GROUPS=[]; SUGGEST=[]; picked={};
+  document.getElementById('card3').classList.add('hidden');
+  document.getElementById('card4').classList.add('hidden');
+  document.getElementById('progWrap').classList.add('hidden');
+  document.getElementById('progLine').classList.add('hidden');
+  document.getElementById('progBar').style.width='0';
+  setMsg('msgExtract','','');
+  // step markers back to "on step 2"
+  ['st3','st4'].forEach(function(id){ var s=document.getElementById(id); if(s){ s.classList.remove('done'); s.classList.remove('active'); } });
+  var s2=document.getElementById('st2'); if(s2){ s2.classList.remove('done'); s2.classList.add('active'); }
+}
 function extract(){
   var targets=selectedTargets();
   if(!targets.length){ setMsg('msgExtract','Tick at least one company in step 1.','bad'); return; }
   var asOn=document.getElementById('asOn').value;
   if(!asOn){ setMsg('msgExtract','Set the "as on" date.','bad'); return; }
-  groupKeyBasis=document.querySelector('input[name=mk]:checked').value;
-  nameMode=document.querySelector('input[name=nm]:checked').value;
+  // A fresh run always clears the previous date's data — no stale figures.
+  resetData();
   // remember own group's PAN/GSTIN for inter-company flagging
   ownPans={}; ownGstins={};
   endpoints.forEach(function(ep){ (ep.companies||[]).forEach(function(c){ (c.gstins||[]).forEach(function(g){ g=String(g).toUpperCase(); ownGstins[g]=c.name; var p=panOf(g); if(p) ownPans[p]=c.name; }); }); });
   document.getElementById('btnExtract').disabled=true;
   document.getElementById('progWrap').classList.remove('hidden');
-  setMsg('msgExtract','Reading '+targets.length+' company(ies), one by one — this can take a while for full books…','');
-  var poll=setInterval(function(){
+  document.getElementById('progLine').classList.remove('hidden');
+  document.getElementById('progLine').textContent='0% · starting…';
+  setMsg('msgExtract','Reading '+targets.length+' company(ies) as on '+asOn+', one by one — full books, so this can take a while…','');
+  POLL=setInterval(function(){
     fetch(API+'/api/dc/progress').then(function(r){return r.json();}).then(function(p){
-      if(p.total){ document.getElementById('progBar').style.width=Math.round(100*p.done/p.total)+'%'; }
-      if(p.active){ setMsg('msgExtract','⏳ '+(p.phase||'')+(p.sub?(' · '+p.sub):''),''); }
+      var pct=p.pct||0;
+      document.getElementById('progBar').style.width=pct+'%';
+      var line=pct+'%';
+      if(p.company) line+=' · '+p.company;
+      if(p.sub) line+=' · '+p.sub;
+      if(p.etaSec!=null) line+=' · '+fmtEta(p.etaSec);
+      document.getElementById('progLine').textContent=line;
     }).catch(function(){});
-  },1400);
+  },1200);
   fetch(API+'/api/dc/extract',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kind:KIND,asOn:asOn,targets:targets})})
     .then(function(r){return r.json();}).then(function(j){
-      clearInterval(poll); document.getElementById('btnExtract').disabled=false;
-      if(!j.ok){ setMsg('msgExtract',(j.company?('While reading '+esc(j.company)+': '):'')+esc(j.error||'Failed.'),'bad'); return; }
+      if(POLL){ clearInterval(POLL); POLL=null; } document.getElementById('btnExtract').disabled=false;
+      if(!j.ok){ document.getElementById('progLine').classList.add('hidden'); setMsg('msgExtract',(j.company?('While reading '+esc(j.company)+': '):'')+esc(j.error||'Failed.'),'bad'); return; }
       RESULT=j; document.getElementById('progBar').style.width='100%';
+      document.getElementById('progLine').textContent='100% · read complete';
       var tot=0; j.companies.forEach(function(c){ tot+=c.partyCount; });
-      setMsg('msgExtract','Read '+j.companies.length+' company(ies), '+tot+' party rows. Matching…','ok');
+      setMsg('msgExtract','Read '+j.companies.length+' company(ies), '+tot+' party rows as on '+j.asOn+'. Matching…','');
       loadAliasesThen(runMatch);
-    }).catch(function(e){ clearInterval(poll); document.getElementById('btnExtract').disabled=false; setMsg('msgExtract','Could not reach the connector: '+e.message,'bad'); });
+    }).catch(function(e){ if(POLL){ clearInterval(POLL); POLL=null; } document.getElementById('btnExtract').disabled=false; document.getElementById('progLine').classList.add('hidden'); setMsg('msgExtract','Could not reach the connector: '+e.message,'bad'); });
 }
 
 /* ============================ matching ============================ */
@@ -394,48 +404,55 @@ function loadAliasesThen(cb){
   }).catch(function(){ savedAliases={merges:[],splits:[],labels:{}}; cb(); });
 }
 function panOf(g){ g=String(g||'').toUpperCase(); return /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/.test(g)?g.slice(2,12):''; }
-var EXP={pvt:'private',pvate:'private',ltd:'limited',ltd_:'limited',corp:'corporation',co:'company',pl:'',mfg:'manufacturing',inds:'industries',indl:'industries',ind:'industries',ent:'enterprises',entp:'enterprises',ente:'enterprises',intl:'international',opc:'opc',llp:'llp',pvtltd:'privatelimited'};
-function canonName(s){
+var EXP={pvt:'private',pvate:'private',ltd:'limited',corp:'corporation',co:'company',mfg:'manufacturing',inds:'industries',indl:'industries',ent:'enterprises',entp:'enterprises',ente:'enterprises',intl:'international',opc:'opc',llp:'llp'};
+// Base normalise: lowercase, & -> and, drop punctuation and the M/s / The noise.
+function canonBase(s){
   var t=(' '+String(s||'').toLowerCase()+' ').replace(/&/g,' and ').replace(/[^a-z0-9]+/g,' ');
   t=t.replace(/\bmessrs\b/g,' ').replace(/\bm s\b/g,' ').replace(/\bthe\b/g,' ');
-  if(nameMode==='smart'){
-    t=' '+t.split(' ').map(function(w){ return EXP.hasOwnProperty(w)?EXP[w]:w; }).join(' ')+' ';
-  }
   return t.replace(/\s+/g,' ').trim();
 }
-function nameKey(s){ return canonName(s).replace(/ /g,''); }
-function tokens(s){ return canonName(s).split(' ').filter(Boolean); }
-function identityKey(p){
-  var pan=p.pan||panOf(p.gstin);
-  if(groupKeyBasis==='pan' && pan) return 'pan:'+pan;
-  if(groupKeyBasis!=='name' && p.gstin) return 'gst:'+String(p.gstin).toUpperCase();
-  if(groupKeyBasis!=='name' && pan) return 'pan:'+pan; // gstin basis but only pan present
-  var nk=nameKey(p.ledger); return nk?('nm:'+nk):('led:'+String(p.ledger).toLowerCase());
-}
+// Smart normalise adds the abbreviation expansions (pvt=private, ltd=limited…).
+function canonSmart(s){ return ' '+canonBase(s)+' '; }
+function canonSmartExp(s){ return canonBase(s).split(' ').map(function(w){ return EXP.hasOwnProperty(w)?EXP[w]:w; }).filter(Boolean).join(' '); }
+function exactKey(s){ return canonBase(s).replace(/ /g,''); }         // step 3
+function smartKey(s){ return canonSmartExp(s).replace(/ /g,''); }     // step 4
+function tokens(s){ return canonSmartExp(s).split(' ').filter(Boolean); } // step 5 (fuzzy)
+// Stable identity of a party for remembering merges/splits/labels across runs.
+function partyKey(p){ return p.gstin?('g:'+p.gstin):(p.pan?('p:'+p.pan):('n:'+(smartKey(p.ledger)||String(p.ledger).toLowerCase()))); }
 // union-find
 function makeUF(){ var parent={}; function find(x){ if(parent[x]===undefined)parent[x]=x; while(parent[x]!==x){ parent[x]=parent[parent[x]]; x=parent[x]; } return x; } function union(a,b){ a=find(a);b=find(b); if(a!==b)parent[a]=b; } return {find:find,union:union,parent:parent}; }
 var PARTIES=[], GROUPS=[];
-function runMatch(){
+function buildParties(){
   PARTIES=[];
   RESULT.companies.forEach(function(c,ci){
     (c.parties||[]).forEach(function(p,pi){
-      PARTIES.push({id:'c'+ci+'p'+pi, ci:ci, ledger:p.ledger, gstin:String(p.gstin||'').toUpperCase(), pan:p.pan||panOf(p.gstin), group:p.group, balance:p.balance, idk:null});
+      var gstin=String(p.gstin||'').toUpperCase();
+      var party={id:'c'+ci+'p'+pi, ci:ci, ledger:p.ledger, gstin:gstin, pan:p.pan||panOf(gstin), group:p.group, balance:p.balance};
+      party.exact=exactKey(p.ledger); party.smart=smartKey(p.ledger); party.pkey=partyKey(party);
+      PARTIES.push(party);
     });
   });
-  PARTIES.forEach(function(p){ p.idk=identityKey(p); });
-  var uf=makeUF();
+}
+// The ordered cascade: GSTIN -> PAN -> exact name -> smart name. Union-find
+// makes the merges transitive, so the end result is one component per party.
+function unionCascade(uf){
   PARTIES.forEach(function(p){ uf.find(p.id); });
-  // auto-union: same identity key
-  var byKey={}; PARTIES.forEach(function(p){ (byKey[p.idk]=byKey[p.idk]||[]).push(p); });
-  Object.keys(byKey).forEach(function(k){ var arr=byKey[k]; for(var i=1;i<arr.length;i++) uf.union(arr[0].id,arr[i].id); });
-  // saved merges (by identity key): union one representative per key
-  var repByKey={}; PARTIES.forEach(function(p){ if(!repByKey[p.idk]) repByKey[p.idk]=p.id; });
-  (savedAliases.merges||[]).forEach(function(pair){ if(repByKey[pair[0]]&&repByKey[pair[1]]) uf.union(repByKey[pair[0]],repByKey[pair[1]]); });
-  buildGroups(uf);
-  // fuzzy suggestions across distinct groups
-  SUGGEST=document.getElementById('optFuzzy') && document.getElementById('optFuzzy').checked ? computeSuggestions() : [];
+  ['gstin','pan','exact','smart'].forEach(function(field){
+    var by={}; PARTIES.forEach(function(p){ var v=p[field]; if(v) (by[v]=by[v]||[]).push(p); });
+    Object.keys(by).forEach(function(k){ var arr=by[k]; for(var i=1;i<arr.length;i++) uf.union(arr[0].id,arr[i].id); });
+  });
+  // remembered manual merges (by stable party key)
+  var repByPkey={}; PARTIES.forEach(function(p){ if(!repByPkey[p.pkey]) repByPkey[p.pkey]=p.id; });
+  (savedAliases.merges||[]).forEach(function(pair){ if(repByPkey[pair[0]]&&repByPkey[pair[1]]) uf.union(repByPkey[pair[0]],repByPkey[pair[1]]); });
+}
+function runMatch(){
+  buildParties();
+  var uf=makeUF(); unionCascade(uf); buildGroups(uf);
+  SUGGEST=computeSuggestions();   // step 5 — similar names, surfaced for review
   renderMatchReview();
   markStep(2,true); document.getElementById('card3').classList.remove('hidden');
+  var extra=SUGGEST.length?(' — '+SUGGEST.length+' look-alike(s) to confirm below'):'';
+  setMsg('msgExtract','✓ Matching done as on '+RESULT.asOn+' — '+GROUPS.length+' parties from '+PARTIES.length+' ledger rows'+extra+'.','ok');
   document.getElementById('card3').scrollIntoView({behavior:'smooth',block:'start'});
 }
 function buildGroups(uf){
@@ -451,11 +468,12 @@ function makeGroup(members){
   // representative name: prefer a member with GSTIN, then the longest name
   var rep=members.slice().sort(function(a,b){ var ga=a.gstin?1:0,gb=b.gstin?1:0; if(ga!==gb)return gb-ga; return b.ledger.length-a.ledger.length; })[0];
   var pans={},gstins={}; members.forEach(function(m){ if(m.pan)pans[m.pan]=1; if(m.gstin)gstins[m.gstin]=1; });
-  var basis = members.some(function(m){return m.idk.slice(0,4)==='pan:';})?'pan':(members.some(function(m){return m.idk.slice(0,4)==='gst:';})?'gstin':'name');
+  // basis tag = the strongest key the members carry (what identifies them).
+  var basis = Object.keys(gstins).length?'gstin':(Object.keys(pans).length?'pan':'name');
   var perCo={}; members.forEach(function(m){ perCo[m.ci]=(perCo[m.ci]||0)+m.balance; });
   var isInter=false; Object.keys(pans).forEach(function(p){ if(ownPans[p])isInter=true; }); Object.keys(gstins).forEach(function(g){ if(ownGstins[g])isInter=true; });
   return {
-    label: (savedAliases.labels&&savedAliases.labels[rep.idk])||rep.ledger,
+    label: (savedAliases.labels&&savedAliases.labels[rep.pkey])||rep.ledger,
     rep:rep, members:members, perCo:perCo,
     pans:Object.keys(pans), gstins:Object.keys(gstins), basis:basis,
     inter:isInter,
@@ -465,7 +483,7 @@ function makeGroup(members){
 function sortGroups(){ GROUPS.sort(function(a,b){ return Math.abs(b.total)-Math.abs(a.total); }); }
 function lev(a,b){ if(a===b)return 0; var m=a.length,n=b.length; if(!m)return n; if(!n)return m; var d=[]; for(var i=0;i<=m;i++)d[i]=[i]; for(var j=0;j<=n;j++)d[0][j]=j; for(i=1;i<=m;i++)for(j=1;j<=n;j++){ d[i][j]=Math.min(d[i-1][j]+1,d[i][j-1]+1,d[i-1][j-1]+(a[i-1]===b[j-1]?0:1)); } return d[m][n]; }
 function sim(a,b){
-  var ka=nameKey(a), kb=nameKey(b); if(!ka||!kb)return 0; if(ka===kb)return 1;
+  var ka=smartKey(a), kb=smartKey(b); if(!ka||!kb)return 0; if(ka===kb)return 1;
   var L=1-lev(ka,kb)/Math.max(ka.length,kb.length);
   var ta=tokens(a), tb=tokens(b), sa={}; ta.forEach(function(t){sa[t]=1;}); var inter=0,uni={}; ta.forEach(function(t){uni[t]=1;}); tb.forEach(function(t){ if(sa[t])inter++; uni[t]=1; });
   var J=inter/Math.max(1,Object.keys(uni).length);
@@ -484,7 +502,7 @@ function computeSuggestions(){
       if(g1.pans.length&&g2.pans.length){ var share=g1.pans.some(function(p){return g2.pans.indexOf(p)>=0;}); if(!share) continue; }
       var s=sim(g1.rep.ledger,g2.rep.ledger);
       if(s>=0.84 && s<1){
-        var ka=g1.rep.idk, kb=g2.rep.idk;
+        var ka=g1.rep.pkey, kb=g2.rep.pkey;
         if(isSplit(ka,kb)) continue;
         var pk=pairKey(ka,kb); if(seen[pk])continue; seen[pk]=1;
         out.push({a:g1,b:g2,score:s,ka:ka,kb:kb});
@@ -518,16 +536,12 @@ function stat(v,k,cls){ return '<div class="statc '+(cls||'')+'"><div class="v">
 function acceptSug(idx){ var sg=SUGGEST[idx]; savedAliases.merges.push([sg.ka,sg.kb]); document.getElementById('sg'+idx).style.display='none'; reMatch(); }
 function rejectSug(idx){ var sg=SUGGEST[idx]; savedAliases.splits.push([sg.ka,sg.kb]); document.getElementById('sg'+idx).style.display='none'; }
 function reMatch(){
-  // rebuild groups honouring updated merges/splits, keep suggestions minus resolved
-  var uf=makeUF(); PARTIES.forEach(function(p){ uf.find(p.id); });
-  var byKey={}; PARTIES.forEach(function(p){ (byKey[p.idk]=byKey[p.idk]||[]).push(p); });
-  Object.keys(byKey).forEach(function(k){ var arr=byKey[k]; for(var i=1;i<arr.length;i++) uf.union(arr[0].id,arr[i].id); });
-  var repByKey={}; PARTIES.forEach(function(p){ if(!repByKey[p.idk]) repByKey[p.idk]=p.id; });
-  (savedAliases.merges||[]).forEach(function(pair){ if(repByKey[pair[0]]&&repByKey[pair[1]]) uf.union(repByKey[pair[0]],repByKey[pair[1]]); });
-  buildGroups(uf);
+  // rebuild groups honouring updated merges (same ordered cascade)
+  var uf=makeUF(); unionCascade(uf); buildGroups(uf);
   var parties=PARTIES.length, groups=GROUPS.length, merged=parties-groups;
   var s=document.getElementById('matchStats');
   s.innerHTML=stat(parties,'party rows read')+stat(groups,'matched parties')+stat(merged,'rows merged','good')+stat(document.querySelectorAll('.sug .pair:not([style*="none"])').length,'look-alikes to review','warnv');
+  if(!document.getElementById('card4').classList.contains('hidden')) renderMatrix();
 }
 
 /* ============================ step 4: matrix & export ============================ */
@@ -583,7 +597,7 @@ function combineSelected(){
   if(idxs.length<2) return;
   var members=[]; idxs.forEach(function(i){ members=members.concat(GROUPS[i].members); });
   // record merges between the identity keys so it persists
-  var keys={}; members.forEach(function(m){ keys[m.idk]=1; }); var kl=Object.keys(keys);
+  var keys={}; members.forEach(function(m){ keys[m.pkey]=1; }); var kl=Object.keys(keys);
   for(var i=1;i<kl.length;i++) savedAliases.merges.push([kl[0],kl[i]]);
   var ng=makeGroup(members);
   // remove old groups, add new
@@ -593,13 +607,13 @@ function combineSelected(){
 function splitGroup(gi){
   var g=GROUPS[gi]; if(g.members.length<2) return;
   // remove any saved merges tying these members together, add splits between distinct keys
-  var keys={}; g.members.forEach(function(m){ keys[m.idk]=1; }); var kl=Object.keys(keys);
+  var keys={}; g.members.forEach(function(m){ keys[m.pkey]=1; }); var kl=Object.keys(keys);
   savedAliases.merges=(savedAliases.merges||[]).filter(function(pr){ return !(keys[pr[0]]&&keys[pr[1]]); });
   for(var i=0;i<kl.length;i++)for(var j=i+1;j<kl.length;j++) savedAliases.splits.push([kl[i],kl[j]]);
   // re-derive groups from scratch honouring the new state
   reMatch(); saveAliases(); renderMatrix();
 }
-function renameGroup(gi){ var g=GROUPS[gi]; var nn=prompt('Rename this party (remembered for next time):',g.label); if(nn===null)return; g.label=nn.trim()||g.label; savedAliases.labels=savedAliases.labels||{}; savedAliases.labels[g.rep.idk]=g.label; saveAliases(); renderMatrix(); }
+function renameGroup(gi){ var g=GROUPS[gi]; var nn=prompt('Rename this party (remembered for next time):',g.label); if(nn===null)return; g.label=nn.trim()||g.label; savedAliases.labels=savedAliases.labels||{}; savedAliases.labels[g.rep.pkey]=g.label; saveAliases(); renderMatrix(); }
 function saveAliases(){
   fetch(API+'/api/dc/aliases',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({aliases:{merges:savedAliases.merges,splits:savedAliases.splits,labels:savedAliases.labels||{}}})}).catch(function(){});
 }

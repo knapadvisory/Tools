@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.1';
+const VERSION = '4.2';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -514,7 +514,7 @@ function dateKey(v) {
 // (so closing = opening+dr and period-opening = opening+priorDr). Deduped by
 // voucher GUID across chunks, so a Tally that repeats vouchers for every
 // monthly window can't multiply the books.
-function accumulateTB(xml, sums, seen, cal, fromKey) {
+function accumulateTB(xml, sums, seen, cal, fromKey, toKey) {
   const sig = new Map(); // per-chunk signature counter for GUID-less vouchers
   for (const block of xml.match(/<VOUCHER[\s>][\s\S]*?<\/VOUCHER>/gi) || []) {
     if (/(^|>)\s*Yes\s*<\/ISCANCELLED>/i.test(block.match(/<ISCANCELLED>[\s\S]*?<\/ISCANCELLED>/i)?.[0] ?? '')) continue;
@@ -527,7 +527,13 @@ function accumulateTB(xml, sums, seen, cal, fromKey) {
     }
     if (seen.has(key)) { cal.dupes++; continue; }
     seen.add(key);
-    const isPrior = fromKey ? (dateKey(tag(block, 'DATE')) < fromKey) : false;
+    const dk = dateKey(tag(block, 'DATE'));
+    // ENFORCE the cut-off ourselves. Some Tally setups ignore SVTODATE and
+    // return every voucher for each request; without this a balance "as on"
+    // an earlier date silently includes later vouchers (i.e. the latest
+    // balance). `toKey` (YYYYMMDD) drops anything dated after the "as on" date.
+    if (toKey && dk > toKey) { cal.afterTo = (cal.afterTo || 0) + 1; continue; }
+    const isPrior = fromKey ? (dk < fromKey) : false;
     for (const e of block.match(/<(?:ALL)?LEDGERENTRIES\.LIST>[\s\S]*?<\/(?:ALL)?LEDGERENTRIES\.LIST>/gi) || []) {
       const name = tag(e, 'LEDGERNAME');
       if (!name) continue;
@@ -2071,7 +2077,33 @@ setTimeout(autoRecoTick, 8000);
 // Matching (PAN-from-GSTIN → GSTIN → exact name → fuzzy) and the review step
 // happen in the browser; confirmed groupings are remembered in state.dcAliases.
 
-const dcProgress = { active: false, phase: '', sub: '', done: 0, total: 0, company: '' };
+const dcProgress = { active: false, phase: '', sub: '', done: 0, total: 0, company: '', startedAt: 0, monthsDone: 0, monthsTotal: 0 };
+
+// Read a company's per-ledger Dr-positive movements from books-start to `asOn`,
+// month by month (discarding each chunk's XML after summing it), enforcing the
+// `asOn` cut-off in code so a Tally that ignores SVTODATE can't leak later
+// vouchers into an earlier-dated balance. Updates dcProgress month counters.
+async function readDCMovements(url, readStart, asOn) {
+  const sums = {}, seen = new Set();
+  const cal = { vouchers: 0, dupes: 0, noFlag: 0, afterTo: 0 };
+  const toKey = asOn.getUTCFullYear() * 10000 + (asOn.getUTCMonth() + 1) * 100 + asOn.getUTCDate();
+  let monthsTotal = 0;
+  for (let d = new Date(Date.UTC(readStart.getUTCFullYear(), readStart.getUTCMonth(), 1)); d <= asOn;
+       d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1))) monthsTotal++;
+  dcProgress.monthsTotal = monthsTotal; dcProgress.monthsDone = 0;
+  let done = 0;
+  for (let d = new Date(Date.UTC(readStart.getUTCFullYear(), readStart.getUTCMonth(), 1)); d <= asOn;
+       d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1))) {
+    const mFrom = d < readStart ? readStart : d;
+    const mEnd = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
+    const mTo = mEnd > asOn ? asOn : mEnd;
+    dcProgress.sub = `${MONTH_NAMES[mFrom.getUTCMonth()]} ${mFrom.getUTCFullYear()} (${done + 1}/${monthsTotal})`;
+    const xml = await askTally(url, voucherCollectionRequest(mFrom, mTo)); // svCompany() is set by the caller
+    accumulateTB(xml, sums, seen, cal, 0, toKey);
+    done++; dcProgress.monthsDone = done;
+  }
+  return { sums, cal, monthsTotal };
+}
 
 // PAN sits inside every GSTIN as characters 3–12 (0-based 2..12). Deriving it
 // lets one party that holds several state GSTINs collapse under a single PAN —
@@ -2119,8 +2151,8 @@ async function readDCForCompany(url, company, asOn, label) {
     const readStart = booksStart || new Date(Date.UTC(asOn.getUTCFullYear() - 5, 3, 1));
 
     dcProgress.phase = `Reading ${label} — vouchers to ${asOn.toISOString().slice(0, 10)}…`;
-    // from = readStart, so priorDr is unused; dr = full movement readStart→asOn.
-    const { sums, cal } = await readTBFromVouchers(url, readStart, readStart, asOn);
+    // dr = movement readStart→asOn, with the asOn cut-off enforced in code.
+    const { sums, cal } = await readDCMovements(url, readStart, asOn);
     dcProgress.sub = '';
 
     const names = new Set([...Object.keys(masters), ...Object.keys(sums)]);
@@ -2529,7 +2561,12 @@ const server = http.createServer(async (req, res) => {
     // ---------- Multi-company debtor/creditor consolidation ----------
     // Live progress for the (long) side-by-side read, polled by the page.
     if (req.method === 'GET' && url.pathname === '/api/dc/progress') {
-      json(res, 200, { ...dcProgress, sub: finProgress.active ? finProgress.phase : dcProgress.sub });
+      // Overall fraction = companies fully done + fraction of the current one.
+      const frac = dcProgress.monthsTotal ? dcProgress.monthsDone / dcProgress.monthsTotal : 0;
+      const pct = dcProgress.total ? Math.min(100, Math.round(100 * (dcProgress.done + frac) / dcProgress.total)) : 0;
+      const elapsed = dcProgress.startedAt ? (Date.now() - dcProgress.startedAt) / 1000 : 0;
+      const etaSec = (dcProgress.active && pct > 2 && pct < 100) ? Math.round(elapsed * (100 - pct) / pct) : null;
+      json(res, 200, { ...dcProgress, pct, etaSec });
       return;
     }
     // Learned aliases — confirmed groupings remembered across runs.
@@ -2577,6 +2614,7 @@ const server = http.createServer(async (req, res) => {
       if (!asOn) { json(res, 400, { ok: false, error: 'Set the "as on" date.' }); return; }
       if (!targets.length) { json(res, 400, { ok: false, error: 'Pick at least one company.' }); return; }
       dcProgress.active = true; dcProgress.done = 0; dcProgress.total = targets.length; dcProgress.phase = 'Starting…'; dcProgress.sub = '';
+      dcProgress.startedAt = Date.now(); dcProgress.monthsDone = 0; dcProgress.monthsTotal = 0;
       const companies = [];
       try {
         for (let i = 0; i < targets.length; i++) {
