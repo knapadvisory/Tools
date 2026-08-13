@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '2.3';
+const VERSION = '2.4';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -669,7 +669,7 @@ function reconcile(docsIn, purchases, bookNotes, tolerance, memory = {}) {
   // Books-side breakdown attached to every matched/compared row, so the
   // report shows the same shape as the 2B: taxable, IGST/CGST/SGST, TDS.
   const bookFields = (hit) => ({
-    bookRef: billNo(hit), bookParty: hit.party, bookDate: hit.date, bookGstin: hit.gstin || '', bookAmount: hit.amount,
+    bookRef: billNo(hit), bookParty: hit.party, bookDate: hit.date, bookGstin: hit.gstin || '', bookRegn: hit.cmpGstin || '', bookAmount: hit.amount,
     bookTaxable: hit.taxable ?? 0, bookIgst: hit.igst ?? 0, bookCgst: hit.cgst ?? 0,
     bookSgst: hit.sgst ?? 0, bookGstComb: hit.gst ?? 0, bookTds: hit.tds ?? 0,
     bookReimb: hit.reimb ?? 0, bookTax: hit.tax ?? 0,
@@ -1553,7 +1553,7 @@ async function runServerReco() {
         bookReimb: d.bookReimb ?? null, diff: d.diff ?? null, eligible: d.itcAvailable !== false,
         // Books-side identity for the "Reco sheet (2B vs Books)" export — the
         // page's per-row name/GSTIN/date checks need who and when, not just how much.
-        bookParty: d.bookParty || null, bookGstin: d.bookGstin || null,
+        bookParty: d.bookParty || null, bookGstin: d.bookGstin || null, bookRegn: d.bookRegn || null,
         bookDate: d.bookDate ? (d.bookDate.toISOString ? d.bookDate.toISOString().slice(0, 10) : String(d.bookDate)) : null,
       })),
       booksOnly: recon.booksOnly.map((b) => ({
