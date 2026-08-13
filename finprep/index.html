@@ -130,7 +130,7 @@ function checkConn(){
     document.getElementById('tally-dot').style.background='var(--ok)';
     document.getElementById('tally-status').textContent='connector v'+connVer;
     document.getElementById('conn-ver').textContent='· connector v'+connVer;
-    if(parseFloat(connVer)<2.9) document.getElementById('msgTally').innerHTML='This tool needs connector <b>v2.9+</b> — press ⟳ Update connector.';
+    if(parseFloat(connVer)<3.0) document.getElementById('msgTally').innerHTML='This tool needs connector <b>v3.0+</b> — press ⟳ Update connector.';
   }).catch(function(){
     document.getElementById('tally-dot').style.background='var(--bad)';
     document.getElementById('tally-status').innerHTML='connector not found — <a href="/connector/Install-Tally-Connector.bat" download>install it</a> on this PC';
@@ -226,10 +226,16 @@ document.getElementById('readBtn').onclick=function(){
   var asOn=document.getElementById('asOn').value, prior=document.getElementById('priorAsOn').value;
   if(!asOn){ document.getElementById('msgTally').textContent='Set the current year-end date.'; return; }
   var btn=this; btn.disabled=true;
-  document.getElementById('msgTally').textContent='⏳ Reading the trial balance — keep Tally open…';
+  document.getElementById('msgTally').textContent='⏳ Reading the trial balance — keep Tally open on the Gateway…';
+  // Poll the connector's progress so the user sees which phase is running.
+  var poll=setInterval(function(){
+    fetch(API+'/api/fin/progress').then(function(r){return r.json();}).then(function(p){
+      if(p.active) document.getElementById('msgTally').textContent='⏳ '+p.phase+' ('+p.step+'/'+p.steps+')';
+    }).catch(function(){});
+  },1500);
   fetch(API+'/api/fin/trialbalance',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({asOn:asOn,priorAsOn:prior})})
     .then(function(r){return r.json();}).then(function(j){
-      btn.disabled=false;
+      clearInterval(poll); btn.disabled=false;
       if(!j.ok){ document.getElementById('msgTally').innerHTML='<span class="msg bad">'+(j.error||'Failed — is Tally open?')+'</span>'; return; }
       TB=j;
       document.getElementById('msgTally').innerHTML='<span class="msg ok">✅ Read '+j.ledgers.length+' ledgers across '+j.groupCount+' groups.</span>';
@@ -240,7 +246,7 @@ document.getElementById('readBtn').onclick=function(){
         '<div class="stat"><div class="n">₹'+inr(dr)+'</div><div class="l">total debit</div></div>'+
         '<div class="stat"><div class="n">₹'+inr(cr)+'</div><div class="l">total credit</div></div>';
       document.getElementById('p2').classList.remove('hidden');
-    }).catch(function(){ btn.disabled=false; document.getElementById('msgTally').innerHTML='<span class="msg bad">Connector not reachable.</span>'; });
+    }).catch(function(){ clearInterval(poll); btn.disabled=false; document.getElementById('msgTally').innerHTML='<span class="msg bad">Connector not reachable.</span>'; });
 };
 
 /* ===== step 2: prepare ===== */

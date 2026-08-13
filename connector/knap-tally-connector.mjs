@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '2.9';
+const VERSION = '3.0';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -269,6 +269,8 @@ function specialLeg(ledgerName) {
 }
 // Live progress for the long full-books read, polled by the browser.
 const recoProgress = { active: false, phase: '', mode: '', monthsDone: 0, monthsTotal: 0, vouchers: 0 };
+// Live progress for the financials trial-balance read, polled by /finprep/.
+const finProgress = { active: false, phase: '', step: 0, steps: 3 };
 
 async function askTally(tallyUrl, body) {
   const res = await fetch(tallyUrl, {
@@ -276,6 +278,22 @@ async function askTally(tallyUrl, body) {
     signal: AbortSignal.timeout(300000), // 5 min per chunk — a hung Tally fails loudly instead of forever
   });
   return res.text();
+}
+// Shorter timeout + one retry — for interactive reads where a 5-minute hang is
+// worse than a quick, clear failure. Returns the XML text or throws.
+async function askTallyFast(tallyUrl, body, ms = 120000) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(tallyUrl, {
+        method: 'POST', body, headers: { 'content-type': 'text/xml' },
+        signal: AbortSignal.timeout(ms),
+      });
+      return await res.text();
+    } catch (e) {
+      if (attempt === 1) throw e;
+      await new Promise((r) => setTimeout(r, 1500)); // brief pause, then one retry
+    }
+  }
 }
 /** Read vouchers month by month, parsing EACH chunk immediately and
  *  discarding its raw XML — big companies produce gigabytes of Tally XML
@@ -368,15 +386,19 @@ function voucherCollectionRequest(from, to) {
 // primary group) and every Ledger (Name, Parent, and closing balance as on
 // the report date). Closing balance follows SVTODATE, so two reads at the two
 // year-end dates give both comparative columns.
+// Canonical collection attributes + FETCH (not NATIVEMETHOD) — the same shape
+// as this connector's proven voucher reader. A bare NATIVEMETHOD collection
+// makes Tally recompute every ledger balance lazily and can hang for minutes;
+// FETCH pulls the already-computed value in the report context, fast.
+const COLL_ATTRS = 'ISMODIFY="No" ISFIXED="No" ISINITIALIZE="No" ISOPTION="No" ISINTERNAL="No"';
 const GROUPS_REQUEST = () => `<ENVELOPE>
  <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>KnapGroups</ID></HEADER>
  <BODY><DESC>
   <STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>${svCompany()}</STATICVARIABLES>
   <TDL><TDLMESSAGE>
-   <COLLECTION NAME="KnapGroups" ISMODIFY="No">
+   <COLLECTION NAME="KnapGroups" ${COLL_ATTRS}>
     <TYPE>Group</TYPE>
-    <NATIVEMETHOD>Name</NATIVEMETHOD><NATIVEMETHOD>Parent</NATIVEMETHOD>
-    <NATIVEMETHOD>IsRevenue</NATIVEMETHOD><NATIVEMETHOD>IsDeemedPositive</NATIVEMETHOD>
+    <FETCH>NAME</FETCH><FETCH>PARENT</FETCH><FETCH>ISREVENUE</FETCH><FETCH>ISDEEMEDPOSITIVE</FETCH>
    </COLLECTION>
   </TDLMESSAGE></TDL>
  </DESC></BODY>
@@ -386,13 +408,12 @@ const LEDGERS_BAL_REQUEST = (asOn) => `<ENVELOPE>
  <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>KnapLedgers</ID></HEADER>
  <BODY><DESC>
   <STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-   <SVFROMDATE>${toTallyDate(new Date(Date.UTC(asOn.getUTCFullYear() - 1, asOn.getUTCMonth(), asOn.getUTCDate())))}</SVFROMDATE>
+   <SVFROMDATE>${toTallyDate(new Date(Date.UTC(asOn.getUTCFullYear() - 1, asOn.getUTCMonth(), asOn.getUTCDate() + 1))) || toTallyDate(asOn)}</SVFROMDATE>
    <SVTODATE>${toTallyDate(asOn)}</SVTODATE>${svCompany()}</STATICVARIABLES>
   <TDL><TDLMESSAGE>
-   <COLLECTION NAME="KnapLedgers" ISMODIFY="No">
+   <COLLECTION NAME="KnapLedgers" ${COLL_ATTRS}>
     <TYPE>Ledger</TYPE>
-    <NATIVEMETHOD>Name</NATIVEMETHOD><NATIVEMETHOD>Parent</NATIVEMETHOD>
-    <NATIVEMETHOD>ClosingBalance</NATIVEMETHOD><NATIVEMETHOD>OpeningBalance</NATIVEMETHOD>
+    <FETCH>NAME</FETCH><FETCH>PARENT</FETCH><FETCH>CLOSINGBALANCE</FETCH><FETCH>OPENINGBALANCE</FETCH>
    </COLLECTION>
   </TDLMESSAGE></TDL>
  </DESC></BODY>
@@ -1984,15 +2005,28 @@ const server = http.createServer(async (req, res) => {
     // Grouped trial balance for two year-ends: every ledger with its closing
     // balance (current + prior) and its full group path up to the reserved
     // primary group, so the page can classify into Schedule III heads.
+    if (req.method === 'GET' && url.pathname === '/api/fin/progress') {
+      json(res, 200, finProgress);
+      return;
+    }
     if (req.method === 'POST' && url.pathname === '/api/fin/trialbalance') {
       const body = JSON.parse(await readBody(req));
       const cur = tallyDateOf(String(body.asOn || '').replace(/-/g, ''));
       const pri = tallyDateOf(String(body.priorAsOn || '').replace(/-/g, ''));
       if (!cur) { json(res, 400, { ok: false, error: 'Bad current year-end date.' }); return; }
+      finProgress.active = true; finProgress.steps = pri ? 3 : 2;
       try {
-        const groups = parseGroups(await askTally(state.settings.tallyUrl, GROUPS_REQUEST()));
-        const curLed = parseLedgerBalances(await askTally(state.settings.tallyUrl, LEDGERS_BAL_REQUEST(cur)));
-        const priLed = pri ? parseLedgerBalances(await askTally(state.settings.tallyUrl, LEDGERS_BAL_REQUEST(pri))) : {};
+        finProgress.phase = 'Reading the group tree from Tally…'; finProgress.step = 1;
+        const groups = parseGroups(await askTallyFast(state.settings.tallyUrl, GROUPS_REQUEST()));
+        finProgress.phase = 'Reading ledger closing balances (current year)…'; finProgress.step = 2;
+        const curLed = parseLedgerBalances(await askTallyFast(state.settings.tallyUrl, LEDGERS_BAL_REQUEST(cur)));
+        finProgress.phase = 'Reading ledger closing balances (prior year)…'; finProgress.step = 3;
+        const priLed = pri ? parseLedgerBalances(await askTallyFast(state.settings.tallyUrl, LEDGERS_BAL_REQUEST(pri))) : {};
+        finProgress.active = false;
+        if (!Object.keys(curLed).length) {
+          json(res, 200, { ok: false, error: 'Tally returned no ledger balances. Make sure the company is open, and that F1 → Settings → Connectivity → Client/Server → "Both" is set on port 9000.' });
+          return;
+        }
         const ledgers = Object.keys(curLed).map((name) => {
           const l = curLed[name];
           const primary = primaryGroupOf(l.parent, groups);
@@ -2015,7 +2049,11 @@ const server = http.createServer(async (req, res) => {
           ledgers,
         });
       } catch (e) {
-        json(res, 502, { ok: false, error: 'Could not read Tally: ' + String((e && e.message) || e) });
+        finProgress.active = false;
+        const msg = /timeout|abort/i.test(String((e && e.message) || e))
+          ? 'Tally did not respond in time. It usually means the request reached Tally but it is busy or the company is large — try again, and keep Tally on the Gateway (not inside a report). If it keeps failing, tell us your Tally version.'
+          : 'Could not read Tally: ' + String((e && e.message) || e);
+        json(res, 502, { ok: false, error: msg });
       }
       return;
     }
