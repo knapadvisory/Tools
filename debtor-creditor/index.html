@@ -1,0 +1,660 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Debtor / Creditor Consolidation — KNAP Tools</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23173f28'/><text x='50' y='68' text-anchor='middle' font-size='58' font-weight='700' fill='%235fd68a'>%E2%82%B9</text></svg>">
+<script src="/session.js" defer></script>
+<script src="/gstr2b/exceljs.js" defer></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --bg:#f4f5f2; --surface:#ffffff; --surface-2:#f6f7f4; --surface-3:#eef1ec;
+    --border:#e2e5df; --border-2:#d7dcd2;
+    --text:#141a16; --muted:#5f6b62; --faint:#8b968c;
+    --green:#1b6a3a; --green-2:#155630; --green-ink:#0f3d22; --green-soft:#e7f2ea; --green-line:#cfe6d7;
+    --head-bg:#173f28; --head-ink:rgba(255,255,255,.9);
+    --ok:#1b6a3a; --ok-soft:#e7f2ea;
+    --warn:#a86617; --warn-soft:#fbf1dd; --warn-line:#f0dcb4;
+    --bad:#b3261e; --bad-soft:#fbe9e7; --bad-line:#f3cdc8;
+    --info:#1f5f8b; --info-soft:#e6eff5;
+    --shadow:rgba(24,40,28,.07);
+    --mono:ui-monospace,"SF Mono","IBM Plex Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#10130f; --surface:#171b15; --surface-2:#1d221a; --surface-3:#232a20;
+      --border:#2a3126; --border-2:#333c2e; --text:#e8ece5; --muted:#a1ac9f; --faint:#7d887a;
+      --green:#4bbd74; --green-2:#3fa864; --green-ink:#bfe9cd; --green-soft:#16311f; --green-line:#26492f;
+      --head-bg:#0e2a1a; --ok:#4bbd74; --ok-soft:#16311f;
+      --warn:#e0a94a; --warn-soft:#332a12; --warn-line:#4a3d1a;
+      --bad:#e8756b; --bad-soft:#331a17; --bad-line:#4a2823; --info:#6fb2e0; --info-soft:#16283a;
+      --shadow:rgba(0,0,0,.5);
+    }
+  }
+  body{background:var(--bg);color:var(--text);font:14.5px/1.55 var(--sans);min-height:100vh;-webkit-font-smoothing:antialiased}
+  a{color:var(--green);text-decoration:none}
+  .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .site-head{background:var(--head-bg);position:sticky;top:0;z-index:30}
+  .site-head-inner{max-width:1220px;margin:0 auto;padding:12px 22px;display:flex;align-items:center;gap:14px}
+  .brand{font-weight:700;font-size:15.5px;color:#fff;display:flex;align-items:center;gap:8px;white-space:nowrap}
+  .brand .g{width:15px;height:15px;border-radius:4px;background:#5fd68a;display:inline-block}
+  .back{color:var(--head-ink);font-size:13px;padding:5px 10px;border-radius:8px}
+  .back:hover{background:rgba(255,255,255,.1)}
+  .spacer{flex:1}
+  .conn-pill{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:#eaf3ec;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);padding:5px 12px;border-radius:999px;white-space:nowrap}
+  .conn-pill .dot{width:8px;height:8px;border-radius:50%;background:#8b968c}
+  .conn-pill.on .dot{background:#5fd68a;box-shadow:0 0 0 3px rgba(95,214,138,.22)}
+  .conn-pill.off .dot{background:#e8756b}
+  #sess-out,.sess-out{font:inherit;font-size:12.5px;font-weight:600;color:#fff;background:transparent;border:1px solid rgba(255,255,255,.32);padding:6px 13px;border-radius:9px;cursor:pointer}
+  #sess-out:hover,.sess-out:hover{background:rgba(255,255,255,.12)}
+  main{max-width:1220px;margin:0 auto;padding:26px 22px 48px}
+  h1{font-size:24px;font-weight:700;letter-spacing:-.02em}
+  .lede{color:var(--muted);font-size:13.5px;margin:8px 0 0;max-width:820px}
+  .stepper{display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin:20px 0;background:var(--surface);border:1px solid var(--border);border-radius:13px;overflow:hidden;box-shadow:0 1px 2px var(--shadow)}
+  .step{display:flex;align-items:center;gap:11px;padding:14px 18px;border-right:1px solid var(--border);position:relative}
+  .step:last-child{border-right:0}
+  .step .num{flex:none;width:25px;height:25px;border-radius:50%;display:grid;place-items:center;font-size:12.5px;font-weight:700;background:var(--surface-3);color:var(--faint)}
+  .step .lbl{font-size:13.5px;font-weight:600;color:var(--muted)}
+  .step.done .num{background:var(--green-soft);color:var(--green)}
+  .step.done .lbl{color:var(--text)}
+  .step.active{background:var(--green-soft)}
+  .step.active .num{background:var(--green);color:#fff}
+  .step.active .lbl{color:var(--green-ink)}
+  @media (max-width:760px){.stepper{grid-template-columns:1fr 1fr}.step{border-bottom:1px solid var(--border)}}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:0 1px 2px var(--shadow);padding:20px 22px;margin-bottom:16px}
+  .card h2{font-size:15.5px;font-weight:700;margin-bottom:3px}
+  .card .sub{color:var(--muted);font-size:12.5px;margin-bottom:6px}
+  .btn{display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:13px;font-weight:600;padding:9px 16px;border-radius:10px;border:1px solid var(--border-2);background:var(--surface-2);color:var(--text);cursor:pointer;transition:.12s}
+  .btn:hover{border-color:var(--green);color:var(--green)}
+  .btn:disabled{opacity:.5;cursor:default;color:var(--text);border-color:var(--border-2)}
+  .btn.primary{background:var(--green);border-color:var(--green);color:#fff}
+  .btn.primary:hover{background:var(--green-2);color:#fff}
+  .btn.ghost{background:transparent;border-color:var(--border-2);font-size:12.5px;padding:7px 13px}
+  .btn.sm{font-size:12px;padding:5px 11px;border-radius:8px}
+  .btn.danger:hover{border-color:var(--bad);color:var(--bad)}
+  .row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .msg{font-size:13px;margin-top:10px;color:var(--muted)}
+  .msg.ok{color:var(--ok)} .msg.bad{color:var(--bad)} .msg.warn{color:var(--warn)}
+  input[type=date],input[type=text],select{font:inherit;padding:8px 11px;border:1px solid var(--border-2);border-radius:9px;background:var(--surface);color:var(--text)}
+  input[type=date]{font-family:var(--mono);font-size:13px}
+  label.lbl{font-size:12.5px;color:var(--muted);font-weight:600}
+  .conn-banner{display:flex;align-items:flex-start;gap:12px;background:var(--green-soft);border:1px solid var(--green-line);border-radius:12px;padding:14px 16px}
+  .conn-banner.off{background:var(--bad-soft);border-color:var(--bad-line)}
+  .conn-banner.wait{background:var(--surface-2);border-color:var(--border)}
+  .conn-banner .cdot{flex:none;width:11px;height:11px;border-radius:50%;background:var(--green);margin-top:4px}
+  .conn-banner.off .cdot{background:var(--bad)} .conn-banner.wait .cdot{background:var(--faint)}
+  .conn-banner .ctitle{font-weight:700;font-size:14px}
+  .conn-banner .csub{color:var(--muted);font-size:12.5px;margin-top:2px}
+  .conn-banner .cact{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+  .seg{display:inline-flex;border:1px solid var(--border-2);border-radius:10px;overflow:hidden}
+  .seg button{font:inherit;font-size:13px;font-weight:600;padding:9px 18px;border:0;background:var(--surface);color:var(--muted);cursor:pointer}
+  .seg button.on{background:var(--green);color:#fff}
+  .ep{display:flex;align-items:center;gap:8px;margin-top:8px}
+  .ep input{flex:1;min-width:180px;font-family:var(--mono);font-size:12.5px}
+  .cmp-ep{border:1px solid var(--border);border-radius:11px;margin-top:12px;overflow:hidden}
+  .cmp-ep .eph{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--surface-2);border-bottom:1px solid var(--border);font-size:12.5px}
+  .cmp-ep .eph .u{font-family:var(--mono);font-weight:700}
+  .cmp-ep .eph .st{margin-left:auto;font-size:11.5px}
+  .cmp-ep .eph .st.ok{color:var(--ok)} .cmp-ep .eph .st.bad{color:var(--bad)}
+  .cmp{display:flex;align-items:center;gap:11px;padding:9px 14px;border-bottom:1px solid var(--surface-2)}
+  .cmp:last-child{border-bottom:0}
+  .cmp input{width:16px;height:16px;accent-color:var(--green)}
+  .cmp .nm{font-weight:600;font-size:13px}
+  .cmp .gs{font-family:var(--mono);font-size:11px;color:var(--faint)}
+  .opts{display:flex;gap:22px;flex-wrap:wrap;margin-top:6px}
+  .opts .og{display:flex;flex-direction:column;gap:6px}
+  .opts .og .ot{font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--faint);font-weight:700}
+  .opts label{display:flex;align-items:center;gap:7px;font-size:13px;cursor:pointer}
+  .opts input[type=radio],.opts input[type=checkbox]{width:15px;height:15px;accent-color:var(--green)}
+  .statgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:16px}
+  @media (max-width:760px){.statgrid{grid-template-columns:1fr 1fr}}
+  .statc{background:var(--surface);border:1px solid var(--border);border-radius:13px;padding:16px 18px;box-shadow:0 1px 2px var(--shadow)}
+  .statc .v{font-size:23px;font-weight:800;font-family:var(--mono);letter-spacing:-.01em}
+  .statc .k{font-size:12px;color:var(--muted);margin-top:3px}
+  .statc.good .v{color:var(--green)} .statc.warnv .v{color:var(--warn)}
+  .prog{height:8px;background:var(--surface-3);border-radius:999px;overflow:hidden;margin-top:12px}
+  .prog>i{display:block;height:100%;background:var(--green);width:0;transition:width .3s}
+  .sug{border:1px solid var(--warn-line);background:var(--warn-soft);border-radius:12px;padding:12px 14px;margin-top:10px}
+  .sug .sh{font-size:12px;color:var(--warn);font-weight:700;margin-bottom:8px}
+  .sug .pair{display:flex;align-items:center;gap:12px;padding:8px 0;border-top:1px solid var(--warn-line);flex-wrap:wrap}
+  .sug .pair:first-of-type{border-top:0}
+  .sug .side{flex:1;min-width:200px}
+  .sug .side .n{font-weight:600;font-size:13px}
+  .sug .side .m{font-size:11.5px;color:var(--muted);font-family:var(--mono)}
+  .sug .score{font-family:var(--mono);font-size:11.5px;color:var(--warn);white-space:nowrap}
+  .sug .act{display:flex;gap:6px}
+  .tblwrap{overflow:auto;border:1px solid var(--border);border-radius:12px;margin-top:6px}
+  table.mtx{width:100%;border-collapse:collapse;font-size:12.8px;min-width:640px}
+  table.mtx th{position:sticky;top:0;background:var(--surface-2);text-align:right;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--faint);border-bottom:1px solid var(--border);padding:9px 10px;font-weight:700;white-space:nowrap;z-index:1}
+  table.mtx th.l{text-align:left}
+  table.mtx td{padding:7px 10px;border-bottom:1px solid var(--surface-2);text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+  table.mtx td.l{text-align:left;font-family:var(--sans);max-width:340px;white-space:normal}
+  table.mtx td.l .sub2{font-size:11px;color:var(--faint);font-family:var(--mono)}
+  table.mtx tr:hover td{background:var(--surface-2)}
+  table.mtx td.neg{color:var(--bad)}
+  table.mtx tr.tot td{font-weight:800;border-top:2px solid var(--border-2);background:var(--surface-2);position:sticky;bottom:0}
+  table.mtx .miss{color:var(--faint)}
+  table.mtx td.l .chk{margin-right:8px}
+  table.mtx input.pick{width:15px;height:15px;accent-color:var(--green);vertical-align:middle}
+  .tag{display:inline-block;font-size:9.5px;font-weight:700;padding:2px 7px;border-radius:999px;margin-left:6px;letter-spacing:.03em;vertical-align:middle}
+  .tag.pan{background:var(--info-soft);color:var(--info)}
+  .tag.gst{background:var(--green-soft);color:var(--green)}
+  .tag.nm{background:var(--surface-3);color:var(--muted)}
+  .tag.multi{background:var(--warn-soft);color:var(--warn)}
+  .rowbtns{display:inline-flex;gap:5px;margin-left:8px}
+  .cta{background:var(--head-bg);border-radius:14px;padding:16px 20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin:16px 0 8px}
+  .cta .ct{color:#fff;font-weight:700;font-size:15px}
+  .cta .cs{color:rgba(255,255,255,.72);font-size:12.5px;margin-top:2px;max-width:640px}
+  .cta .cact{margin-left:auto;display:flex;gap:10px;flex-wrap:wrap}
+  .cta .btn{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.28);color:#fff}
+  .cta .btn:hover{background:rgba(255,255,255,.18);color:#fff}
+  .cta .btn.primary{background:#3fbf6b;border-color:#3fbf6b;color:#0f2a19}
+  .cta .btn.primary:hover{background:#54cd7d;color:#0f2a19}
+  .hidden{display:none}
+  .flow-note{text-align:center;color:var(--faint);font-size:12px;margin-top:16px}
+  footer{border-top:1px solid var(--border);margin-top:32px;padding:18px 22px;text-align:center;font-size:12.5px;color:var(--faint)}
+  .empty{padding:22px;text-align:center;color:var(--muted);font-size:13px}
+</style>
+</head>
+<body>
+<header class="site-head"><div class="site-head-inner">
+  <span class="brand"><span class="g"></span>Debtor / Creditor Consolidation</span>
+  <a class="back" href="/">← All tools</a>
+  <span class="spacer"></span>
+  <span class="conn-pill" id="connPill"><span class="dot"></span><span id="connPillText">connecting…</span></span>
+</div></header>
+
+<main>
+  <h1>Debtor / Creditor Consolidation</h1>
+  <p class="lede">Lists every debtor (or creditor) as at a date across all your group companies — many companies in one Tally, or several Tally instances open separately — matches the same party across their books (by PAN, GSTIN or name), and lays the balances side by side: <b>particulars · balance per company · total</b>. Debtors show credit balances as negatives; creditors show debit balances as negatives. Everything flows browser ↔ connector ↔ Tally on this computer.</p>
+
+  <div class="stepper">
+    <div class="step active" id="st1"><span class="num">1</span><span class="lbl">Connect &amp; pick companies</span></div>
+    <div class="step" id="st2"><span class="num">2</span><span class="lbl">Debtors or creditors, as-on date</span></div>
+    <div class="step" id="st3"><span class="num">3</span><span class="lbl">Match &amp; review</span></div>
+    <div class="step" id="st4"><span class="num">4</span><span class="lbl">Sheet &amp; Excel</span></div>
+  </div>
+
+  <!-- connector -->
+  <div class="conn-banner wait" id="connBanner">
+    <span class="cdot"></span>
+    <div>
+      <div class="ctitle" id="connTitle">Looking for the connector…</div>
+      <div class="csub" id="connSub">The KNAP connector runs on the computer where Tally Prime is installed.</div>
+    </div>
+    <div class="cact">
+      <button class="btn ghost" id="btnUpdate" style="display:none" onclick="doUpdate()">⟳ Update connector</button>
+      <button class="btn ghost" onclick="releaseTally()">Release Tally</button>
+    </div>
+  </div>
+
+  <!-- STEP 1 -->
+  <div class="card" id="card1">
+    <h2>1 · Which Tally endpoints to read</h2>
+    <div class="sub">Each running Tally exposes one port (default <span class="mono">9000</span>). Add a line for every Tally you have open separately (<span class="mono">9001</span>, <span class="mono">9002</span>…). One Tally holding several companies needs just its one line.</div>
+    <div id="epList"></div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn ghost sm" onclick="addEndpoint('')">+ Add another Tally port</button>
+      <button class="btn primary" id="btnScan" onclick="scanCompanies()">Scan for companies</button>
+      <span class="msg" id="msgScan"></span>
+    </div>
+    <div id="cmpList"></div>
+  </div>
+
+  <!-- STEP 2 -->
+  <div class="card hidden" id="card2">
+    <h2>2 · What to extract</h2>
+    <div class="sub">Balances are read one company at a time — never all at once — from books-start up to the date you set, so the closing figure is exact.</div>
+    <div class="row" style="margin-top:12px">
+      <div class="seg" id="kindSeg">
+        <button class="on" data-kind="debtors" onclick="setKind('debtors')">Debtors</button>
+        <button data-kind="creditors" onclick="setKind('creditors')">Creditors</button>
+      </div>
+      <label class="lbl">as on</label>
+      <input type="date" id="asOn">
+      <button class="btn primary" id="btnExtract" onclick="extract()">Extract &amp; match →</button>
+    </div>
+    <div class="opts">
+      <div class="og">
+        <span class="ot">Primary match key</span>
+        <label><input type="radio" name="mk" value="pan" checked> PAN <span class="mono" style="color:var(--faint)">(merges a party's many GSTINs)</span></label>
+        <label><input type="radio" name="mk" value="gstin"> GSTIN <span class="mono" style="color:var(--faint)">(each registration separate)</span></label>
+        <label><input type="radio" name="mk" value="name"> Name only</label>
+      </div>
+      <div class="og">
+        <span class="ot">Name handling</span>
+        <label><input type="radio" name="nm" value="smart" checked> Smart (pvt = private, ltd = limited…)</label>
+        <label><input type="radio" name="nm" value="exact"> Exact only</label>
+      </div>
+      <div class="og">
+        <span class="ot">Extras</span>
+        <label><input type="checkbox" id="optFuzzy" checked> Suggest fuzzy look-alikes to review</label>
+        <label><input type="checkbox" id="optInter" checked> Flag inter-company parties (your own group)</label>
+      </div>
+    </div>
+    <div class="prog hidden" id="progWrap"><i id="progBar"></i></div>
+    <div class="msg" id="msgExtract"></div>
+  </div>
+
+  <!-- STEP 3 -->
+  <div class="card hidden" id="card3">
+    <h2>3 · Match &amp; review</h2>
+    <div class="sub">Confident matches (same PAN / GSTIN / name) are merged automatically. Confirm the look-alikes below, then merge or split any row in the sheet by hand. Your decisions are remembered for next time.</div>
+    <div class="statgrid" id="matchStats" style="margin-top:14px"></div>
+    <div id="sugWrap"></div>
+    <div class="cta" style="margin-top:16px">
+      <div>
+        <div class="ct">Build the consolidated sheet</div>
+        <div class="cs">You can still combine or split rows on the next screen before exporting.</div>
+      </div>
+      <div class="cact">
+        <button class="btn primary" onclick="buildSheet()">Build sheet →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 4 -->
+  <div class="card hidden" id="card4">
+    <div class="row" style="justify-content:space-between">
+      <div><h2 id="sheetTitle">4 · Consolidated sheet</h2><div class="sub" id="sheetSub"></div></div>
+      <div class="row">
+        <button class="btn ghost sm" id="btnCombine" onclick="combineSelected()" disabled>Combine selected</button>
+        <input type="text" id="filterBox" placeholder="Filter parties…" oninput="renderMatrix()" style="font-size:12.5px">
+        <button class="btn primary" onclick="exportXlsx()">⬇ Download Excel</button>
+      </div>
+    </div>
+    <div class="tblwrap"><table class="mtx" id="mtx"></table></div>
+    <div class="flow-note">Tip: tick two or more rows and press “Combine selected” to merge parties the matcher kept apart; press “Split” on a merged row to break it back into its ledgers.</div>
+  </div>
+</main>
+
+<footer>KNAP Advisory · internal tools · balances flow browser ↔ connector ↔ Tally on this computer; nothing leaves the machine until you export.</footer>
+
+<script>
+/* ============================ connector ============================ */
+var API = (function(){ try { return localStorage.getItem('knap_connector_url'); } catch(e){ return null; } })() || 'http://127.0.0.1:8797';
+var connVer = '';
+function setPill(cls,txt){ var p=document.getElementById('connPill'); p.className='conn-pill '+cls; document.getElementById('connPillText').textContent=txt; }
+function banner(cls,title,sub){ var b=document.getElementById('connBanner'); b.className='conn-banner '+cls; document.getElementById('connTitle').textContent=title; document.getElementById('connSub').innerHTML=sub; }
+function verGE(v,min){ var a=String(v).split('.').map(Number),b=String(min).split('.').map(Number); for(var i=0;i<Math.max(a.length,b.length);i++){var x=a[i]||0,y=b[i]||0; if(x!==y) return x>y;} return true; }
+function checkConn(){
+  fetch(API+'/health',{signal:AbortSignal.timeout(3000)}).then(function(r){return r.json();}).then(function(h){
+    connVer=h.version||''; setPill('on','connector v'+connVer+' · connected');
+    if(!verGE(connVer,'4.1')){
+      banner('off','Connector needs updating','This tool needs connector v4.1+. Press ⟳ Update connector, then reload.');
+      document.getElementById('btnUpdate').style.display='';
+    } else {
+      banner('wait','Connector ready','Add your Tally ports below, then scan for companies. Keep each Tally on the Gateway screen (not inside a report).');
+      document.getElementById('btnUpdate').style.display='none';
+    }
+  }).catch(function(){
+    setPill('off','connector not found');
+    banner('off','Connector not found on this PC','Install the KNAP connector, then reload. <a href="/connector/Install-Tally-Connector.bat" download>Download installer</a>');
+  });
+}
+function doUpdate(){
+  banner('wait','Updating…','Fetching the latest connector.');
+  fetch(API+'/update',{method:'POST'}).then(function(){ setTimeout(function(){ var t=setInterval(function(){ fetch(API+'/health').then(function(r){return r.json();}).then(function(h){ if(verGE(h.version||'0','4.1')){ clearInterval(t); checkConn(); } }).catch(function(){}); },1500); },1500); }).catch(function(){});
+}
+function releaseTally(){ fetch(API+'/api/tally/release',{method:'POST'}).then(function(r){return r.json();}).then(function(){ setMsg('msgScan','Released.','ok'); }).catch(function(){}); }
+function setMsg(id,txt,cls){ var e=document.getElementById(id); e.className='msg'+(cls?' '+cls:''); e.innerHTML=txt; }
+
+/* ============================ step 1: endpoints & companies ============================ */
+var endpoints=[]; // [{url, ok, companies:[{name,gstins}]}]
+function addEndpoint(v){
+  var wrap=document.getElementById('epList');
+  var div=document.createElement('div'); div.className='ep';
+  div.innerHTML='<input type="text" placeholder="http://localhost:9000" value="'+(v||'')+'"><button class="btn ghost sm" onclick="this.parentNode.remove()">✕</button>';
+  wrap.appendChild(div);
+}
+function endpointUrls(){
+  return Array.prototype.map.call(document.querySelectorAll('#epList input'),function(i){return i.value.trim();}).filter(Boolean);
+}
+function scanCompanies(){
+  var urls=endpointUrls();
+  if(!urls.length){ setMsg('msgScan','Add at least one Tally port.','bad'); return; }
+  setMsg('msgScan','Scanning '+urls.length+' endpoint(s)…','');
+  document.getElementById('btnScan').disabled=true;
+  fetch(API+'/api/dc/companies',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({urls:urls})})
+    .then(function(r){return r.json();}).then(function(j){
+      document.getElementById('btnScan').disabled=false;
+      if(!j.ok){ setMsg('msgScan',j.error||'Scan failed.','bad'); return; }
+      endpoints=j.endpoints||[];
+      renderCompanies();
+      var n=0; endpoints.forEach(function(e){ n+=(e.companies||[]).length; });
+      setMsg('msgScan',n?('Found '+n+' company(ies).'):'No companies found — is a company open in Tally?', n?'ok':'warn');
+    }).catch(function(e){ document.getElementById('btnScan').disabled=false; setMsg('msgScan','Could not reach the connector: '+e.message,'bad'); });
+}
+function renderCompanies(){
+  var wrap=document.getElementById('cmpList'); wrap.innerHTML='';
+  var any=false;
+  endpoints.forEach(function(ep,ei){
+    var box=document.createElement('div'); box.className='cmp-ep';
+    var head='<div class="eph"><span class="u">'+esc(ep.url)+'</span><span class="st '+(ep.ok?'ok':'bad')+'">'+(ep.ok?((ep.companies||[]).length+' open'):('✕ '+esc(ep.error||'unreachable')))+'</span></div>';
+    var rows='';
+    (ep.companies||[]).forEach(function(c,ci){
+      any=true;
+      var gst=(c.gstins||[]).join(', ');
+      rows+='<label class="cmp"><input type="checkbox" class="cmpChk" data-ep="'+ei+'" data-name="'+esc(c.name)+'" data-url="'+esc(ep.url)+'" checked>'
+        +'<span><span class="nm">'+esc(c.name)+'</span>'+(gst?' <span class="gs">'+esc(gst)+'</span>':'')+'</span></label>';
+    });
+    box.innerHTML=head+(rows||'<div class="empty">No company open on this port.</div>');
+    wrap.appendChild(box);
+  });
+  if(any){ document.getElementById('card2').classList.remove('hidden'); markStep(1,true); }
+}
+function selectedTargets(){
+  return Array.prototype.map.call(document.querySelectorAll('.cmpChk:checked'),function(c){
+    return {url:c.getAttribute('data-url'), company:c.getAttribute('data-name')};
+  });
+}
+
+/* ============================ step 2: extract ============================ */
+var KIND='debtors', RESULT=null, groupKeyBasis='pan', nameMode='smart', ownPans={}, ownGstins={};
+function setKind(k){ KIND=k; Array.prototype.forEach.call(document.querySelectorAll('#kindSeg button'),function(b){ b.classList.toggle('on', b.getAttribute('data-kind')===k); }); }
+function extract(){
+  var targets=selectedTargets();
+  if(!targets.length){ setMsg('msgExtract','Tick at least one company in step 1.','bad'); return; }
+  var asOn=document.getElementById('asOn').value;
+  if(!asOn){ setMsg('msgExtract','Set the "as on" date.','bad'); return; }
+  groupKeyBasis=document.querySelector('input[name=mk]:checked').value;
+  nameMode=document.querySelector('input[name=nm]:checked').value;
+  // remember own group's PAN/GSTIN for inter-company flagging
+  ownPans={}; ownGstins={};
+  endpoints.forEach(function(ep){ (ep.companies||[]).forEach(function(c){ (c.gstins||[]).forEach(function(g){ g=String(g).toUpperCase(); ownGstins[g]=c.name; var p=panOf(g); if(p) ownPans[p]=c.name; }); }); });
+  document.getElementById('btnExtract').disabled=true;
+  document.getElementById('progWrap').classList.remove('hidden');
+  setMsg('msgExtract','Reading '+targets.length+' company(ies), one by one — this can take a while for full books…','');
+  var poll=setInterval(function(){
+    fetch(API+'/api/dc/progress').then(function(r){return r.json();}).then(function(p){
+      if(p.total){ document.getElementById('progBar').style.width=Math.round(100*p.done/p.total)+'%'; }
+      if(p.active){ setMsg('msgExtract','⏳ '+(p.phase||'')+(p.sub?(' · '+p.sub):''),''); }
+    }).catch(function(){});
+  },1400);
+  fetch(API+'/api/dc/extract',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kind:KIND,asOn:asOn,targets:targets})})
+    .then(function(r){return r.json();}).then(function(j){
+      clearInterval(poll); document.getElementById('btnExtract').disabled=false;
+      if(!j.ok){ setMsg('msgExtract',(j.company?('While reading '+esc(j.company)+': '):'')+esc(j.error||'Failed.'),'bad'); return; }
+      RESULT=j; document.getElementById('progBar').style.width='100%';
+      var tot=0; j.companies.forEach(function(c){ tot+=c.partyCount; });
+      setMsg('msgExtract','Read '+j.companies.length+' company(ies), '+tot+' party rows. Matching…','ok');
+      loadAliasesThen(runMatch);
+    }).catch(function(e){ clearInterval(poll); document.getElementById('btnExtract').disabled=false; setMsg('msgExtract','Could not reach the connector: '+e.message,'bad'); });
+}
+
+/* ============================ matching ============================ */
+var savedAliases={merges:[],splits:[]}; // merges/splits are pairs of identity keys
+function loadAliasesThen(cb){
+  fetch(API+'/api/dc/aliases').then(function(r){return r.json();}).then(function(j){
+    var a=(j&&j.aliases)||{}; savedAliases={merges:a.merges||[],splits:a.splits||[],labels:a.labels||{}};
+    cb();
+  }).catch(function(){ savedAliases={merges:[],splits:[],labels:{}}; cb(); });
+}
+function panOf(g){ g=String(g||'').toUpperCase(); return /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/.test(g)?g.slice(2,12):''; }
+var EXP={pvt:'private',pvate:'private',ltd:'limited',ltd_:'limited',corp:'corporation',co:'company',pl:'',mfg:'manufacturing',inds:'industries',indl:'industries',ind:'industries',ent:'enterprises',entp:'enterprises',ente:'enterprises',intl:'international',opc:'opc',llp:'llp',pvtltd:'privatelimited'};
+function canonName(s){
+  var t=(' '+String(s||'').toLowerCase()+' ').replace(/&/g,' and ').replace(/[^a-z0-9]+/g,' ');
+  t=t.replace(/\bmessrs\b/g,' ').replace(/\bm s\b/g,' ').replace(/\bthe\b/g,' ');
+  if(nameMode==='smart'){
+    t=' '+t.split(' ').map(function(w){ return EXP.hasOwnProperty(w)?EXP[w]:w; }).join(' ')+' ';
+  }
+  return t.replace(/\s+/g,' ').trim();
+}
+function nameKey(s){ return canonName(s).replace(/ /g,''); }
+function tokens(s){ return canonName(s).split(' ').filter(Boolean); }
+function identityKey(p){
+  var pan=p.pan||panOf(p.gstin);
+  if(groupKeyBasis==='pan' && pan) return 'pan:'+pan;
+  if(groupKeyBasis!=='name' && p.gstin) return 'gst:'+String(p.gstin).toUpperCase();
+  if(groupKeyBasis!=='name' && pan) return 'pan:'+pan; // gstin basis but only pan present
+  var nk=nameKey(p.ledger); return nk?('nm:'+nk):('led:'+String(p.ledger).toLowerCase());
+}
+// union-find
+function makeUF(){ var parent={}; function find(x){ if(parent[x]===undefined)parent[x]=x; while(parent[x]!==x){ parent[x]=parent[parent[x]]; x=parent[x]; } return x; } function union(a,b){ a=find(a);b=find(b); if(a!==b)parent[a]=b; } return {find:find,union:union,parent:parent}; }
+var PARTIES=[], GROUPS=[];
+function runMatch(){
+  PARTIES=[];
+  RESULT.companies.forEach(function(c,ci){
+    (c.parties||[]).forEach(function(p,pi){
+      PARTIES.push({id:'c'+ci+'p'+pi, ci:ci, ledger:p.ledger, gstin:String(p.gstin||'').toUpperCase(), pan:p.pan||panOf(p.gstin), group:p.group, balance:p.balance, idk:null});
+    });
+  });
+  PARTIES.forEach(function(p){ p.idk=identityKey(p); });
+  var uf=makeUF();
+  PARTIES.forEach(function(p){ uf.find(p.id); });
+  // auto-union: same identity key
+  var byKey={}; PARTIES.forEach(function(p){ (byKey[p.idk]=byKey[p.idk]||[]).push(p); });
+  Object.keys(byKey).forEach(function(k){ var arr=byKey[k]; for(var i=1;i<arr.length;i++) uf.union(arr[0].id,arr[i].id); });
+  // saved merges (by identity key): union one representative per key
+  var repByKey={}; PARTIES.forEach(function(p){ if(!repByKey[p.idk]) repByKey[p.idk]=p.id; });
+  (savedAliases.merges||[]).forEach(function(pair){ if(repByKey[pair[0]]&&repByKey[pair[1]]) uf.union(repByKey[pair[0]],repByKey[pair[1]]); });
+  buildGroups(uf);
+  // fuzzy suggestions across distinct groups
+  SUGGEST=document.getElementById('optFuzzy') && document.getElementById('optFuzzy').checked ? computeSuggestions() : [];
+  renderMatchReview();
+  markStep(2,true); document.getElementById('card3').classList.remove('hidden');
+  document.getElementById('card3').scrollIntoView({behavior:'smooth',block:'start'});
+}
+function buildGroups(uf){
+  var map={};
+  PARTIES.forEach(function(p){ var r=uf.find(p.id); (map[r]=map[r]||[]).push(p); });
+  GROUPS=Object.keys(map).map(function(r){
+    var members=map[r];
+    return makeGroup(members);
+  });
+  sortGroups();
+}
+function makeGroup(members){
+  // representative name: prefer a member with GSTIN, then the longest name
+  var rep=members.slice().sort(function(a,b){ var ga=a.gstin?1:0,gb=b.gstin?1:0; if(ga!==gb)return gb-ga; return b.ledger.length-a.ledger.length; })[0];
+  var pans={},gstins={}; members.forEach(function(m){ if(m.pan)pans[m.pan]=1; if(m.gstin)gstins[m.gstin]=1; });
+  var basis = members.some(function(m){return m.idk.slice(0,4)==='pan:';})?'pan':(members.some(function(m){return m.idk.slice(0,4)==='gst:';})?'gstin':'name');
+  var perCo={}; members.forEach(function(m){ perCo[m.ci]=(perCo[m.ci]||0)+m.balance; });
+  var isInter=false; Object.keys(pans).forEach(function(p){ if(ownPans[p])isInter=true; }); Object.keys(gstins).forEach(function(g){ if(ownGstins[g])isInter=true; });
+  return {
+    label: (savedAliases.labels&&savedAliases.labels[rep.idk])||rep.ledger,
+    rep:rep, members:members, perCo:perCo,
+    pans:Object.keys(pans), gstins:Object.keys(gstins), basis:basis,
+    inter:isInter,
+    total: Object.keys(perCo).reduce(function(s,k){return s+perCo[k];},0)
+  };
+}
+function sortGroups(){ GROUPS.sort(function(a,b){ return Math.abs(b.total)-Math.abs(a.total); }); }
+function lev(a,b){ if(a===b)return 0; var m=a.length,n=b.length; if(!m)return n; if(!n)return m; var d=[]; for(var i=0;i<=m;i++)d[i]=[i]; for(var j=0;j<=n;j++)d[0][j]=j; for(i=1;i<=m;i++)for(j=1;j<=n;j++){ d[i][j]=Math.min(d[i-1][j]+1,d[i][j-1]+1,d[i-1][j-1]+(a[i-1]===b[j-1]?0:1)); } return d[m][n]; }
+function sim(a,b){
+  var ka=nameKey(a), kb=nameKey(b); if(!ka||!kb)return 0; if(ka===kb)return 1;
+  var L=1-lev(ka,kb)/Math.max(ka.length,kb.length);
+  var ta=tokens(a), tb=tokens(b), sa={}; ta.forEach(function(t){sa[t]=1;}); var inter=0,uni={}; ta.forEach(function(t){uni[t]=1;}); tb.forEach(function(t){ if(sa[t])inter++; uni[t]=1; });
+  var J=inter/Math.max(1,Object.keys(uni).length);
+  var contain=(ka.indexOf(kb)>=0||kb.indexOf(ka)>=0)?0.9:0;
+  return Math.max(0.55*L+0.45*J, contain);
+}
+var SUGGEST=[];
+function pairKey(a,b){ return a<b?a+'|'+b:b+'|'+a; }
+function isSplit(ka,kb){ return (savedAliases.splits||[]).some(function(s){ return pairKey(s[0],s[1])===pairKey(ka,kb); }); }
+function computeSuggestions(){
+  var out=[]; var seen={};
+  for(var i=0;i<GROUPS.length;i++){
+    for(var j=i+1;j<GROUPS.length;j++){
+      var g1=GROUPS[i], g2=GROUPS[j];
+      // different confirmed PANs => different entities, skip
+      if(g1.pans.length&&g2.pans.length){ var share=g1.pans.some(function(p){return g2.pans.indexOf(p)>=0;}); if(!share) continue; }
+      var s=sim(g1.rep.ledger,g2.rep.ledger);
+      if(s>=0.84 && s<1){
+        var ka=g1.rep.idk, kb=g2.rep.idk;
+        if(isSplit(ka,kb)) continue;
+        var pk=pairKey(ka,kb); if(seen[pk])continue; seen[pk]=1;
+        out.push({a:g1,b:g2,score:s,ka:ka,kb:kb});
+      }
+    }
+  }
+  out.sort(function(x,y){return y.score-x.score;});
+  return out.slice(0,60);
+}
+
+/* ============================ step 3: review ============================ */
+function renderMatchReview(){
+  var parties=PARTIES.length, groups=GROUPS.length, merged=parties-groups, inter=GROUPS.filter(function(g){return g.inter;}).length;
+  var s=document.getElementById('matchStats');
+  s.innerHTML=stat(parties,'party rows read')+stat(groups,'matched parties')+stat(merged,'rows merged','good')+stat(SUGGEST.length,'look-alikes to review',SUGGEST.length?'warnv':'');
+  var w=document.getElementById('sugWrap');
+  if(!SUGGEST.length){ w.innerHTML=''; return; }
+  var html='<div class="sug"><div class="sh">⚠ '+SUGGEST.length+' possible same-party pair(s) — confirm each</div>';
+  SUGGEST.forEach(function(sg,idx){
+    html+='<div class="pair" id="sg'+idx+'">'
+      +'<div class="side"><div class="n">'+esc(sg.a.rep.ledger)+'</div><div class="m">'+coList(sg.a)+'</div></div>'
+      +'<div class="side"><div class="n">'+esc(sg.b.rep.ledger)+'</div><div class="m">'+coList(sg.b)+'</div></div>'
+      +'<div class="score">'+Math.round(sg.score*100)+'% match</div>'
+      +'<div class="act"><button class="btn sm primary" onclick="acceptSug('+idx+')">Same</button><button class="btn sm" onclick="rejectSug('+idx+')">Different</button></div></div>';
+  });
+  html+='</div>';
+  w.innerHTML=html;
+}
+function coList(g){ return Object.keys(g.perCo).map(function(ci){ return esc(RESULT.companies[ci].label)+': '+fmt(g.perCo[ci]); }).join(' · '); }
+function stat(v,k,cls){ return '<div class="statc '+(cls||'')+'"><div class="v">'+(typeof v==='number'?v.toLocaleString('en-IN'):v)+'</div><div class="k">'+k+'</div></div>'; }
+function acceptSug(idx){ var sg=SUGGEST[idx]; savedAliases.merges.push([sg.ka,sg.kb]); document.getElementById('sg'+idx).style.display='none'; reMatch(); }
+function rejectSug(idx){ var sg=SUGGEST[idx]; savedAliases.splits.push([sg.ka,sg.kb]); document.getElementById('sg'+idx).style.display='none'; }
+function reMatch(){
+  // rebuild groups honouring updated merges/splits, keep suggestions minus resolved
+  var uf=makeUF(); PARTIES.forEach(function(p){ uf.find(p.id); });
+  var byKey={}; PARTIES.forEach(function(p){ (byKey[p.idk]=byKey[p.idk]||[]).push(p); });
+  Object.keys(byKey).forEach(function(k){ var arr=byKey[k]; for(var i=1;i<arr.length;i++) uf.union(arr[0].id,arr[i].id); });
+  var repByKey={}; PARTIES.forEach(function(p){ if(!repByKey[p.idk]) repByKey[p.idk]=p.id; });
+  (savedAliases.merges||[]).forEach(function(pair){ if(repByKey[pair[0]]&&repByKey[pair[1]]) uf.union(repByKey[pair[0]],repByKey[pair[1]]); });
+  buildGroups(uf);
+  var parties=PARTIES.length, groups=GROUPS.length, merged=parties-groups;
+  var s=document.getElementById('matchStats');
+  s.innerHTML=stat(parties,'party rows read')+stat(groups,'matched parties')+stat(merged,'rows merged','good')+stat(document.querySelectorAll('.sug .pair:not([style*="none"])').length,'look-alikes to review','warnv');
+}
+
+/* ============================ step 4: matrix & export ============================ */
+var picked={};
+function buildSheet(){
+  saveAliases();
+  markStep(3,true); document.getElementById('card4').classList.remove('hidden');
+  document.getElementById('sheetTitle').textContent='4 · '+(KIND==='debtors'?'Debtors':'Creditors')+' — consolidated as on '+RESULT.asOn;
+  var neg=KIND==='debtors'?'credit balances shown negative':'debit balances shown negative';
+  document.getElementById('sheetSub').textContent=GROUPS.length+' parties across '+RESULT.companies.length+' companies · '+neg+'.';
+  picked={};
+  renderMatrix();
+  document.getElementById('card4').scrollIntoView({behavior:'smooth',block:'start'});
+}
+function currentRows(){
+  var f=(document.getElementById('filterBox').value||'').toLowerCase().trim();
+  var rows=GROUPS;
+  if(f) rows=rows.filter(function(g){ return g.label.toLowerCase().indexOf(f)>=0 || g.members.some(function(m){return m.ledger.toLowerCase().indexOf(f)>=0;}) || g.pans.join(' ').toLowerCase().indexOf(f)>=0 || g.gstins.join(' ').toLowerCase().indexOf(f)>=0; });
+  return rows;
+}
+function renderMatrix(){
+  var cos=RESULT.companies;
+  var rows=currentRows();
+  var h='<thead><tr><th class="l">Particulars</th>';
+  cos.forEach(function(c){ h+='<th>'+esc(c.label)+'</th>'; });
+  h+='<th>Total</th></tr></thead><tbody>';
+  var colTot=cos.map(function(){return 0;}), grand=0;
+  rows.forEach(function(g,gi){
+    var gidx=GROUPS.indexOf(g);
+    var basisTag=g.basis==='pan'?'<span class="tag pan">PAN</span>':g.basis==='gstin'?'<span class="tag gst">GSTIN</span>':'<span class="tag nm">NAME</span>';
+    var interTag=g.inter?'<span class="tag multi">INTER-CO</span>':'';
+    var multiTag=g.members.length>1?'<span class="tag multi">'+g.members.length+' ledgers</span>':'';
+    var idAttr=(g.pans[0]||g.gstins[0]||'');
+    h+='<tr><td class="l"><input type="checkbox" class="pick" '+(picked[gidx]?'checked':'')+' onchange="togglePick('+gidx+')"> <b>'+esc(g.label)+'</b>'+basisTag+interTag+multiTag
+      +'<div class="sub2">'+esc(idAttr||g.members.map(function(m){return m.ledger;}).slice(0,3).join(' / '))
+      +'<span class="rowbtns"><button class="btn sm ghost" onclick="renameGroup('+gidx+')">Rename</button>'+(g.members.length>1?'<button class="btn sm ghost" onclick="splitGroup('+gidx+')">Split</button>':'')+'</span></div></td>';
+    cos.forEach(function(c,ci){
+      var v=g.perCo[ci];
+      if(v===undefined){ h+='<td class="miss">—</td>'; }
+      else { colTot[ci]+=v; h+='<td class="'+(v<0?'neg':'')+'">'+fmt(v)+'</td>'; }
+    });
+    grand+=g.total;
+    h+='<td class="'+(g.total<0?'neg':'')+'"><b>'+fmt(g.total)+'</b></td></tr>';
+  });
+  h+='</tbody><tfoot><tr class="tot"><td class="l">Total ('+rows.length+' parties)</td>';
+  cos.forEach(function(c,ci){ h+='<td class="'+(colTot[ci]<0?'neg':'')+'">'+fmt(colTot[ci])+'</td>'; });
+  h+='<td class="'+(grand<0?'neg':'')+'">'+fmt(grand)+'</td></tr></tfoot>';
+  document.getElementById('mtx').innerHTML=h;
+}
+function togglePick(gi){ picked[gi]=!picked[gi]; document.getElementById('btnCombine').disabled=Object.keys(picked).filter(function(k){return picked[k];}).length<2; }
+function combineSelected(){
+  var idxs=Object.keys(picked).filter(function(k){return picked[k];}).map(Number);
+  if(idxs.length<2) return;
+  var members=[]; idxs.forEach(function(i){ members=members.concat(GROUPS[i].members); });
+  // record merges between the identity keys so it persists
+  var keys={}; members.forEach(function(m){ keys[m.idk]=1; }); var kl=Object.keys(keys);
+  for(var i=1;i<kl.length;i++) savedAliases.merges.push([kl[0],kl[i]]);
+  var ng=makeGroup(members);
+  // remove old groups, add new
+  var keep=GROUPS.filter(function(g,i){ return idxs.indexOf(i)<0; }); keep.push(ng); GROUPS=keep; sortGroups();
+  picked={}; document.getElementById('btnCombine').disabled=true; saveAliases(); renderMatrix();
+}
+function splitGroup(gi){
+  var g=GROUPS[gi]; if(g.members.length<2) return;
+  // remove any saved merges tying these members together, add splits between distinct keys
+  var keys={}; g.members.forEach(function(m){ keys[m.idk]=1; }); var kl=Object.keys(keys);
+  savedAliases.merges=(savedAliases.merges||[]).filter(function(pr){ return !(keys[pr[0]]&&keys[pr[1]]); });
+  for(var i=0;i<kl.length;i++)for(var j=i+1;j<kl.length;j++) savedAliases.splits.push([kl[i],kl[j]]);
+  // re-derive groups from scratch honouring the new state
+  reMatch(); saveAliases(); renderMatrix();
+}
+function renameGroup(gi){ var g=GROUPS[gi]; var nn=prompt('Rename this party (remembered for next time):',g.label); if(nn===null)return; g.label=nn.trim()||g.label; savedAliases.labels=savedAliases.labels||{}; savedAliases.labels[g.rep.idk]=g.label; saveAliases(); renderMatrix(); }
+function saveAliases(){
+  fetch(API+'/api/dc/aliases',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({aliases:{merges:savedAliases.merges,splits:savedAliases.splits,labels:savedAliases.labels||{}}})}).catch(function(){});
+}
+function exportXlsx(){
+  if(typeof ExcelJS==='undefined'){ alert('Excel library still loading — try again in a moment.'); return; }
+  var cos=RESULT.companies, rows=GROUPS;
+  var wb=new ExcelJS.Workbook(); wb.creator='KNAP Tools';
+  var ws=wb.addWorksheet((KIND==='debtors'?'Debtors':'Creditors')+' '+RESULT.asOn);
+  var title=(KIND==='debtors'?'DEBTORS':'CREDITORS')+' — consolidated as on '+RESULT.asOn+'  ('+(KIND==='debtors'?'credit balances negative':'debit balances negative')+')';
+  var ncol=2+cos.length; // particulars + companies + total
+  ws.mergeCells(1,1,1,ncol); var tc=ws.getCell(1,1); tc.value=title; tc.font={bold:true,size:13}; tc.alignment={vertical:'middle'};
+  var hdr=['Particulars']; cos.forEach(function(c){hdr.push(c.label);}); hdr.push('Total');
+  var hr=ws.addRow(hdr); hr.font={bold:true,color:{argb:'FFFFFFFF'}}; hr.alignment={horizontal:'center'};
+  hr.eachCell(function(cell,cn){ cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF173F28'}}; if(cn===1)cell.alignment={horizontal:'left'}; });
+  var colTot=cos.map(function(){return 0;}), grand=0;
+  rows.forEach(function(g){
+    var r=['']; r[0]=g.label;
+    cos.forEach(function(c,ci){ var v=g.perCo[ci]; r.push(v===undefined?null:round2(v)); if(v!==undefined)colTot[ci]+=v; });
+    r.push(round2(g.total)); grand+=g.total;
+    var row=ws.addRow(r);
+    row.eachCell(function(cell,cn){ if(cn>1){ cell.numFmt='#,##0.00;[Red]-#,##0.00'; } });
+    row.getCell(ncol).font={bold:true};
+  });
+  var tr=['Total']; cos.forEach(function(c,ci){ tr.push(round2(colTot[ci])); }); tr.push(round2(grand));
+  var totRow=ws.addRow(tr); totRow.font={bold:true};
+  totRow.eachCell(function(cell,cn){ cell.border={top:{style:'thin'}}; if(cn>1)cell.numFmt='#,##0.00;[Red]-#,##0.00'; });
+  ws.getColumn(1).width=38; for(var i=2;i<=ncol;i++) ws.getColumn(i).width=16;
+  ws.views=[{state:'frozen',ySplit:2,xSplit:1}];
+  // Members sheet — audit trail: which ledgers folded into each party
+  var ms=wb.addWorksheet('Members');
+  ms.addRow(['Party','Company','Ledger in Tally','GSTIN','PAN','Balance']).font={bold:true};
+  rows.forEach(function(g){ g.members.forEach(function(m){ ms.addRow([g.label, RESULT.companies[m.ci].label, m.ledger, m.gstin||'', m.pan||'', round2(m.balance)]).getCell(6).numFmt='#,##0.00;[Red]-#,##0.00'; }); });
+  ms.getColumn(1).width=32; ms.getColumn(2).width=22; ms.getColumn(3).width=34; ms.getColumn(4).width=18; ms.getColumn(5).width=13; ms.getColumn(6).width=15;
+  wb.xlsx.writeBuffer().then(function(buf){
+    var a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+    a.download=(KIND==='debtors'?'Debtors':'Creditors')+'-consolidated-'+RESULT.asOn+'.xlsx'; a.style.display='none';
+    document.body.appendChild(a); a.click(); setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); },1500);
+  });
+}
+
+/* ============================ helpers ============================ */
+function round2(n){ return Math.round(n*100)/100; }
+function fmt(n){ if(n===undefined||n===null)return '—'; var v=round2(n); return (v<0?'-':'')+'₹'+Math.abs(v).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function markStep(n,done){ var s=document.getElementById('st'+n); if(s){ s.classList.remove('active'); s.classList.add('done'); } var nx=document.getElementById('st'+(n+1)); if(nx)nx.classList.add('active'); }
+
+/* ============================ init ============================ */
+(function(){
+  addEndpoint('http://localhost:9000');
+  // default as-on = end of last month
+  var d=new Date(); d.setDate(0);
+  document.getElementById('asOn').value=d.toISOString().slice(0,10);
+  checkConn(); setInterval(checkConn,20000);
+})();
+</script>
+</body>
+</html>

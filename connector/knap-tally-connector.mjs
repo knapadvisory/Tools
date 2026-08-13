@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.0';
+const VERSION = '4.1';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -73,6 +73,10 @@ function loadState() {
   try {
     const raw = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
     return {
+      // Preserve any extra keys the tools persist (tdsMap, finMap, dcAliases…)
+      // so learned memory survives a connector restart — before this spread
+      // they were written to disk but dropped on load.
+      ...raw,
       settings: { ...DEFAULT_STATE.settings, ...(raw.settings || {}) },
       mappings: raw.mappings || {},
       posted: raw.posted || {},
@@ -2045,6 +2049,115 @@ setInterval(autoRecoTick, 60000);
 setTimeout(scanWatchFolder, 3000);
 setTimeout(autoRecoTick, 8000);
 
+// ===========================================================================
+// MULTI-COMPANY DEBTOR / CREDITOR CONSOLIDATION  (page: HUB/debtor-creditor/)
+// ---------------------------------------------------------------------------
+// One party (a customer or a supplier) is often carried in the books of
+// several group companies — a sale raised by Company A is settled through
+// Company B, so B carries A's customer too. This tool lists every debtor (or
+// creditor) as at a chosen date across ALL the companies the connector can
+// reach — whether they are many companies loaded in one Tally, or several
+// Tally instances each on its own port — and lays their balances side by side
+// so they can be matched into one row per real party.
+//
+// The balance for each party is DERIVED the same proven way the financials
+// tool builds its trial balance: read the vouchers from books-start to the
+// chosen date and sum each ledger's movements in the Dr-positive convention
+// (opening + Σ movement). Asking Tally to COMPUTE closing balances hangs it,
+// so we never do that. Balances are returned Dr-positive:
+//   • Debtors   → a normal receivable is +, a party in CREDIT shows −.
+//   • Creditors → the page negates, so a normal payable is +, a party in
+//                 DEBIT shows −.
+// Matching (PAN-from-GSTIN → GSTIN → exact name → fuzzy) and the review step
+// happen in the browser; confirmed groupings are remembered in state.dcAliases.
+
+const dcProgress = { active: false, phase: '', sub: '', done: 0, total: 0, company: '' };
+
+// PAN sits inside every GSTIN as characters 3–12 (0-based 2..12). Deriving it
+// lets one party that holds several state GSTINs collapse under a single PAN —
+// the single most reliable cross-company key for Indian entities.
+const PAN_RE = /[A-Z]{5}\d{4}[A-Z]/;
+function panFromGstin(g) {
+  const s = String(g || '').toUpperCase();
+  if (!GSTIN_RE.test(s)) return '';
+  const pan = s.slice(2, 12);
+  return PAN_RE.test(pan) ? pan : '';
+}
+
+// Is this ledger parked under Sundry Debtors / Sundry Creditors? We test the
+// WHOLE group chain (ledger → primary) so custom sub-groups like
+// "Sundry Debtors › Local" are caught by their reserved ancestor.
+function dcClassOf(groupPath) {
+  for (const g of groupPath) {
+    const n = norm(g);
+    if (n.includes('sundrydebtor')) return 'debtors';
+    if (n.includes('sundrycreditor')) return 'creditors';
+  }
+  return null;
+}
+
+// Read one company's debtors AND creditors as at `asOn`. `company` scopes the
+// Tally requests via SVCURRENTCOMPANY (all the request builders read the
+// global settings.company, so we set it for the duration and restore it). One
+// full read serves both sides — the page keeps whichever it asked for.
+async function readDCForCompany(url, company, asOn, label) {
+  const savedCompany = state.settings.company;
+  state.settings.company = company || '';
+  try {
+    dcProgress.phase = `Reading ${label} — group tree & ledgers…`;
+    const groups = parseGroups(await askTallyFast(url, GROUPS_REQUEST()));
+    const masters = parseLedgerMasters(await askTallyFast(url, LEDGER_MASTERS_REQUEST()));
+
+    // Books start — closing at asOn = master opening (as at books-start) + all
+    // movement up to asOn, so we MUST read from books-start (a debtor's unpaid
+    // invoices carry across years). Fall back to five FYs back if unknown.
+    let booksStart = null;
+    try {
+      const c = parseCompany(await askTallyFast(url, FIN_COMPANY_REQUEST(), 15000));
+      booksStart = c.booksFrom || c.start || null;
+    } catch { /* not essential */ }
+    const readStart = booksStart || new Date(Date.UTC(asOn.getUTCFullYear() - 5, 3, 1));
+
+    dcProgress.phase = `Reading ${label} — vouchers to ${asOn.toISOString().slice(0, 10)}…`;
+    // from = readStart, so priorDr is unused; dr = full movement readStart→asOn.
+    const { sums, cal } = await readTBFromVouchers(url, readStart, readStart, asOn);
+    dcProgress.sub = '';
+
+    const names = new Set([...Object.keys(masters), ...Object.keys(sums)]);
+    const debtors = [], creditors = [];
+    for (const name of names) {
+      const m = masters[name] || { parent: '', openingDr: 0, gstin: '' };
+      const mv = sums[name] || { dr: 0 };
+      const path = groupPathOf(m.parent, groups);
+      const cls = dcClassOf(path);
+      if (!cls) continue;
+      const balanceDr = r2((m.openingDr || 0) + (mv.dr || 0));
+      const moved = !!sums[name] && Math.abs(mv.dr) > 0.005;
+      // Keep parties with a live balance OR any activity in the window; drop
+      // dormant never-used ledgers so the matrix stays about real relationships.
+      if (Math.abs(balanceDr) < 0.005 && !moved && Math.abs(m.openingDr || 0) < 0.005) continue;
+      const gstin = (m.gstin || '').toUpperCase();
+      const row = {
+        ledger: name,
+        gstin,
+        pan: panFromGstin(gstin),
+        group: m.parent,
+        // Dr-positive for debtors; the page negates for creditors so each
+        // side's natural balance reads positive and the contrary reads minus.
+        balanceDr,
+      };
+      (cls === 'debtors' ? debtors : creditors).push(row);
+    }
+    return {
+      ok: true, url, company: company || '', label,
+      booksStart: booksStart ? booksStart.toISOString().slice(0, 10) : null,
+      voucherCount: cal.vouchers, debtors, creditors,
+    };
+  } finally {
+    state.settings.company = savedCompany;
+  }
+}
+
 // --------------------------------- server -----------------------------------
 function json(res, code, obj) {
   res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' });
@@ -2409,6 +2522,88 @@ const server = http.createServer(async (req, res) => {
           ? 'Tally stopped responding while reading vouchers. Keep Tally on the Gateway (not inside a report) and try again. If it keeps failing, use “Release Tally”, then retry a shorter period.'
           : 'Could not read Tally: ' + String((e && e.message) || e);
         json(res, 502, { ok: false, error: msg });
+      }
+      return;
+    }
+
+    // ---------- Multi-company debtor/creditor consolidation ----------
+    // Live progress for the (long) side-by-side read, polled by the page.
+    if (req.method === 'GET' && url.pathname === '/api/dc/progress') {
+      json(res, 200, { ...dcProgress, sub: finProgress.active ? finProgress.phase : dcProgress.sub });
+      return;
+    }
+    // Learned aliases — confirmed groupings remembered across runs.
+    if (req.method === 'GET' && url.pathname === '/api/dc/aliases') {
+      json(res, 200, { ok: true, version: VERSION, aliases: state.dcAliases || {} });
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/api/dc/aliases') {
+      const body = JSON.parse(await readBody(req));
+      state.dcAliases = body.aliases && typeof body.aliases === 'object' ? body.aliases : {};
+      saveState();
+      json(res, 200, { ok: true, count: Object.keys(state.dcAliases).length });
+      return;
+    }
+    // List the companies open on each Tally endpoint (with their GSTINs). The
+    // page passes the Tally URLs to scan (one Tally on many companies, and/or
+    // several Tally instances on different ports); default is the connector's
+    // configured Tally URL.
+    if (req.method === 'POST' && url.pathname === '/api/dc/companies') {
+      const body = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
+      let urls = Array.isArray(body.urls) ? body.urls.map((u) => String(u).trim()).filter(Boolean) : [];
+      if (!urls.length) urls = [state.settings.tallyUrl];
+      urls = [...new Set(urls)];
+      const endpoints = [];
+      for (const u of urls) {
+        try {
+          const companies = parseCompanies(await askTallyFast(u, COMPANY_REQUEST(), 15000));
+          endpoints.push({ url: u, ok: true, companies });
+        } catch (e) {
+          endpoints.push({ url: u, ok: false, error: String((e && e.message) || e), companies: [] });
+        }
+      }
+      json(res, 200, { ok: true, version: VERSION, defaultUrl: state.settings.tallyUrl, endpoints });
+      return;
+    }
+    // Extract debtors/creditors as at a date across the chosen companies, one
+    // by one (never all at once). Returns each company's party list; the page
+    // does the matching, review and Excel.
+    if (req.method === 'POST' && url.pathname === '/api/dc/extract') {
+      if (dcProgress.active) { json(res, 409, { ok: false, error: 'A read is already running.' }); return; }
+      const body = JSON.parse(await readBody(req));
+      const kind = body.kind === 'creditors' ? 'creditors' : 'debtors';
+      const asOn = tallyDateOf(String(body.asOn || '').replace(/-/g, ''));
+      const targets = Array.isArray(body.targets) ? body.targets : [];
+      if (!asOn) { json(res, 400, { ok: false, error: 'Set the "as on" date.' }); return; }
+      if (!targets.length) { json(res, 400, { ok: false, error: 'Pick at least one company.' }); return; }
+      dcProgress.active = true; dcProgress.done = 0; dcProgress.total = targets.length; dcProgress.phase = 'Starting…'; dcProgress.sub = '';
+      const companies = [];
+      try {
+        for (let i = 0; i < targets.length; i++) {
+          const t = targets[i] || {};
+          const label = String(t.company || '').trim() || `Tally ${t.url || ''}`;
+          dcProgress.company = label; dcProgress.done = i;
+          const one = await readDCForCompany(String(t.url || state.settings.tallyUrl), String(t.company || ''), asOn, label);
+          const parties = (kind === 'creditors' ? one.creditors : one.debtors).map((p) => ({
+            ledger: p.ledger, gstin: p.gstin, pan: p.pan, group: p.group,
+            // Present in the natural sign of the side being viewed.
+            balance: kind === 'creditors' ? r2(-p.balanceDr) : p.balanceDr,
+          }));
+          companies.push({
+            url: one.url, company: one.company, label,
+            booksStart: one.booksStart, voucherCount: one.voucherCount,
+            partyCount: parties.length, parties,
+          });
+          dcProgress.done = i + 1;
+        }
+        dcProgress.active = false;
+        json(res, 200, { ok: true, version: VERSION, kind, asOn: asOn.toISOString().slice(0, 10), companies, aliases: state.dcAliases || {} });
+      } catch (e) {
+        dcProgress.active = false;
+        const msg = /timeout|abort|released/i.test(String((e && e.message) || e))
+          ? 'Tally stopped responding while reading. Keep Tally on the Gateway (not inside a report), make sure the company is open, then try again. “Release Tally” frees a stuck read.'
+          : 'Could not read Tally: ' + String((e && e.message) || e);
+        json(res, 502, { ok: false, error: msg, company: dcProgress.company });
       }
       return;
     }
