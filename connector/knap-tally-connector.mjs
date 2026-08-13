@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '2.4';
+const VERSION = '2.5';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -1780,7 +1780,11 @@ function readBody(req) {
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
-    lastActivity = Date.now();
+    // Only real user ACTIONS (POSTs: reconcile, post, upload, settings) count
+    // as activity for the update idle-guard. GET polling from an open browser
+    // tab (/api/data, /api/tally-check, /health every few seconds) must NOT —
+    // it kept connectors "busy" forever and silently blocked self-updates.
+    if (req.method === 'POST' && url.pathname !== '/update') lastActivity = Date.now();
 
     // CORS: the UI is a page on apps.knapadvisory.com talking to 127.0.0.1.
     // Chrome sends a preflight (incl. Private-Network) — answer it fully.
@@ -2155,6 +2159,8 @@ process.on('SIGTERM', () => process.exit(0));
 let lastActivity = 0;
 async function selfUpdate(force) {
   try {
+    // Never restart mid-reconcile or mid-posting — even a forced update waits.
+    if (recoProgress.active) return;
     const v = await fetch(HUB + '/connector/version.json', { signal: AbortSignal.timeout(10000) })
       .then((r) => (r.ok ? r.json() : null));
     if (!v) { startAudit(); return; }
