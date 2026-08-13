@@ -1245,7 +1245,7 @@ function renderRecoSummary(c) {
 // one sheet, each 2B document next to its books voucher, check columns as LIVE
 // Excel formulas (TRIM equality, F−V, G−U, spillover months), colour-coded
 // remarks, a filter-aware SUBTOTAL row and a COUNTIF/SUMIF summary by remark.
-var RS_HEAD = ['Regn (your GSTIN)', 'GSTIN (2B)', 'Party (2B)', 'Doc No', 'Doc Date', 'Invoice Value', 'Taxable (2B)', 'GST (2B)', 'RCM', 'Period', 'GSTIN check', 'name check', 'taxable check', 'GST check', 'voucher check', 'spillover (mth)', 'remarks', 'Regn (books)', 'GSTIN (books)', 'Date (books)', 'Particulars (books)', 'Vch / Bill No', 'GST as per Books', 'Taxable (books)', 'Note'];
+var RS_HEAD = ['Regn (your GSTIN)', 'GSTIN (2B)', 'Party (2B)', 'Doc No', 'Doc Date', 'Invoice Value', 'Taxable (2B)', 'IGST (2B)', 'CGST (2B)', 'SGST (2B)', 'GST (2B)', 'RCM', 'Period', 'GSTIN check', 'name check', 'taxable check', 'GST check', 'voucher check', 'spillover (mth)', 'remarks', 'Regn (books)', 'GSTIN (books)', 'Date (books)', 'Particulars (books)', 'Vch / Bill No', 'IGST (books)', 'CGST (books)', 'SGST (books)', 'GST as per Books', 'Taxable (books)', 'Note'];
 function rsDate(s) { // dd-mm-yyyy (2B) or yyyy-mm-dd (books) -> Date at UTC noon-safe midnight
   if (!s) return null; var m = /^(\d{2})-(\d{2})-(\d{4})$/.exec(String(s)); var d = null;
   if (m) d = new Date(+m[3], +m[2] - 1, +m[1]);
@@ -1282,15 +1282,15 @@ function downloadRecoSheet() {
     var tax2b = r2((d.igst || 0) + (d.cgst || 0) + (d.sgst || 0) + (d.cess || 0));
     var docNo = (d.type === 'creditnote' ? 'CN: ' : d.type === 'debitnote' ? 'DN: ' : '') + (d.no || '');
     rows.push({
-      x: { own: d.own || r.own || '', gstin: d.gstin || '', party: d.name || '', no: docNo, pd: rsDate(d.dt), val: d.val ?? '', txval: d.txval ?? '', tax: tax2b, rcm: d.rcm ? 'Yes' : '', period: d.period || '' },
-      b: r.bookRef != null && r.bookRef !== '' ? { regn: r.bookRegn || '', gstin: r.bookGstin || '', pd: rsDate(r.bookDate), party: r.bookParty || '', vch: r.bookRef || '', tax: (typeof r.bookTax === 'number' ? r.bookTax : null), txval: (typeof r.bookTaxable === 'number' ? r.bookTaxable : null) } : null,
+      x: { own: d.own || r.own || '', gstin: d.gstin || '', party: d.name || '', no: docNo, pd: rsDate(d.dt), val: d.val ?? '', txval: d.txval ?? '', igst: d.igst || 0, cgst: d.cgst || 0, sgst: d.sgst || 0, tax: tax2b, rcm: d.rcm ? 'Yes' : '', period: d.period || '' },
+      b: r.bookRef != null && r.bookRef !== '' ? { regn: r.bookRegn || '', gstin: r.bookGstin || '', pd: rsDate(r.bookDate), party: r.bookParty || '', vch: r.bookRef || '', igst: (typeof r.bookIgst === 'number' ? r.bookIgst : null), cgst: (typeof r.bookCgst === 'number' ? r.bookCgst : null), sgst: (typeof r.bookSgst === 'number' ? r.bookSgst : null), tax: (typeof r.bookTax === 'number' ? r.bookTax : null), txval: (typeof r.bookTaxable === 'number' ? r.bookTaxable : null) } : null,
       rem: rsRemark(r), note: r.note || '',
     });
   });
   (reco.booksOnly || []).forEach(function (b) {
     rows.push({
       x: null,
-      b: { regn: b.cmpGstin || '', gstin: b.gstin || '', pd: rsDate(b.date), party: b.party || '', vch: b.billNo || '', tax: (typeof b.tax === 'number' ? b.tax : null), txval: null },
+      b: { regn: b.cmpGstin || '', gstin: b.gstin || '', pd: rsDate(b.date), party: b.party || '', vch: b.billNo || '', igst: (typeof b.igst === 'number' ? b.igst : null), cgst: (typeof b.cgst === 'number' ? b.cgst : null), sgst: (typeof b.sgst === 'number' ? b.sgst : null), tax: (typeof b.tax === 'number' ? b.tax : null), txval: null },
       rem: 'booked, but not in 2B', note: b.supplierIn2b ? 'Supplier appears in the 2B — check the document.' : '',
     });
   });
@@ -1303,7 +1303,10 @@ function downloadRecoSheet() {
   });
 
   var wb = new ExcelJS.Workbook(), ws = wb.addWorksheet('reconciled');
-  ws.columns = [{ width: 17 }, { width: 18 }, { width: 24 }, { width: 16 }, { width: 11 }, { width: 13 }, { width: 13 }, { width: 11 }, { width: 7 }, { width: 9 }, { width: 12 }, { width: 11 }, { width: 12 }, { width: 13 }, { width: 12 }, { width: 11 }, { width: 26 }, { width: 17 }, { width: 18 }, { width: 11 }, { width: 24 }, { width: 16 }, { width: 13 }, { width: 14 }, { width: 46 }];
+  ws.columns = [{ width: 17 }, { width: 18 }, { width: 24 }, { width: 16 }, { width: 11 }, { width: 13 }, { width: 13 }, { width: 11 }, { width: 11 }, { width: 11 }, { width: 11 }, { width: 7 }, { width: 9 }, { width: 12 }, { width: 11 }, { width: 12 }, { width: 13 }, { width: 12 }, { width: 11 }, { width: 26 }, { width: 17 }, { width: 18 }, { width: 11 }, { width: 24 }, { width: 16 }, { width: 11 }, { width: 11 }, { width: 11 }, { width: 13 }, { width: 14 }, { width: 46 }];
+  // The per-head columns sit in collapsible groups (the +/− buttons above the
+  // sheet) so the default view stays as compact as the original reco tool.
+  [8, 9, 10, 26, 27, 28].forEach(function (i) { ws.getColumn(i).outlineLevel = 1; });
   var hr = ws.addRow(RS_HEAD);
   hr.eachCell(function (c) { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E78' } }; c.font = { color: { argb: 'FFFFFFFF' }, bold: true, size: 9 }; c.alignment = { horizontal: 'center' }; });
   var fl = { nb: 'FFFFF2CC', risk: 'FFFCE4E4', mis: 'FFFCE8D8', c2: 'FFEAF1FA', cb: 'FFF2F0EA', wr: 'FFF4CCCC' };
@@ -1311,36 +1314,40 @@ function downloadRecoSheet() {
     var X = r.x || {}, B = r.b || {};
     var taxchk = r2(((typeof X.txval === 'number' ? X.txval : 0)) - ((B && typeof B.txval === 'number') ? B.txval : 0));
     var amtchk = r2((X.tax || 0) - ((B && typeof B.tax === 'number') ? B.tax : 0));
-    var row = ws.addRow([r.x ? X.own || '' : '', X.gstin || '', X.party || '', X.no || '', null, X.val === '' ? null : X.val, X.txval === '' ? null : X.txval, r.x ? X.tax : null, X.rcm || '', X.period || '',
-      null, null, null, null, null, null, r.rem, B.regn || '', B.gstin || '', null, B.party || '', B.vch || '', (B && B.tax != null) ? B.tax : null, (B && B.txval != null) ? B.txval : null, r.note]);
+    var row = ws.addRow([r.x ? X.own || '' : '', X.gstin || '', X.party || '', X.no || '', null, X.val === '' ? null : X.val, X.txval === '' ? null : X.txval,
+      r.x ? X.igst : null, r.x ? X.cgst : null, r.x ? X.sgst : null, r.x ? X.tax : null, X.rcm || '', X.period || '',
+      null, null, null, null, null, null, r.rem,
+      B.regn || '', B.gstin || '', null, B.party || '', B.vch || '',
+      (B && B.igst != null) ? B.igst : null, (B && B.cgst != null) ? B.cgst : null, (B && B.sgst != null) ? B.sgst : null,
+      (B && B.tax != null) ? B.tax : null, (B && B.txval != null) ? B.txval : null, r.note]);
     var R = row.number;
     var ck = function (v) { return v === '—' ? '—' : v; };
-    row.getCell(11).value = { formula: 'IF(OR(B' + R + '="",S' + R + '=""),"—",TRIM(B' + R + ')=TRIM(S' + R + '))', result: ck(rsChk(X.gstin, B.gstin)) };
-    row.getCell(12).value = { formula: 'IF(OR(C' + R + '="",U' + R + '=""),"—",TRIM(C' + R + ')=TRIM(U' + R + '))', result: ck(rsChk(X.party, B.party)) };
-    row.getCell(13).value = { formula: 'G' + R + '-X' + R, result: taxchk };
-    row.getCell(14).value = { formula: 'H' + R + '-W' + R, result: amtchk };
-    row.getCell(15).value = { formula: 'IF(OR(D' + R + '="",V' + R + '=""),"—",TRIM(D' + R + ')=TRIM(V' + R + '))', result: ck(rsChk(X.no, B.vch)) };
+    row.getCell(14).value = { formula: 'IF(OR(B' + R + '="",V' + R + '=""),"—",TRIM(B' + R + ')=TRIM(V' + R + '))', result: ck(rsChk(X.gstin, B.gstin)) };
+    row.getCell(15).value = { formula: 'IF(OR(C' + R + '="",X' + R + '=""),"—",TRIM(C' + R + ')=TRIM(X' + R + '))', result: ck(rsChk(X.party, B.party)) };
+    row.getCell(16).value = { formula: 'G' + R + '-AD' + R, result: taxchk };
+    row.getCell(17).value = { formula: 'K' + R + '-AC' + R, result: amtchk };
+    row.getCell(18).value = { formula: 'IF(OR(D' + R + '="",Y' + R + '=""),"—",TRIM(D' + R + ')=TRIM(Y' + R + '))', result: ck(rsChk(X.no, B.vch)) };
     if (X.pd) { row.getCell(5).value = X.pd; row.getCell(5).numFmt = 'dd-mmm-yy'; }
-    if (B && B.pd) { row.getCell(20).value = B.pd; row.getCell(20).numFmt = 'dd-mmm-yy'; }
-    if (X.pd && B && B.pd) row.getCell(16).value = { formula: 'IF(OR(E' + R + '="",T' + R + '=""),"—",ROUND((T' + R + '-E' + R + ')/30.44,0))', result: Math.round((B.pd - X.pd) / 86400000 / 30.44) };
+    if (B && B.pd) { row.getCell(23).value = B.pd; row.getCell(23).numFmt = 'dd-mmm-yy'; }
+    if (X.pd && B && B.pd) row.getCell(19).value = { formula: 'IF(OR(E' + R + '="",W' + R + '=""),"—",ROUND((W' + R + '-E' + R + ')/30.44,0))', result: Math.round((B.pd - X.pd) / 86400000 / 30.44) };
     row.font = { size: 9 };
-    [6, 7, 8, 13, 14, 23, 24].forEach(function (i) { row.getCell(i).numFmt = '#,##0.00'; row.getCell(i).alignment = { horizontal: 'right' }; });
-    row.getCell(16).numFmt = '0'; row.getCell(16).alignment = { horizontal: 'right' };
-    for (var i = 1; i <= 10; i++) row.getCell(i).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fl.c2 } };
-    for (var j = 18; j <= 24; j++) row.getCell(j).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fl.cb } };
-    if (r.rem === 'not booked in tally') for (var k = 1; k <= 24; k++) row.getCell(k).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fl.nb } };
-    else if (r.rem === 'booked, but not in 2B') for (var k2 = 1; k2 <= 24; k2++) row.getCell(k2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fl.risk } };
-    else if (r.rem.indexOf('booked -') === 0 || r.rem.indexOf('probable') === 0 || r.rem.indexOf('amended') === 0) row.getCell(17).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fl.mis } };
+    [6, 7, 8, 9, 10, 11, 16, 17, 26, 27, 28, 29, 30].forEach(function (i) { row.getCell(i).numFmt = '#,##0.00'; row.getCell(i).alignment = { horizontal: 'right' }; });
+    row.getCell(19).numFmt = '0'; row.getCell(19).alignment = { horizontal: 'right' };
+    for (var i = 1; i <= 13; i++) row.getCell(i).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fl.c2 } };
+    for (var j = 21; j <= 30; j++) row.getCell(j).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fl.cb } };
+    if (r.rem === 'not booked in tally') for (var k = 1; k <= 30; k++) row.getCell(k).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fl.nb } };
+    else if (r.rem === 'booked, but not in 2B') for (var k2 = 1; k2 <= 30; k2++) row.getCell(k2).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fl.risk } };
+    else if (r.rem.indexOf('booked -') === 0 || r.rem.indexOf('probable') === 0 || r.rem.indexOf('amended') === 0) row.getCell(20).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fl.mis } };
     // A booked-under-the-wrong-registration row: paint both Regn cells red so the HR vs OD/AP clash jumps out.
-    if (r.rem.indexOf('wrong registration') >= 0) { row.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fl.wr } }; row.getCell(18).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fl.wr } }; }
+    if (r.rem.indexOf('wrong registration') >= 0) { row.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fl.wr } }; row.getCell(21).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fl.wr } }; }
   });
   var last = ws.lastRow.number;
   // totals + per-remark cache
-  var sInv = 0, sTaxv = 0, sTax = 0, sTc = 0, sAc = 0, sDeb = 0, sBTv = 0, cC = {}, cT = {}, cA = {};
+  var sInv = 0, sTaxv = 0, sIg = 0, sCg = 0, sSg = 0, sTax = 0, sTc = 0, sAc = 0, sBIg = 0, sBCg = 0, sBSg = 0, sDeb = 0, sBTv = 0, cC = {}, cT = {}, cA = {};
   rows.forEach(function (r) {
     var X = r.x, B = r.b;
-    if (X) { if (typeof X.val === 'number') sInv += X.val; if (typeof X.txval === 'number') sTaxv += X.txval; sTax += X.tax || 0; }
-    if (B) { if (typeof B.tax === 'number') sDeb += B.tax; if (typeof B.txval === 'number') sBTv += B.txval; }
+    if (X) { if (typeof X.val === 'number') sInv += X.val; if (typeof X.txval === 'number') sTaxv += X.txval; sIg += X.igst || 0; sCg += X.cgst || 0; sSg += X.sgst || 0; sTax += X.tax || 0; }
+    if (B) { if (typeof B.igst === 'number') sBIg += B.igst; if (typeof B.cgst === 'number') sBCg += B.cgst; if (typeof B.sgst === 'number') sBSg += B.sgst; if (typeof B.tax === 'number') sDeb += B.tax; if (typeof B.txval === 'number') sBTv += B.txval; }
     var tc = ((X && typeof X.txval === 'number') ? X.txval : 0) - ((B && typeof B.txval === 'number') ? B.txval : 0);
     var ac = ((X ? X.tax : 0) || 0) - ((B && typeof B.tax === 'number') ? B.tax : 0);
     sTc += tc; sAc += ac;
@@ -1348,21 +1355,27 @@ function downloadRecoSheet() {
   });
   var tr = last + 1;
   ws.getCell('C' + tr).value = 'TOTAL (current filter)'; ws.getCell('C' + tr).font = { bold: true, size: 9 }; ws.getCell('C' + tr).border = { top: { style: 'thin' } };
-  ['F', 'G', 'H', 'M', 'N', 'W', 'X'].forEach(function (col, i) {
-    var res = [r2(sInv), r2(sTaxv), r2(sTax), r2(sTc), r2(sAc), r2(sDeb), r2(sBTv)][i];
+  ['F', 'G', 'H', 'I', 'J', 'K', 'P', 'Q', 'Z', 'AA', 'AB', 'AC', 'AD'].forEach(function (col, i) {
+    var res = [r2(sInv), r2(sTaxv), r2(sIg), r2(sCg), r2(sSg), r2(sTax), r2(sTc), r2(sAc), r2(sBIg), r2(sBCg), r2(sBSg), r2(sDeb), r2(sBTv)][i];
     var c = ws.getCell(col + tr);
     c.value = { formula: 'SUBTOTAL(9,' + col + '2:' + col + last + ')', result: res };
     c.numFmt = '#,##0.00'; c.font = { bold: true, size: 9 }; c.alignment = { horizontal: 'right' }; c.border = { top: { style: 'thin' } };
   });
-  var rr = tr + 2;
+  // Tie-out: the GST-check column must equal 2B total − books total (live).
+  ws.getCell('C' + (tr + 1)).value = {
+    formula: 'IF(ROUND(K' + tr + '-AC' + tr + '-Q' + tr + ',2)=0,"✓ Tie-out OK — GST-check total = GST (2B) − GST as per Books","✗ TIE-OUT FAILED — check the imported data")',
+    result: Math.abs(r2(sTax - sDeb - sAc)) < 0.05 ? '✓ Tie-out OK — GST-check total = GST (2B) − GST as per Books' : '✗ TIE-OUT FAILED — check the imported data',
+  };
+  ws.getCell('C' + (tr + 1)).font = { italic: true, size: 9, color: { argb: 'FF166534' } };
+  var rr = tr + 3;
   ws.getCell('B' + rr).value = 'Summary by remark'; ws.getCell('B' + rr).font = { bold: true, size: 10, color: { argb: 'FF1F4E78' } }; rr++;
   ['Remark', 'Count', 'GST (2B)', 'GST check'].forEach(function (t, k) { var c = ws.getCell(rr, 2 + k); c.value = t; c.font = { bold: true, size: 9 }; c.border = { bottom: { style: 'thin' } }; });
   rr++; var first = rr;
   Object.keys(cC).forEach(function (cat) {
     ws.getCell('B' + rr).value = cat; ws.getCell('B' + rr).font = { size: 9 };
-    ws.getCell('C' + rr).value = { formula: 'COUNTIF($Q$2:$Q$' + last + ',$B' + rr + ')', result: cC[cat] }; ws.getCell('C' + rr).font = { size: 9 };
-    ws.getCell('D' + rr).value = { formula: 'SUMIF($Q$2:$Q$' + last + ',$B' + rr + ',$H$2:$H$' + last + ')', result: r2(cT[cat]) }; ws.getCell('D' + rr).numFmt = '#,##0.00'; ws.getCell('D' + rr).font = { size: 9 };
-    ws.getCell('E' + rr).value = { formula: 'SUMIF($Q$2:$Q$' + last + ',$B' + rr + ',$N$2:$N$' + last + ')', result: r2(cA[cat]) }; ws.getCell('E' + rr).numFmt = '#,##0.00'; ws.getCell('E' + rr).font = { size: 9 };
+    ws.getCell('C' + rr).value = { formula: 'COUNTIF($T$2:$T$' + last + ',$B' + rr + ')', result: cC[cat] }; ws.getCell('C' + rr).font = { size: 9 };
+    ws.getCell('D' + rr).value = { formula: 'SUMIF($T$2:$T$' + last + ',$B' + rr + ',$K$2:$K$' + last + ')', result: r2(cT[cat]) }; ws.getCell('D' + rr).numFmt = '#,##0.00'; ws.getCell('D' + rr).font = { size: 9 };
+    ws.getCell('E' + rr).value = { formula: 'SUMIF($T$2:$T$' + last + ',$B' + rr + ',$Q$2:$Q$' + last + ')', result: r2(cA[cat]) }; ws.getCell('E' + rr).numFmt = '#,##0.00'; ws.getCell('E' + rr).font = { size: 9 };
     rr++;
   });
   ws.getCell('B' + rr).value = 'TOTAL'; ws.getCell('B' + rr).font = { bold: true, size: 9 };
@@ -1370,9 +1383,9 @@ function downloadRecoSheet() {
   ws.getCell('D' + rr).value = { formula: 'SUM(D' + first + ':D' + (rr - 1) + ')', result: r2(sTax) }; ws.getCell('D' + rr).numFmt = '#,##0.00';
   ws.getCell('E' + rr).value = { formula: 'SUM(E' + first + ':E' + (rr - 1) + ')', result: r2(sAc) }; ws.getCell('E' + rr).numFmt = '#,##0.00';
   ['B', 'C', 'D', 'E'].forEach(function (col) { var c = ws.getCell(col + rr); c.font = { bold: true, size: 9 }; c.border = { top: { style: 'thin' } }; });
-  ws.getCell('B' + (rr + 1)).value = 'GST-check total = Σ(GST 2B − GST as per Books) = the reconciliation gap. Filter column Q (or A, the registration) and the TOTAL row follows.';
+  ws.getCell('B' + (rr + 1)).value = 'GST-check total = Σ(GST 2B − GST as per Books) = the reconciliation gap. Filter column T (remarks) or A (registration) and the TOTAL row follows. The +/− buttons above the sheet collapse the IGST/CGST/SGST columns.';
   ws.getCell('B' + (rr + 1)).font = { italic: true, size: 8, color: { argb: 'FF6B7280' } };
-  ws.autoFilter = 'A1:Y' + last;
+  ws.autoFilter = 'A1:AE' + last;
   ws.views = [{ state: 'frozen', ySplit: 1 }];
   wb.xlsx.writeBuffer().then(function (buf) {
     var a = document.createElement('a');
