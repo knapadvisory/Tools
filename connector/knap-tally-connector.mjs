@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '3.0';
+const VERSION = '3.1';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -281,7 +281,7 @@ async function askTally(tallyUrl, body) {
 }
 // Shorter timeout + one retry — for interactive reads where a 5-minute hang is
 // worse than a quick, clear failure. Returns the XML text or throws.
-async function askTallyFast(tallyUrl, body, ms = 120000) {
+async function askTallyFast(tallyUrl, body, ms = 60000) {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const res = await fetch(tallyUrl, {
@@ -386,11 +386,10 @@ function voucherCollectionRequest(from, to) {
 // primary group) and every Ledger (Name, Parent, and closing balance as on
 // the report date). Closing balance follows SVTODATE, so two reads at the two
 // year-end dates give both comparative columns.
-// Canonical collection attributes + FETCH (not NATIVEMETHOD) — the same shape
-// as this connector's proven voucher reader. A bare NATIVEMETHOD collection
-// makes Tally recompute every ledger balance lazily and can hang for minutes;
-// FETCH pulls the already-computed value in the report context, fast.
-const COLL_ATTRS = 'ISMODIFY="No" ISFIXED="No" ISINITIALIZE="No" ISOPTION="No" ISINTERNAL="No"';
+// EXACTLY the shape of this connector's proven voucher reader: a collection
+// with only ISMODIFY="No" and FETCH tags. (Earlier attempts added extra
+// collection attributes / NATIVEMETHOD, which made Tally hang.)
+const COLL_ATTRS = 'ISMODIFY="No"';
 const GROUPS_REQUEST = () => `<ENVELOPE>
  <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>KnapGroups</ID></HEADER>
  <BODY><DESC>
@@ -2007,6 +2006,27 @@ const server = http.createServer(async (req, res) => {
     // primary group, so the page can classify into Schedule III heads.
     if (req.method === 'GET' && url.pathname === '/api/fin/progress') {
       json(res, 200, finProgress);
+      return;
+    }
+    // Diagnostic: fire each request with a short timeout and return exactly what
+    // Tally replied (or the error) so we can see, remotely, why a read fails.
+    if (req.method === 'POST' && url.pathname === '/api/fin/diag') {
+      const probe = async (label, body) => {
+        const t0 = Date.now();
+        try {
+          const xml = await askTallyFast(state.settings.tallyUrl, body, 25000);
+          return { label, ok: true, ms: Date.now() - t0, length: xml.length, sample: xml.slice(0, 1800) };
+        } catch (e) {
+          return { label, ok: false, ms: Date.now() - t0, error: String((e && e.message) || e) };
+        }
+      };
+      const cur = tallyDateOf('20260331');
+      const out = {
+        tallyUrl: state.settings.tallyUrl, company: state.settings.company || '(none set)', version: VERSION,
+        groups: await probe('Groups collection', GROUPS_REQUEST()),
+        ledgers: await probe('Ledgers collection', LEDGERS_BAL_REQUEST(cur)),
+      };
+      json(res, 200, { ok: true, diag: out });
       return;
     }
     if (req.method === 'POST' && url.pathname === '/api/fin/trialbalance') {

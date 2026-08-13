@@ -82,9 +82,11 @@
       <label>Current year-end <input type="date" id="asOn"></label>
       <label>Prior year-end <input type="date" id="priorAsOn"></label>
       <button class="btn primary" id="readBtn">📖 Read from Tally</button>
+      <button class="btn" id="diagBtn" title="Ask Tally the two read requests with a short timeout and show exactly what it replies">🔧 Test Tally connection</button>
       <span style="white-space:nowrap;font-size:12.5px"><span id="tally-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#c3ccd8;margin-right:5px"></span><span id="tally-status" class="msg" style="margin:0">checking connector…</span></span>
     </div>
     <div class="msg" id="msgTally"></div>
+    <pre id="diagOut" style="display:none;white-space:pre-wrap;word-break:break-word;font-size:11.5px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:12px;margin-top:10px;max-height:320px;overflow:auto"></pre>
     <div id="readStats" class="stats hidden"></div>
   </div>
 
@@ -130,7 +132,7 @@ function checkConn(){
     document.getElementById('tally-dot').style.background='var(--ok)';
     document.getElementById('tally-status').textContent='connector v'+connVer;
     document.getElementById('conn-ver').textContent='· connector v'+connVer;
-    if(parseFloat(connVer)<3.0) document.getElementById('msgTally').innerHTML='This tool needs connector <b>v3.0+</b> — press ⟳ Update connector.';
+    if(parseFloat(connVer)<3.1) document.getElementById('msgTally').innerHTML='This tool needs connector <b>v3.1+</b> — press ⟳ Update connector.';
   }).catch(function(){
     document.getElementById('tally-dot').style.background='var(--bad)';
     document.getElementById('tally-status').innerHTML='connector not found — <a href="/connector/Install-Tally-Connector.bat" download>install it</a> on this PC';
@@ -220,6 +222,24 @@ function classify(led){
 
 /* ===== state ===== */
 var TB=null, overrides={}, prepared=null, entity='';
+
+/* ===== connection diagnostic ===== */
+document.getElementById('diagBtn').onclick=function(){
+  var btn=this, out=document.getElementById('diagOut');
+  btn.disabled=true; out.style.display='block'; out.textContent='Running connection test — asking Tally the two read requests (up to 25s each)…';
+  fetch(API+'/api/fin/diag',{method:'POST'}).then(function(r){return r.json();}).then(function(j){
+    btn.disabled=false;
+    var d=j.diag||{};
+    function block(x){ if(!x) return '(no result)';
+      return (x.ok?'✅ OK':'❌ FAILED')+'  ·  '+x.ms+' ms'+(x.ok?('  ·  '+x.length+' chars'):('  ·  '+(x.error||'')))+'\n'+
+        (x.sample?('--- first part of Tally\'s reply ---\n'+x.sample):''); }
+    out.textContent =
+      'Tally URL : '+d.tallyUrl+'\nCompany   : '+d.company+'\nConnector : v'+d.version+'\n\n'+
+      '=== 1) GROUP tree request ===\n'+block(d.groups)+'\n\n'+
+      '=== 2) LEDGER balances request ===\n'+block(d.ledgers)+'\n\n'+
+      '👉 Copy everything above and paste it back so we can pinpoint the fix.';
+  }).catch(function(){ btn.disabled=false; out.textContent='Connector not reachable on this computer.'; });
+};
 
 /* ===== step 1 ===== */
 document.getElementById('readBtn').onclick=function(){
