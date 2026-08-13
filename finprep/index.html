@@ -132,7 +132,7 @@ function checkConn(){
     document.getElementById('tally-dot').style.background='var(--ok)';
     document.getElementById('tally-status').textContent='connector v'+connVer;
     document.getElementById('conn-ver').textContent='· connector v'+connVer;
-    if(parseFloat(connVer)<3.1) document.getElementById('msgTally').innerHTML='This tool needs connector <b>v3.1+</b> — press ⟳ Update connector.';
+    if(parseFloat(connVer)<3.2) document.getElementById('msgTally').innerHTML='This tool needs connector <b>v3.2+</b> — press ⟳ Update connector.';
   }).catch(function(){
     document.getElementById('tally-dot').style.background='var(--bad)';
     document.getElementById('tally-status').innerHTML='connector not found — <a href="/connector/Install-Tally-Connector.bat" download>install it</a> on this PC';
@@ -226,17 +226,18 @@ var TB=null, overrides={}, prepared=null, entity='';
 /* ===== connection diagnostic ===== */
 document.getElementById('diagBtn').onclick=function(){
   var btn=this, out=document.getElementById('diagOut');
-  btn.disabled=true; out.style.display='block'; out.textContent='Running connection test — asking Tally the two read requests (up to 25s each)…';
-  fetch(API+'/api/fin/diag',{method:'POST'}).then(function(r){return r.json();}).then(function(j){
+  btn.disabled=true; out.style.display='block'; out.textContent='Running connection test — trying the two fast balance methods (up to 20s each)…';
+  var asOn=document.getElementById('asOn').value, prior=document.getElementById('priorAsOn').value;
+  fetch(API+'/api/fin/diag',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({from:(prior||asOn),to:asOn})}).then(function(r){return r.json();}).then(function(j){
     btn.disabled=false;
     var d=j.diag||{};
     function block(x){ if(!x) return '(no result)';
       return (x.ok?'✅ OK':'❌ FAILED')+'  ·  '+x.ms+' ms'+(x.ok?('  ·  '+x.length+' chars'):('  ·  '+(x.error||'')))+'\n'+
         (x.sample?('--- first part of Tally\'s reply ---\n'+x.sample):''); }
     out.textContent =
-      'Tally URL : '+d.tallyUrl+'\nCompany   : '+d.company+'\nConnector : v'+d.version+'\n\n'+
-      '=== 1) GROUP tree request ===\n'+block(d.groups)+'\n\n'+
-      '=== 2) LEDGER balances request ===\n'+block(d.ledgers)+'\n\n'+
+      'Tally URL : '+d.tallyUrl+'\nCompany   : '+d.company+'\nConnector : v'+d.version+'\nPeriod    : '+d.from+' → '+d.to+'\n\n'+
+      '=== A) Ledger masters + Opening Balance ===\n'+block(d.A_ledgerMastersOpening)+'\n\n'+
+      '=== B) Trial Balance report (native) ===\n'+block(d.B_trialBalanceReport)+'\n\n'+
       '👉 Copy everything above and paste it back so we can pinpoint the fix.';
   }).catch(function(){ btn.disabled=false; out.textContent='Connector not reachable on this computer.'; });
 };

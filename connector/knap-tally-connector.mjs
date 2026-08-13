@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '3.1';
+const VERSION = '3.2';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2008,23 +2008,31 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, finProgress);
       return;
     }
-    // Diagnostic: fire each request with a short timeout and return exactly what
-    // Tally replied (or the error) so we can see, remotely, why a read fails.
+    // Diagnostic: probe the FAST candidate ways to get balances (the bulk
+    // ClosingBalance collection is known-slow), returning exactly what Tally
+    // replies so we can pick the working method and parse its real structure.
     if (req.method === 'POST' && url.pathname === '/api/fin/diag') {
-      const probe = async (label, body) => {
+      const body0 = await readBody(req).catch(() => '{}');
+      let dates = {}; try { dates = JSON.parse(body0 || '{}'); } catch { /* */ }
+      const from = String(dates.from || '20250401').replace(/-/g, '');
+      const to = String(dates.to || '20260331').replace(/-/g, '');
+      const probe = async (label, body, ms = 20000, sampleLen = 2400) => {
         const t0 = Date.now();
         try {
-          const xml = await askTallyFast(state.settings.tallyUrl, body, 25000);
-          return { label, ok: true, ms: Date.now() - t0, length: xml.length, sample: xml.slice(0, 1800) };
+          const xml = await askTallyFast(state.settings.tallyUrl, body, ms);
+          return { label, ok: true, ms: Date.now() - t0, length: xml.length, sample: xml.slice(0, sampleLen) };
         } catch (e) {
           return { label, ok: false, ms: Date.now() - t0, error: String((e && e.message) || e) };
         }
       };
-      const cur = tallyDateOf('20260331');
+      // A) ledger masters with OpeningBalance only (stored field -> should be fast)
+      const openReq = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>KnapLedgersOpen</ID></HEADER><BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT><SVFROMDATE>${from}</SVFROMDATE><SVTODATE>${to}</SVTODATE>${svCompany()}</STATICVARIABLES><TDL><TDLMESSAGE><COLLECTION NAME="KnapLedgersOpen" ISMODIFY="No"><TYPE>Ledger</TYPE><FETCH>NAME</FETCH><FETCH>PARENT</FETCH><FETCH>OPENINGBALANCE</FETCH></COLLECTION></TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
+      // B) native Trial Balance report (Tally computes balances in bulk -> fast)
+      const tbReport = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Data</TYPE><ID>Trial Balance</ID></HEADER><BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT><SVFROMDATE>${from}</SVFROMDATE><SVTODATE>${to}</SVTODATE><EXPLODEFLAG>Yes</EXPLODEFLAG>${svCompany()}</STATICVARIABLES></DESC></BODY></ENVELOPE>`;
       const out = {
-        tallyUrl: state.settings.tallyUrl, company: state.settings.company || '(none set)', version: VERSION,
-        groups: await probe('Groups collection', GROUPS_REQUEST()),
-        ledgers: await probe('Ledgers collection', LEDGERS_BAL_REQUEST(cur)),
+        tallyUrl: state.settings.tallyUrl, company: state.settings.company || '(none set)', version: VERSION, from, to,
+        A_ledgerMastersOpening: await probe('A) Ledger masters + OpeningBalance', openReq),
+        B_trialBalanceReport: await probe('B) Trial Balance report (native)', tbReport),
       };
       json(res, 200, { ok: true, diag: out });
       return;
