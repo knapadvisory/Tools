@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '3.8';
+const VERSION = '3.9';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -459,6 +459,7 @@ const LEDGER_MASTERS_REQUEST = () => `<ENVELOPE>
    <COLLECTION NAME="KnapLedgerMasters" ISMODIFY="No">
     <TYPE>Ledger</TYPE>
     <FETCH>NAME</FETCH><FETCH>PARENT</FETCH><FETCH>OPENINGBALANCE</FETCH>
+    <FETCH>PARTYGSTIN</FETCH><FETCH>GSTREGISTRATIONNUMBER</FETCH><FETCH>VATTINNUMBER</FETCH><FETCH>LEDGSTREGDETAILS.LIST</FETCH>
    </COLLECTION>
   </TDLMESSAGE></TDL>
  </DESC></BODY>
@@ -485,9 +486,13 @@ function parseLedgerMasters(xml) {
   for (const b of xml.match(/<LEDGER[\s>][\s\S]*?<\/LEDGER>/gi) || []) {
     const name = decodeXml((b.match(/<LEDGER[^>]*\sNAME="([^"]*)"/i)?.[1] ?? tag(b, 'NAME'))).trim();
     if (!name) continue;
+    // A party GSTIN can land in PARTYGSTIN, GSTREGISTRATIONNUMBER, or a nested
+    // LEDGSTREGDETAILS.LIST depending on the Tally version — scanning the whole
+    // ledger block for the GSTIN shape catches whichever one is populated.
     out[name] = {
       parent: decodeXml(tag(b, 'PARENT')).trim(),
       openingDr: openingDr(tag(b, 'OPENINGBALANCE')),
+      gstin: (b.match(GSTIN_RE) || [''])[0],
     };
   }
   return out;
@@ -2352,6 +2357,7 @@ const server = http.createServer(async (req, res) => {
           return {
             name, group: m.parent, primary: primaryGroupOf(m.parent, groups),
             groupPath: path,                  // full "Booked under" chain, ledger → primary
+            gstin: m.gstin || '',             // party GSTIN from the master (sharpens classification)
             opening: r2(open),                // stored master opening balance (Dr +)
             isRevenue: !!(groups[m.parent] && anyRevenueAncestor(m.parent)),
             current: r2(open + mv.dr),        // closing at period-to
