@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '2.7';
+const VERSION = '2.8';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -1860,8 +1860,14 @@ const server = http.createServer(async (req, res) => {
                legs.map((l) => l.name + '=' + l.amt).join(';'));
             if (seenV.has(vid)) continue;
             seenV.add(vid);
-            vouchers++;
             const date = tallyDateOf(tag(block, 'DATE'));
+            // Some Tally setups ignore SVFROMDATE/SVTODATE on collection
+            // exports and return the WHOLE ledger for every monthly chunk
+            // (seen in the field: totals = ledger × number of months read).
+            // The dedupe above collapses the repeats; this keeps the period
+            // honest by dropping vouchers dated outside the asked range.
+            if (date && (date < from || date > to)) continue;
+            vouchers++;
             const partyTag = tag(block, 'PARTYLEDGERNAME');
             for (const tl of tdsLegs) {
               // The deductor: the voucher's party ledger, else the biggest
