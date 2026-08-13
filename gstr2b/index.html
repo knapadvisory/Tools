@@ -1279,7 +1279,12 @@ function updateConnector() {
     was = h.version || '';
     el.disabled = true; el.textContent = '⏳ Updating…';
     return fetch(API + '/update', { method: 'POST' });
-  }).then(function () {
+  }).then(function (resp) {
+    if (resp && !resp.ok) { // v2.0/2.1 connectors have no /update endpoint
+      el.disabled = false; el.textContent = '⟳ Update connector';
+      document.getElementById('bar-msg').textContent = 'This connector (v' + was + ') is too old for one-click update — re-run Install-Tally-Connector.bat on this PC once; it upgrades in place.';
+      return;
+    }
     var tries = 0;
     var t = setInterval(function () {
       tries++;
@@ -1313,10 +1318,19 @@ function downloadRecoSheet() {
 }
 function buildRecoSheet() {
   // Books-side names/dates arrive with connector v2.3+ — older reconcile data
-  // has the amounts but not the identity. Say so instead of exporting blanks.
+  // has the amounts but not the identity. Diagnose WHICH half is stale so the
+  // user gets one precise instruction instead of a guess.
   var matchedRows = (reco.raw.docs || []).filter(function (r) { return r.bookRef; });
   if (matchedRows.length && !matchedRows.some(function (r) { return r.bookParty || r.bookDate; })) {
-    alert('This reconcile was made by an older connector, so the books-side name / date / GSTIN columns would be blank.\n\nUpdate the connector (it updates itself, or re-run the installer), press 🔁 Reconcile with Tally again, then download this sheet.');
+    fetch(API + '/health').then(function (r) { return r.json(); }).then(function (h) {
+      if (parseFloat(h.version || '0') >= 2.3) {
+        alert('Your connector is v' + h.version + ' — new enough — but the reconcile currently loaded was made before the update.\n\nPress 🔁 Reconcile with Tally once; when it finishes, download this sheet again and the books-side columns will be filled.\n\n(This message never appears again after that.)');
+      } else {
+        alert('The connector on this computer is still v' + h.version + ', which cannot send the books-side names/dates and does not support one-click update.\n\nRe-run the connector installer once (Install-Tally-Connector.bat from the setup screen) — it upgrades in place. Then 🔁 Reconcile and download again.');
+      }
+    }).catch(function () {
+      alert('The reconcile currently loaded lacks the books-side columns and the connector is not answering.\n\nMake sure the connector is running (restart the PC or re-run the installer), then 🔁 Reconcile and download again.');
+    });
   }
   var byKey = {}; docs.forEach(function (d) { byKey[d.key || ''] = d; });
   var rows = [];
