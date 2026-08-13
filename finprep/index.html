@@ -347,6 +347,7 @@ document.querySelectorAll('#stepper .step').forEach(function(s){
 });
 
 /* ================= number formatting ================= */
+function r2(n){ return Math.round((Number(n)||0)*100)/100; }
 function inr(n){ return Number(Math.round(n)).toLocaleString('en-IN'); }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
 /* accounting format, scaled by the chosen unit; negatives in ( ) */
@@ -831,118 +832,284 @@ document.getElementById('exportBtn').onclick=function(){
   document.getElementById('msgExport').textContent='⏳ Generating the working paper…';
   setTimeout(buildWorkbook,60);
 };
+/* ===== 1.3-format workbook (mirrors the firm's Schedule III set) ===== */
+var AR='Arial', MONEY='#,##0.00;(#,##0.00)', RATIOF='0.00';
 function buildWorkbook(){
   var p=prepared, wb=new ExcelJS.Workbook();
-  var head={fill:{type:'pattern',pattern:'solid',fgColor:{argb:'FF173F28'}},font:{color:{argb:'FFFFFFFF'},bold:true,size:10},alignment:{horizontal:'center'}};
-  var money='#,##0.00';
-  var curLabel=TB.asOn, priLabel=TB.priorAsOn||'';
+  var curDate=niceDate(TB.asOn), priDate=niceDate(TB.priorAsOn);
+  var n=function(no,yr){ return yr==='pri'?p.byNote[no].pri:p.byNote[no].cur; };
+  // put a styled value at (row,col)
+  function P(ws,r,c,v,o){ o=o||{}; var cell=ws.getRow(r).getCell(c); cell.value=v;
+    cell.font={name:AR,size:o.size||10,bold:!!o.b,italic:!!o.i,color:o.color?{argb:o.color}:undefined};
+    if(o.num) cell.numFmt=o.num===true?MONEY:o.num;
+    if(o.al) cell.alignment={horizontal:o.al,vertical:'middle',wrapText:!!o.wrap};
+    if(o.top||o.dbl){ cell.border={top:{style:'thin'}}; if(o.dbl) cell.border={top:{style:'thin'},bottom:{style:'double'}}; }
+    return cell; }
+  function hdr(ws,title,dcap){ // firm-style statement header, returns first data row
+    P(ws,1,1,entity,{b:true,size:12});
+    P(ws,2,1,'CIN: ',{size:9,color:'FF666666'});
+    P(ws,3,1,title,{b:true,size:10.5});
+    P(ws,5,1,'(All amounts in Indian Rupees, unless otherwise stated)',{i:true,size:8.5,color:'FF666666'});
+    P(ws,7,1,'Particulars',{b:true}); P(ws,7,3,'Note',{b:true,al:'center'});
+    P(ws,7,4,dcap+curDate,{b:true,al:'center',wrap:true,size:9}); P(ws,7,5,dcap+priDate,{b:true,al:'center',wrap:true,size:9});
+    [1,2,3,4,5].forEach(function(c){ ws.getCell(7,c).border={bottom:{style:'thin'}}; });
+    return 8;
+  }
+  function signBlock(ws,r){
+    P(ws,r+1,1,'As per our report of even date',{i:true,size:9});
+    P(ws,r+3,1,'For K N K & COMPANY',{size:9}); P(ws,r+3,4,'For and on behalf of the Board of Directors of',{size:9});
+    P(ws,r+4,1,'Chartered Accountants',{size:9}); P(ws,r+4,4,entity,{size:9});
+    P(ws,r+5,1,'ICAI Firm Registration No.: 033312N',{size:9});
+    P(ws,r+8,1,'Partner',{size:9}); P(ws,r+8,4,'Director',{size:9}); P(ws,r+8,5,'Director',{size:9});
+    P(ws,r+9,1,'Membership No.: ',{size:9}); P(ws,r+9,4,'DIN: ',{size:9}); P(ws,r+9,5,'DIN: ',{size:9});
+    P(ws,r+11,1,'Place: ',{size:9}); P(ws,r+12,1,'Date: ',{size:9});
+  }
 
-  var tb=wb.addWorksheet('Trial Balance');
-  tb.columns=[{width:38},{width:24},{width:22},{width:15},{width:15},{width:30}];
-  var hr=tb.addRow(['Ledger','Tally group','Primary group','Closing (CY)','Closing (PY)','Used in (Note)']);
-  hr.eachCell(function(c){c.fill=head.fill;c.font=head.font;c.alignment=head.alignment;});
-  TB.ledgers.forEach(function(l){
-    var note=l._note!=null?l._note:classify(l);
-    var r=tb.addRow([l.name,l.group,l.primary,l.current,l.prior,'Note '+note+' · '+NOTES[note].head]);
-    r.font={size:9}; r.getCell(4).numFmt=money; r.getCell(5).numFmt=money;
-  });
-  tb.autoFilter='A1:F'+tb.lastRow.number; tb.views=[{state:'frozen',ySplit:1}];
+  // ---- worksheets in the firm's order (populate Notes first for links) ----
+  var bs=wb.addWorksheet('Balance Sheet'), pl=wb.addWorksheet('Profit & loss'),
+      cf=wb.addWorksheet('CFS'), ns=wb.addWorksheet('Notes to accounts'),
+      rt=wb.addWorksheet('Ratios'), tb=wb.addWorksheet('Trial Balance'), rev=wb.addWorksheet('Review');
+  [bs,pl].forEach(function(w){ w.columns=[{width:5},{width:52},{width:8},{width:18},{width:18}]; });
 
-  var ns=wb.addWorksheet('Notes');
-  ns.columns=[{width:52},{width:15},{width:15}];
-  var nr=ns.addRow(['Notes to the financial statements','Current','Prior']); nr.eachCell(function(c){c.fill=head.fill;c.font=head.font;c.alignment=head.alignment;});
-  var noteRow={};
+  // ========== NOTES (built first so the faces can link to each total) ==========
+  ns.columns=[{width:56},{width:18},{width:18}];
+  P(ns,1,1,entity,{b:true,size:12}); P(ns,2,1,'Notes to the financial statements for the year ended '+curDate,{b:true,size:10});
+  P(ns,3,1,'(All amounts in Indian Rupees, unless otherwise stated)',{i:true,size:8.5,color:'FF666666'});
+  var R=5, noteRow={};
   NOTE_ORDER.forEach(function(no){
     if(no===99 && !p.byNote[99].lines.length) return;
-    var bn=p.byNote[no];
-    var title=ns.addRow(['Note '+no+' : '+NOTES[no].head,'','']); title.getCell(1).font={bold:true,size:10,color:{argb:'FF173F28'}};
+    var bn=p.byNote[no], isRes=(no===2);
+    if(!bn.lines.length && Math.abs(isRes?p.resCur:bn.cur)<0.005 && Math.abs(isRes?p.resPri:bn.pri)<0.005) return;
+    P(ns,R,1,'Note '+no+' : '+NOTES[no].head,{b:true,size:10,color:'FF173F28'}); R++;
+    P(ns,R,1,'Particulars',{b:true,size:9}); P(ns,R,2,'As at '+curDate,{b:true,size:9,al:'center'}); P(ns,R,3,'As at '+priDate,{b:true,size:9,al:'center'});
+    ns.getCell(R,1).border=ns.getCell(R,2).border=ns.getCell(R,3).border={bottom:{style:'thin'}}; R++;
     bn.lines.slice().sort(function(a,b){return Math.abs(b.cur)-Math.abs(a.cur);}).forEach(function(x){
-      var r=ns.addRow([x.name,x.cur,x.pri]); r.font={size:9}; r.getCell(2).numFmt=money; r.getCell(3).numFmt=money;
+      P(ns,R,1,x.name,{size:9}); P(ns,R,2,x.cur,{size:9,num:true}); P(ns,R,3,x.pri,{size:9,num:true}); R++;
     });
-    var curTot=(no===2)?p.resCur:bn.cur, priTot=(no===2)?p.resPri:bn.pri;
-    if(no===2 && bn.lines.length){ var rr=ns.addRow(['Add: Profit for the year',p.pbtCur,p.pbtPri]); rr.font={size:9,italic:true}; rr.getCell(2).numFmt=money; rr.getCell(3).numFmt=money; }
-    var tot=ns.addRow(['Total — Note '+no,curTot,priTot]);
-    tot.font={bold:true,size:9}; tot.getCell(2).numFmt=money; tot.getCell(3).numFmt=money;
-    tot.getCell(1).border={top:{style:'thin'}}; tot.getCell(2).border={top:{style:'thin'}}; tot.getCell(3).border={top:{style:'thin'}};
-    noteRow[no]=tot.number; ns.addRow([]);
+    if(isRes){ P(ns,R,1,'Add: Profit / (loss) for the year',{size:9,i:true}); P(ns,R,2,p.pbtCur,{size:9,num:true}); P(ns,R,3,p.pbtPri,{size:9,num:true}); R++; }
+    var curTot=isRes?p.resCur:bn.cur, priTot=isRes?p.resPri:bn.pri;
+    P(ns,R,1,'Total',{b:true,size:9,top:true}); P(ns,R,2,curTot,{b:true,size:9,num:true,top:true}); P(ns,R,3,priTot,{b:true,size:9,num:true,top:true});
+    noteRow[no]=R; R+=2;
   });
-  ns.views=[{state:'frozen',ySplit:1}];
 
-  var bs=wb.addWorksheet('Balance Sheet');
-  bs.columns=[{width:52},{width:8},{width:16},{width:16}];
-  bs.addRow([entity]).getCell(1).font={bold:true,size:13};
-  bs.addRow(['Balance Sheet as at '+curLabel]).getCell(1).font={bold:true,size:11};
-  bs.addRow(['(All amounts in Indian Rupees)']).getCell(1).font={italic:true,size:9,color:{argb:'FF6B7280'}};
-  var bh=bs.addRow(['Particulars','Note','As at '+curLabel,'As at '+priLabel]); bh.eachCell(function(c){c.fill=head.fill;c.font=head.font;c.alignment=head.alignment;});
-  function faceLine(label,no){
-    var r=bs.addRow([label,no,null,null]); r.font={size:10};
-    if(noteRow[no]){ r.getCell(3).value={formula:'Notes!B'+noteRow[no],result:(no===2?p.resCur:p.byNote[no].cur)}; r.getCell(4).value={formula:'Notes!C'+noteRow[no],result:(no===2?p.resPri:p.byNote[no].pri)}; }
-    r.getCell(3).numFmt=money; r.getCell(4).numFmt=money; return r.number;
+  // ========== BALANCE SHEET ==========
+  var r=hdr(bs,'Balance Sheet as at '+curDate,'As at ');
+  function faceRow(ws,rr,rn,label,note,lbi){ // returns the row; links to note total
+    if(rn!=null) P(ws,rr,1,rn,{});
+    P(ws,rr,2,label,{size:10});
+    if(note!=null){ P(ws,rr,3,note,{al:'center',size:9});
+      if(noteRow[note]){ var d=ws.getCell(rr,4); d.value={formula:"'Notes to accounts'!B"+noteRow[note],result:(note===2?p.resCur:n(note))}; d.font={name:AR,size:10}; d.numFmt=MONEY;
+        var e=ws.getCell(rr,5); e.value={formula:"'Notes to accounts'!C"+noteRow[note],result:(note===2?p.resPri:n(note,'pri'))}; e.font={name:AR,size:10}; e.numFmt=MONEY; }
+      else { P(ws,rr,4,note===2?p.resCur:n(note),{num:true}); P(ws,rr,5,note===2?p.resPri:n(note,'pri'),{num:true}); }
+    }
+    return rr;
   }
-  bs.addRow(['EQUITY AND LIABILITIES']).getCell(1).font={bold:true,size:10};
-  var elRows=[]; elRows.push(faceLine('Share capital',1)); elRows.push(faceLine('Reserves and surplus',2));
-  [4,5,6,7,8,9,10,11].forEach(function(n){ elRows.push(faceLine(NOTES[n].head,n)); });
-  var elTot=bs.addRow(['Total equity and liabilities','',{formula:elRows.map(function(x){return 'C'+x;}).join('+'),result:p.eqLiabCur},{formula:elRows.map(function(x){return 'D'+x;}).join('+'),result:p.eqLiabPri}]);
-  elTot.font={bold:true,size:10}; elTot.getCell(3).numFmt=money; elTot.getCell(4).numFmt=money; elTot.eachCell(function(c){c.border={top:{style:'thin'},bottom:{style:'double'}};});
-  bs.addRow([]); bs.addRow(['ASSETS']).getCell(1).font={bold:true,size:10};
-  var aRows=[]; [12,13,14,15,16,17,18,19,20,21,22].forEach(function(n){ aRows.push(faceLine(NOTES[n].head,n)); });
-  var aTot=bs.addRow(['Total assets','',{formula:aRows.map(function(x){return 'C'+x;}).join('+'),result:p.assetsCur},{formula:aRows.map(function(x){return 'D'+x;}).join('+'),result:p.assetsPri}]);
-  aTot.font={bold:true,size:10}; aTot.getCell(3).numFmt=money; aTot.getCell(4).numFmt=money; aTot.eachCell(function(c){c.border={top:{style:'thin'},bottom:{style:'double'}};});
-  bs.addRow([]);
-  var chk=bs.addRow(['Difference (Assets − Equity & Liabilities) — should be nil','',{formula:'C'+aTot.number+'-C'+elTot.number,result:p.diffCur},{formula:'D'+aTot.number+'-D'+elTot.number,result:p.diffPri}]);
-  chk.font={italic:true,size:9,color:{argb:Math.abs(p.diffCur)<1?'FF16A34A':'FFDC2626'}}; chk.getCell(3).numFmt=money; chk.getCell(4).numFmt=money;
-  bs.views=[{state:'frozen',ySplit:4}];
+  var elCells=[];
+  P(bs,r,1,'I',{b:true}); P(bs,r,2,'EQUITY AND LIABILITIES',{b:true}); r++;
+  P(bs,r,1,'1',{}); P(bs,r,2,"Shareholders' funds",{b:true}); r++;
+  faceRow(bs,r,null,'(a) Share capital',1); elCells.push(r); r++;
+  faceRow(bs,r,null,'(b) Reserves and surplus',2); elCells.push(r); r++;
+  r++;
+  P(bs,r,1,'2',{}); P(bs,r,2,'Non-current liabilities',{b:true}); r++;
+  faceRow(bs,r,null,'(a) Long-term borrowings',4); elCells.push(r); r++;
+  faceRow(bs,r,null,'(b) Deferred tax liabilities (Net)',5); elCells.push(r); r++;
+  faceRow(bs,r,null,'(c) Other long term liabilities',6); elCells.push(r); r++;
+  faceRow(bs,r,null,'(d) Long-term provisions',7); elCells.push(r); r++;
+  r++;
+  P(bs,r,1,'3',{}); P(bs,r,2,'Current liabilities',{b:true}); r++;
+  faceRow(bs,r,null,'(a) Short-term borrowings',8); elCells.push(r); r++;
+  faceRow(bs,r,null,'(b) Trade payables',9); elCells.push(r); r++;
+  faceRow(bs,r,null,'(c) Other current liabilities',10); elCells.push(r); r++;
+  faceRow(bs,r,null,'(d) Short-term provisions',11); elCells.push(r); r++;
+  P(bs,r,2,'Total equity and liabilities',{b:true,top:true});
+  bs.getCell(r,4).value={formula:elCells.map(function(x){return 'D'+x;}).join('+'),result:p.eqLiabCur}; bs.getCell(r,4).font={name:AR,bold:true}; bs.getCell(r,4).numFmt=MONEY; bs.getCell(r,4).border={top:{style:'thin'},bottom:{style:'double'}};
+  bs.getCell(r,5).value={formula:elCells.map(function(x){return 'E'+x;}).join('+'),result:p.eqLiabPri}; bs.getCell(r,5).font={name:AR,bold:true}; bs.getCell(r,5).numFmt=MONEY; bs.getCell(r,5).border={top:{style:'thin'},bottom:{style:'double'}};
+  var elTotRow=r; r+=2;
+  var aCells=[];
+  P(bs,r,1,'II',{b:true}); P(bs,r,2,'ASSETS',{b:true}); r++;
+  P(bs,r,1,'1',{}); P(bs,r,2,'Non-current assets',{b:true}); r++;
+  faceRow(bs,r,null,'(a) Property, Plant and Equipment',12); aCells.push(r); r++;
+  faceRow(bs,r,null,'(b) Non-current investments',13); aCells.push(r); r++;
+  faceRow(bs,r,null,'(c) Deferred tax assets (Net)',14); aCells.push(r); r++;
+  faceRow(bs,r,null,'(d) Long-term loans and advances',15); aCells.push(r); r++;
+  faceRow(bs,r,null,'(e) Other non-current assets',16); aCells.push(r); r++;
+  r++;
+  P(bs,r,1,'2',{}); P(bs,r,2,'Current assets',{b:true}); r++;
+  faceRow(bs,r,null,'(a) Current investments',17); aCells.push(r); r++;
+  faceRow(bs,r,null,'(b) Inventories',18); aCells.push(r); r++;
+  faceRow(bs,r,null,'(c) Trade receivables',19); aCells.push(r); r++;
+  faceRow(bs,r,null,'(d) Cash and cash equivalents',20); aCells.push(r); r++;
+  faceRow(bs,r,null,'(e) Short-term loans and advances',21); aCells.push(r); r++;
+  faceRow(bs,r,null,'(f) Other current assets',22); aCells.push(r); r++;
+  P(bs,r,2,'Total assets',{b:true,top:true});
+  bs.getCell(r,4).value={formula:aCells.map(function(x){return 'D'+x;}).join('+'),result:p.assetsCur}; bs.getCell(r,4).font={name:AR,bold:true}; bs.getCell(r,4).numFmt=MONEY; bs.getCell(r,4).border={top:{style:'thin'},bottom:{style:'double'}};
+  bs.getCell(r,5).value={formula:aCells.map(function(x){return 'E'+x;}).join('+'),result:p.assetsPri}; bs.getCell(r,5).font={name:AR,bold:true}; bs.getCell(r,5).numFmt=MONEY; bs.getCell(r,5).border={top:{style:'thin'},bottom:{style:'double'}};
+  var aTotRow=r; r+=2;
+  P(bs,r,2,'Difference (Assets − Equity & Liabilities) — should be nil',{i:true,size:9,color:Math.abs(p.diffCur)<1?'FF16A34A':'FFDC2626'});
+  bs.getCell(r,4).value={formula:'D'+aTotRow+'-D'+elTotRow,result:p.diffCur}; bs.getCell(r,4).numFmt=MONEY; bs.getCell(r,4).font={name:AR,size:9};
+  bs.getCell(r,5).value={formula:'E'+aTotRow+'-E'+elTotRow,result:p.diffPri}; bs.getCell(r,5).numFmt=MONEY; bs.getCell(r,5).font={name:AR,size:9};
+  signBlock(bs,r+2);
+  bs.views=[{state:'frozen',ySplit:7}];
 
-  var pl=wb.addWorksheet('Profit & Loss');
-  pl.columns=[{width:52},{width:8},{width:16},{width:16}];
-  pl.addRow([entity]).getCell(1).font={bold:true,size:13};
-  pl.addRow(['Statement of Profit and Loss for the year ended '+curLabel]).getCell(1).font={bold:true,size:11};
-  var ph=pl.addRow(['Particulars','Note','Year ended '+curLabel,'Year ended '+priLabel]); ph.eachCell(function(c){c.fill=head.fill;c.font=head.font;c.alignment=head.alignment;});
-  function plLine(label,no,c,pr){ var r=pl.addRow([label,no||'',c,pr]); r.font={size:10}; r.getCell(3).numFmt=money; r.getCell(4).numFmt=money; return r.number; }
-  var rIncA=plLine('Revenue from operations',23,p.byNote[23].cur,p.byNote[23].pri);
-  var rIncB=plLine('Other income',24,p.byNote[24].cur,p.byNote[24].pri);
-  var rIncT=pl.addRow(['Total income','',{formula:'C'+rIncA+'+C'+rIncB,result:p.incCur},{formula:'D'+rIncA+'+D'+rIncB,result:p.incPri}]); rIncT.font={bold:true}; rIncT.getCell(3).numFmt=money; rIncT.getCell(4).numFmt=money;
-  var e1=plLine('Cost of materials consumed',25,p.byNote[25].cur,p.byNote[25].pri);
-  var e2=plLine('Changes in inventories',26,p.byNote[26].cur,p.byNote[26].pri);
-  var e3=plLine('Employee benefits expense',27,p.byNote[27].cur,p.byNote[27].pri);
-  var e4=plLine('Finance costs',28,p.byNote[28].cur,p.byNote[28].pri);
-  var e5=plLine('Depreciation and amortization',12,p.depCur,p.depPri);
-  var e6=plLine('Other expenses',29,p.byNote[29].cur,p.byNote[29].pri);
-  var eT=pl.addRow(['Total expenses','',{formula:['C'+e1,'C'+e2,'C'+e3,'C'+e4,'C'+e5,'C'+e6].join('+'),result:p.expCur},{formula:['D'+e1,'D'+e2,'D'+e3,'D'+e4,'D'+e5,'D'+e6].join('+'),result:p.expPri}]); eT.font={bold:true}; eT.getCell(3).numFmt=money; eT.getCell(4).numFmt=money;
-  var pbt=pl.addRow(['Profit / (loss) before tax','',{formula:'C'+rIncT.number+'-C'+eT.number,result:p.pbtCur},{formula:'D'+rIncT.number+'-D'+eT.number,result:p.pbtPri}]); pbt.font={bold:true}; pbt.getCell(3).numFmt=money; pbt.getCell(4).numFmt=money; pbt.eachCell(function(c){c.border={top:{style:'thin'}};});
-  pl.views=[{state:'frozen',ySplit:3}];
+  // ========== PROFIT & LOSS ==========
+  r=hdr(pl,'Statement of Profit and Loss for the year ended '+curDate,'For the year ended ');
+  function plRow(rr,rn,label,note,curv,priv,bold){
+    if(rn!=null) P(pl,rr,1,rn,{b:!!bold}); P(pl,rr,2,label,{b:!!bold});
+    if(note!=null) P(pl,rr,3,note,{al:'center',size:9});
+    if(curv&&curv.formula){ pl.getCell(rr,4).value=curv; pl.getCell(rr,4).font={name:AR,bold:!!bold}; pl.getCell(rr,4).numFmt=MONEY; }
+    else P(pl,rr,4,curv,{num:true,b:!!bold});
+    if(priv&&priv.formula){ pl.getCell(rr,5).value=priv; pl.getCell(rr,5).font={name:AR,bold:!!bold}; pl.getCell(rr,5).numFmt=MONEY; }
+    else P(pl,rr,5,priv,{num:true,b:!!bold});
+    return rr;
+  }
+  var rRev=r; plRow(r,'I','Revenue from operations',23,n(23),n(23,'pri')); r++;
+  var rOI=r; plRow(r,'II','Other income',24,n(24),n(24,'pri')); r++;
+  var rTI=r; plRow(r,'III','Total income (I + II)',null,{formula:'D'+rRev+'+D'+rOI,result:p.incCur},{formula:'E'+rRev+'+E'+rOI,result:p.incPri},true); r+=2;
+  P(pl,r,1,'IV',{b:true}); P(pl,r,2,'Expenses',{b:true}); r++;
+  var eR=[];
+  eR.push(plRow(r,null,'Cost of materials consumed',25,n(25),n(25,'pri'))); r++;
+  eR.push(plRow(r,null,'Changes in inventories of finished goods & WIP',26,n(26),n(26,'pri'))); r++;
+  eR.push(plRow(r,null,'Employee benefits expense',27,n(27),n(27,'pri'))); r++;
+  eR.push(plRow(r,null,'Finance costs',28,n(28),n(28,'pri'))); r++;
+  eR.push(plRow(r,null,'Depreciation and amortization expense',12,p.depCur,p.depPri)); r++;
+  eR.push(plRow(r,null,'Other expenses',29,n(29),n(29,'pri'))); r++;
+  var rTE=r; plRow(r,null,'Total expenses',null,{formula:eR.map(function(x){return 'D'+x;}).join('+'),result:p.expCur},{formula:eR.map(function(x){return 'E'+x;}).join('+'),result:p.expPri},true); pl.getCell(r,2).border=pl.getCell(r,4).border=pl.getCell(r,5).border={top:{style:'thin'}}; r+=2;
+  var rPBT=r; plRow(r,'V','Profit / (loss) before tax (III − IV)',null,{formula:'D'+rTI+'-D'+rTE,result:p.pbtCur},{formula:'E'+rTI+'-E'+rTE,result:p.pbtPri},true); r+=2;
+  P(pl,r,1,'VI',{b:true}); P(pl,r,2,'Tax expense',{b:true}); r++;
+  var rCT=r; plRow(r,null,'(a) Current tax',null,0,0); r++;
+  var rDT=r; plRow(r,null,'(b) Deferred tax charge / (credit)',null,0,0); r++;
+  P(pl,r,2,'(To be finalised — tax not computed by the tool)',{i:true,size:8,color:'FF999999'}); r+=1;
+  var rTAX=r; plRow(r,null,'Total tax expense',null,{formula:'D'+rCT+'+D'+rDT,result:0},{formula:'E'+rCT+'+E'+rDT,result:0},true); r++;
+  var rPAT=r; plRow(r,'VII','Profit / (loss) for the year',null,{formula:'D'+rPBT+'-D'+rTAX,result:p.pbtCur},{formula:'E'+rPBT+'-E'+rTAX,result:p.pbtPri},true); pl.getCell(r,2).border=pl.getCell(r,4).border=pl.getCell(r,5).border={top:{style:'thin'},bottom:{style:'double'}}; r+=2;
+  P(pl,r,1,'VIII',{b:true}); P(pl,r,2,'Earnings per equity share (to be finalised)',{b:true}); r++;
+  plRow(r,null,'(a) Basic / (b) Diluted',null,'',''); r++;
+  signBlock(pl,r+1);
+  pl.views=[{state:'frozen',ySplit:7}];
 
-  // Cash Flow (indirect, summary)
-  var cf=wb.addWorksheet('Cash Flow');
-  cf.columns=[{width:52},{width:16},{width:16}];
-  cf.addRow([entity]).getCell(1).font={bold:true,size:13};
-  cf.addRow(['Cash Flow Statement (indirect) for the year ended '+curLabel]).getCell(1).font={bold:true,size:11};
-  var ch=cf.addRow(['Particulars','Year ended '+curLabel,'']); ch.eachCell(function(c){c.fill=head.fill;c.font=head.font;c.alignment=head.alignment;});
-  function cfL(l,v,b){ var r=cf.addRow([l,v,'']); r.font={size:10,bold:!!b}; r.getCell(2).numFmt=money; return r; }
-  cfL('Net cash from operating activities',p.cf.operating);
-  cfL('Net cash from investing activities',p.cf.investing);
-  cfL('Net cash from financing activities',p.cf.financing);
-  cfL('Net increase / (decrease) in cash',p.cf.netCash,true).eachCell(function(c){c.border={top:{style:'thin'}};});
-  cfL('Cash & cash equivalents — closing',p.cf.closeCash,true);
-  cf.addRow([]); cf.addRow(['Operating is derived as the balancing figure to the net movement in cash & bank ledgers (indirect summary).']).getCell(1).font={italic:true,size:8.5,color:{argb:'FF6B7280'}};
+  // ========== CASH FLOW (indirect) ==========
+  cf.columns=[{width:4},{width:56},{width:18},{width:18}];
+  P(cf,1,1,entity,{b:true,size:12}); P(cf,3,1,'Cash Flow Statement (Indirect method) for the year ended '+curDate,{b:true,size:10});
+  P(cf,5,1,'(All amounts in Indian Rupees, unless otherwise stated)',{i:true,size:8.5,color:'FF666666'});
+  P(cf,6,3,curDate,{b:true,al:'center',size:9}); P(cf,6,4,priDate,{b:true,al:'center',size:9});
+  function d(no){ return r2(p.byNote[no].cur - p.byNote[no].pri); } // movement in a head
+  var cr=8;
+  function cLine(label,cur,pri,o){ o=o||{}; P(cf,cr,2,label,{size:o.size||9,b:!!o.b,i:!!o.i}); if(cur!==''&&cur!=null)P(cf,cr,3,cur,{num:true,b:!!o.b,size:o.size||9}); if(pri!==''&&pri!=null)P(cf,cr,4,pri,{num:true,b:!!o.b,size:o.size||9}); if(o.top){cf.getCell(cr,2).border=cf.getCell(cr,3).border=cf.getCell(cr,4).border={top:{style:'thin'}};} var rr=cr; cr++; return rr; }
+  P(cf,cr,1,'A',{b:true}); cLine('Cash flow from operating activities',' ',' ',{b:true});
+  cLine('Profit / (loss) before tax',p.pbtCur,p.pbtPri);
+  cLine('Adjustments for:',' ',' ',{i:true});
+  cLine('  Depreciation and amortization',p.depCur,p.depPri);
+  cLine('  Finance costs',n(28),n(28,'pri'));
+  var opWC=r2(p.pbtCur+p.depCur+n(28));
+  cLine('Operating profit before working-capital changes',opWC,'',{b:true,top:true});
+  cLine('Changes in working capital:',' ',' ',{i:true});
+  cLine('  Increase / (decrease) in trade payables',d(9),'');
+  cLine('  Increase / (decrease) in other current liabilities',d(10),'');
+  cLine('  Increase / (decrease) in short-term provisions',d(11),'');
+  cLine('  Increase / (decrease) in long-term provisions',d(7),'');
+  cLine('  Increase / (decrease) in deferred tax liabilities',d(5),'');
+  cLine('  (Increase) / decrease in trade receivables',-d(19),'');
+  cLine('  (Increase) / decrease in inventories',-d(18),'');
+  cLine('  (Increase) / decrease in short-term loans & advances',-d(21),'');
+  cLine('  (Increase) / decrease in other current assets',-d(22),'');
+  var wc=r2(d(9)+d(10)+d(11)+d(7)+d(5)-d(19)-d(18)-d(21)-d(22));
+  var opCash=r2(opWC+wc);
+  cLine('Net cash from / (used in) operating activities (A)',opCash,'',{b:true,top:true});
+  cr++;
+  // PPE is shown gross of depreciation (dep was added back above), so the
+  // depreciation charged into the asset ledgers isn't double-counted.
+  var ppePurch=r2(d(12)+p.depCur);
+  P(cf,cr,1,'B',{b:true}); cLine('Cash flow from investing activities',' ',' ',{b:true});
+  cLine('  Purchase of property, plant & equipment (gross)',-ppePurch,'');
+  cLine('  (Increase) / decrease in non-current investments',-d(13),'');
+  cLine('  (Increase) / decrease in current investments',-d(17),'');
+  cLine('  (Increase) / decrease in deferred tax assets',-d(14),'');
+  cLine('  (Increase) / decrease in long-term loans & advances',-d(15),'');
+  cLine('  (Increase) / decrease in other non-current assets',-d(16),'');
+  var invCash=r2(-ppePurch-d(13)-d(17)-d(14)-d(15)-d(16));
+  cLine('Net cash from / (used in) investing activities (B)',invCash,'',{b:true,top:true});
+  cr++;
+  P(cf,cr,1,'C',{b:true}); cLine('Cash flow from financing activities',' ',' ',{b:true});
+  cLine('  Proceeds from / (repayment of) share capital',d(1),'');
+  cLine('  Movement in reserves (excl. current-year profit)',d(2),'');
+  cLine('  Increase / (decrease) in long-term borrowings',d(4),'');
+  cLine('  Increase / (decrease) in short-term borrowings',d(8),'');
+  cLine('  Increase / (decrease) in other long-term liabilities',d(6),'');
+  cLine('  Finance costs paid',-n(28),'');
+  var finCash=r2(d(1)+d(2)+d(4)+d(8)+d(6)-n(28));
+  cLine('Net cash from / (used in) financing activities (C)',finCash,'',{b:true,top:true});
+  cr++;
+  var netCF=r2(opCash+invCash+finCash);
+  cLine('Net increase / (decrease) in cash (A+B+C)',netCF,'',{b:true,top:true});
+  cLine('Cash & cash equivalents — opening',p.byNote[20].pri,'');
+  cLine('Cash & cash equivalents — closing (derived)',r2(p.byNote[20].pri+netCF),'',{b:true});
+  cLine('Cash & cash equivalents — per books (Note 20)',p.byNote[20].cur,'',{b:true});
+  var gap=r2(p.byNote[20].cur-(p.byNote[20].pri+netCF));
+  cLine('Unreconciled difference (refine working-capital lines to nil)',gap,'',{i:true,size:8,b:Math.abs(gap)>1});
+  cr++;
+  P(cf,cr,2,'Prepared under the Indirect Method (AS-3). Operating build-up and working-capital lines are auto-derived from balance movements — review and refine before finalising.',{i:true,size:8,color:'FF999999'});
 
-  var rev=wb.addWorksheet('Review');
-  rev.columns=[{width:38},{width:24},{width:16},{width:16},{width:30}];
-  var rh=rev.addRow(['Ledger','Primary group','Closing (CY)','Confidence','Placed in note']); rh.eachCell(function(c){c.fill=head.fill;c.font=head.font;c.alignment=head.alignment;});
-  TB.ledgers.filter(function(l){ return l._note===99 || l._conf!=='high' || overrides[l.name]!=null; }).forEach(function(l){
-    var r=rev.addRow([l.name,l.primary,l.current,(overrides[l.name]!=null?'assigned':l._conf),'Note '+l._note+' · '+NOTES[l._note].head]); r.font={size:9}; r.getCell(3).numFmt=money;
+  // ========== RATIOS (Schedule III mandated) ==========
+  rt.columns=[{width:5},{width:34},{width:30},{width:30},{width:16},{width:16},{width:14}];
+  P(rt,1,1,entity,{b:true,size:12});
+  P(rt,3,1,'S.No',{b:true,size:9}); P(rt,3,2,'Particulars',{b:true,size:9}); P(rt,3,3,'Numerator',{b:true,size:9}); P(rt,3,4,'Denominator',{b:true,size:9});
+  P(rt,3,5,curDate,{b:true,size:9,al:'center'}); P(rt,3,6,priDate,{b:true,size:9,al:'center'}); P(rt,3,7,'Variance %',{b:true,size:9,al:'center'});
+  var CA=p.assetsCur - (n(12)+n(13)+n(14)+n(15)+n(16)); // current assets
+  var CAp=p.assetsPri - (p.byNote[12].pri+n(13,'pri')+n(14,'pri')+n(15,'pri')+n(16,'pri'));
+  var CL=n(8)+n(9)+n(10)+n(11), CLp=n(8,'pri')+n(9,'pri')+n(10,'pri')+n(11,'pri');
+  var debt=n(4)+n(8), debtp=n(4,'pri')+n(8,'pri');
+  var equity=n(1)+p.resCur, equityp=n(1,'pri')+p.resPri;
+  var pat=p.pbtCur, patp=p.pbtPri; // tax not computed → PAT≈PBT
+  var ebit=p.pbtCur+n(28), revCY=n(23);
+  var ratios=[
+    ['a)','Current Ratio','Current assets','Current liabilities', safe(CA,CL), safe(CAp,CLp)],
+    ['b)','Debt-Equity Ratio','Total debt','Shareholders’ equity', safe(debt,equity), safe(debtp,equityp)],
+    ['c)','Debt Service Coverage Ratio','Earnings for debt service (PBT + Dep + Interest)','Debt service (borrowings)', safe(p.pbtCur+p.depCur+n(28),debt), safe(p.pbtPri+p.depPri+n(28,'pri'),debtp)],
+    ['d)','Return on Equity (%)','Profit after tax','Shareholders’ equity', pct(pat,equity), pct(patp,equityp)],
+    ['e)','Trade Receivable Turnover','Revenue','Avg trade receivables', safe(revCY,avg(n(19),n(19,'pri'))), safe(n(23,'pri'),avg(n(19,'pri'),n(19,'pri')))],
+    ['f)','Trade Payable Turnover','Purchases + other expenses','Avg trade payables', safe(n(25)+n(29),avg(n(9),n(9,'pri'))), safe(n(25,'pri')+n(29,'pri'),avg(n(9,'pri'),n(9,'pri')))],
+    ['g)','Working Capital Turnover','Revenue','Working capital', safe(revCY,CA-CL), safe(n(23,'pri'),CAp-CLp)],
+    ['h)','Net Profit Ratio (%)','Profit after tax','Revenue', pct(pat,revCY), pct(patp,n(23,'pri'))],
+    ['i)','Return on Capital Employed (%)','EBIT','Capital employed (assets − CL)', pct(ebit,p.assetsCur-CL), pct(p.pbtPri+n(28,'pri'),p.assetsPri-CLp)],
+    ['j)','Inventory Turnover','Cost of goods sold','Avg inventory', safe(n(25),avg(n(18),n(18,'pri'))), safe(n(25,'pri'),avg(n(18,'pri'),n(18,'pri')))],
+    ['k)','Return on Investment (%)','Income from investments','Average investments','—','—']
+  ];
+  var rr=5;
+  ratios.forEach(function(x){
+    P(rt,rr,1,x[0],{size:9}); P(rt,rr,2,x[1],{size:9,b:true}); P(rt,rr,3,x[2],{size:8.5,color:'FF666666'}); P(rt,rr,4,x[3],{size:8.5,color:'FF666666'});
+    P(rt,rr,5,x[4],{size:9,al:'right',num:typeof x[4]==='number'?RATIOF:undefined}); P(rt,rr,6,x[5],{size:9,al:'right',num:typeof x[5]==='number'?RATIOF:undefined});
+    if(typeof x[4]==='number'&&typeof x[5]==='number'&&Math.abs(x[5])>0.0001) P(rt,rr,7,r2((x[4]-x[5])/Math.abs(x[5])*100),{size:9,al:'right',num:'0.0'});
+    rr+=2;
   });
-  if(rev.lastRow.number===1) rev.addRow(['(nothing needed review — every ledger placed with confidence)']);
+  P(rt,rr+1,1,'PAT is taken equal to PBT (tax not computed by the tool). Prior-year averages use the closing balance where an opening is unavailable.',{i:true,size:8,color:'FF999999'});
+
+  // ========== TRIAL BALANCE (audit trail) & REVIEW ==========
+  tb.columns=[{width:38},{width:24},{width:30},{width:16},{width:16},{width:16},{width:30}];
+  P(tb,1,1,'Ledger',{b:true}); P(tb,1,2,'Booked under',{b:true}); P(tb,1,3,'Full path',{b:true}); P(tb,1,4,'GSTIN',{b:true}); P(tb,1,5,'Closing (CY)',{b:true,al:'center'}); P(tb,1,6,'Closing (PY)',{b:true,al:'center'}); P(tb,1,7,'Used in (Note)',{b:true});
+  var tr=2;
+  TB.ledgers.forEach(function(l){ var note=l._note!=null?l._note:classify(l);
+    P(tb,tr,1,l.name,{size:9}); P(tb,tr,2,l.group||'',{size:9}); P(tb,tr,3,bookedUnder(l).join(' > '),{size:8.5,color:'FF666666'}); P(tb,tr,4,l.gstin||'',{size:8.5});
+    P(tb,tr,5,l.current,{size:9,num:true}); P(tb,tr,6,l.prior,{size:9,num:true}); P(tb,tr,7,'Note '+note+' · '+NOTES[note].head,{size:8.5}); tr++; });
+  tb.autoFilter='A1:G'+(tr-1); tb.views=[{state:'frozen',ySplit:1}];
+
+  rev.columns=[{width:38},{width:30},{width:16},{width:14},{width:30}];
+  P(rev,1,1,'Ledger',{b:true}); P(rev,1,2,'Booked under',{b:true}); P(rev,1,3,'Closing (CY)',{b:true,al:'center'}); P(rev,1,4,'Confidence',{b:true}); P(rev,1,5,'Placed in note',{b:true});
+  var vr=2;
+  TB.ledgers.filter(function(l){ return l._note===99 || l._conf!=='high' || overrides[l.name]!=null; }).forEach(function(l){
+    P(rev,vr,1,l.name,{size:9}); P(rev,vr,2,bookedUnder(l).join(' > '),{size:8.5,color:'FF666666'}); P(rev,vr,3,l.current,{size:9,num:true}); P(rev,vr,4,(overrides[l.name]!=null?'assigned':l._conf),{size:9}); P(rev,vr,5,'Note '+l._note+' · '+NOTES[l._note].head,{size:8.5}); vr++; });
+  if(vr===2) P(rev,2,1,'(nothing needed review — every ledger placed with confidence)',{i:true,size:9,color:'FF999999'});
 
   wb.xlsx.writeBuffer().then(function(buf){
     var a=document.createElement('a');
     a.href=URL.createObjectURL(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
-    a.download=(entity.replace(/[^A-Za-z0-9]+/g,'_')||'Financials')+'_ScheduleIII_'+curLabel+'.xlsx';
+    a.download=(entity.replace(/[^A-Za-z0-9]+/g,'_')||'Financials')+'_ScheduleIII_'+TB.asOn+'.xlsx';
     a.style.display='none'; document.body.appendChild(a); a.click();
     setTimeout(function(){a.remove();URL.revokeObjectURL(a.href);},1500);
-    document.getElementById('msgExport').innerHTML='<span class="msg ok">✅ Working paper downloaded — Balance Sheet, P&L, Notes, Cash Flow, Trial Balance (with remarks) and Review.</span>';
+    document.getElementById('msgExport').innerHTML='<span class="msg ok">✅ Downloaded — Balance Sheet, Profit &amp; loss, CFS, Notes, Ratios, Trial Balance and Review, in your 1.3 format.</span>';
   });
 }
+function safe(a,b){ return (b&&Math.abs(b)>0.0001)?r2(a/b):'—'; }
+function pct(a,b){ return (b&&Math.abs(b)>0.0001)?r2(a/b*100):'—'; }
+function avg(a,b){ return (a+b)/2; }
 </script>
 </body>
 </html>
