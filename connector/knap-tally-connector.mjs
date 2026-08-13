@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '3.4';
+const VERSION = '3.5';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -414,12 +414,15 @@ const GROUPS_REQUEST = () => `<ENVELOPE>
  </DESC></BODY>
 </ENVELOPE>`;
 
-const LEDGERS_BAL_REQUEST = (asOn) => `<ENVELOPE>
+// One ledger read over the chosen period gives BOTH columns: ClosingBalance
+// (as at SVTODATE = period-to) is the current column, OpeningBalance (as at
+// SVFROMDATE = period-from) is the prior/comparative column.
+const LEDGERS_PERIOD_REQUEST = (from, to) => `<ENVELOPE>
  <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>KnapLedgers</ID></HEADER>
  <BODY><DESC>
   <STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-   <SVFROMDATE>${toTallyDate(new Date(Date.UTC(asOn.getUTCFullYear() - 1, asOn.getUTCMonth(), asOn.getUTCDate() + 1))) || toTallyDate(asOn)}</SVFROMDATE>
-   <SVTODATE>${toTallyDate(asOn)}</SVTODATE>${svCompany()}</STATICVARIABLES>
+   <SVFROMDATE>${toTallyDate(from)}</SVFROMDATE>
+   <SVTODATE>${toTallyDate(to)}</SVTODATE>${svCompany()}</STATICVARIABLES>
   <TDL><TDLMESSAGE>
    <COLLECTION NAME="KnapLedgers" ${COLL_ATTRS}>
     <TYPE>Ledger</TYPE>
@@ -428,6 +431,8 @@ const LEDGERS_BAL_REQUEST = (asOn) => `<ENVELOPE>
   </TDLMESSAGE></TDL>
  </DESC></BODY>
 </ENVELOPE>`;
+// Back-compat alias used by the diagnostic probe.
+const LEDGERS_BAL_REQUEST = (asOn) => LEDGERS_PERIOD_REQUEST(new Date(Date.UTC(asOn.getUTCFullYear() - 1, asOn.getUTCMonth(), asOn.getUTCDate() + 1)), asOn);
 
 // Tally amounts arrive as "12,345.67", "-12345.67", or "12345.67 Cr" — a Cr
 // balance is a credit (negative in the Dr-positive convention we return).
@@ -2122,40 +2127,38 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'POST' && url.pathname === '/api/fin/trialbalance') {
       const body = JSON.parse(await readBody(req));
-      const cur = tallyDateOf(String(body.asOn || '').replace(/-/g, ''));
-      const pri = tallyDateOf(String(body.priorAsOn || '').replace(/-/g, ''));
-      if (!cur) { json(res, 400, { ok: false, error: 'Bad current year-end date.' }); return; }
-      finProgress.active = true; finProgress.steps = pri ? 3 : 2;
+      // Accept a period {from, to}; fall back to the old {asOn, priorAsOn}.
+      const to = tallyDateOf(String(body.to || body.asOn || '').replace(/-/g, ''));
+      const from = tallyDateOf(String(body.from || body.priorAsOn || '').replace(/-/g, ''));
+      if (!to || !from) { json(res, 400, { ok: false, error: 'Set both period dates.' }); return; }
+      finProgress.active = true; finProgress.steps = 2;
       try {
         finProgress.phase = 'Reading the group tree from Tally…'; finProgress.step = 1;
         const groups = parseGroups(await askTallyFast(state.settings.tallyUrl, GROUPS_REQUEST()));
-        finProgress.phase = 'Reading ledger closing balances (current year)…'; finProgress.step = 2;
-        const curLed = parseLedgerBalances(await askTallyFast(state.settings.tallyUrl, LEDGERS_BAL_REQUEST(cur)));
-        finProgress.phase = 'Reading ledger closing balances (prior year)…'; finProgress.step = 3;
-        const priLed = pri ? parseLedgerBalances(await askTallyFast(state.settings.tallyUrl, LEDGERS_BAL_REQUEST(pri))) : {};
+        finProgress.phase = 'Reading ledger balances for the period…'; finProgress.step = 2;
+        const led = parseLedgerBalances(await askTallyFast(state.settings.tallyUrl, LEDGERS_PERIOD_REQUEST(from, to)));
         finProgress.active = false;
-        if (!Object.keys(curLed).length) {
+        if (!Object.keys(led).length) {
           json(res, 200, { ok: false, error: 'Tally returned no ledger balances. Make sure the company is open, and that F1 → Settings → Connectivity → Client/Server → "Both" is set on port 9000.' });
           return;
         }
-        const ledgers = Object.keys(curLed).map((name) => {
-          const l = curLed[name];
+        const ledgers = Object.keys(led).map((name) => {
+          const l = led[name];
           const primary = primaryGroupOf(l.parent, groups);
-          const g = groups[l.parent] || {};
           return {
             name, group: l.parent, primary,
             isRevenue: !!(groups[l.parent] && (function up(gn, d) { // any ancestor revenue?
               if (!gn || d > 30) return false; const gg = groups[gn]; if (!gg) return false;
               return gg.isRevenue || up(gg.parent, d + 1);
             })(l.parent, 0)),
-            current: l.closing,
-            prior: priLed[name] ? priLed[name].closing : 0,
+            current: l.closing,  // as at period-to
+            prior: l.opening,    // as at period-from (= prior comparative)
           };
         });
         json(res, 200, {
           ok: true, version: VERSION,
-          asOn: cur.toISOString().slice(0, 10),
-          priorAsOn: pri ? pri.toISOString().slice(0, 10) : null,
+          asOn: to.toISOString().slice(0, 10),
+          priorAsOn: from.toISOString().slice(0, 10),
           groupCount: Object.keys(groups).length,
           ledgers,
         });

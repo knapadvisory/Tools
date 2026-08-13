@@ -80,8 +80,8 @@
   <div class="card">
     <h2><span class="stepno">1</span>Read the trial balance from Tally</h2>
     <div class="row">
-      <label>Current year-end <input type="date" id="asOn"></label>
-      <label>Prior year-end <input type="date" id="priorAsOn"></label>
+      <label>Period from <input type="date" id="periodFrom"></label>
+      <label>Period to <input type="date" id="periodTo"></label>
       <button class="btn primary" id="readBtn">📖 Read from Tally</button>
       <button class="btn" id="diagBtn" title="Ask Tally the two read requests with a short timeout and show exactly what it replies">🔧 Test Tally connection</button>
       <span style="white-space:nowrap;font-size:12.5px"><span id="tally-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#c3ccd8;margin-right:5px"></span><span id="tally-status" class="msg" style="margin:0">checking connector…</span></span>
@@ -133,7 +133,7 @@ function checkConn(){
     document.getElementById('tally-dot').style.background='var(--ok)';
     document.getElementById('tally-status').textContent='connector v'+connVer;
     document.getElementById('conn-ver').textContent='· connector v'+connVer;
-    if(parseFloat(connVer)<3.4){ document.getElementById('msgTally').innerHTML='This tool needs connector <b>v3.4+</b> — press ⟳ Update connector.'; return; }
+    if(parseFloat(connVer)<3.5){ document.getElementById('msgTally').innerHTML='This tool needs connector <b>v3.5+</b> — press ⟳ Update connector.'; return; }
     detectCompany();
   }).catch(function(){
     document.getElementById('tally-dot').style.background='var(--bad)';
@@ -157,22 +157,21 @@ function updateConnector(){
   }).catch(function(){ el.disabled=false; el.textContent='⟳ Update connector'; });
 }
 
-/* default dates: current & prior 31 March (overridden by detectCompany once Tally answers) */
+/* default period: current financial year to date (overridden by detectCompany) */
 (function(){ var now=new Date(); var y=now.getMonth()>=3?now.getFullYear():now.getFullYear()-1;
-  document.getElementById('asOn').value=y+'-03-31'; document.getElementById('priorAsOn').value=(y-1)+'-03-31'; })();
+  document.getElementById('periodFrom').value=y+'-04-01'; document.getElementById('periodTo').value=now.toISOString().slice(0,10); })();
 
-/* Ask Tally for the company's real books period and set the dates to match,
-   so we never request balances at dates outside the data (which hangs Tally). */
+/* Ask Tally for the company's real books period and set the period to match,
+   so we never request balances at dates outside the data (which hangs Tally).
+   Period from = books start; period to = last voucher date. */
 function detectCompany(){
   fetch(API+'/api/fin/company').then(function(r){return r.json();}).then(function(c){
     if(!c.ok) return;
-    var end = c.lastVoucher || c.endingAt; // as-on = last voucher (stub period) or year-end
-    if(end){ document.getElementById('asOn').value=end;
-      // prior year-end = day before this FY start (standard comparative)
-      if(c.start){ var s=new Date(c.start); var p=new Date(Date.UTC(s.getUTCFullYear(),s.getUTCMonth(),s.getUTCDate()-1)); document.getElementById('priorAsOn').value=p.toISOString().slice(0,10); }
-    }
+    if(c.start) document.getElementById('periodFrom').value=c.start;
+    var end = c.lastVoucher || c.endingAt;
+    if(end) document.getElementById('periodTo').value=end;
     var lbl = (c.name||'company')+' · books '+(c.start||'?')+' → '+(end||'?');
-    document.getElementById('msgTally').innerHTML='<span class="msg ok">📅 Detected '+lbl+' — dates set to match. Press Read from Tally.</span>';
+    document.getElementById('msgTally').innerHTML='<span class="msg ok">📅 Detected '+lbl+' — period set to match. Press Read from Tally.</span>';
   }).catch(function(){});
 }
 
@@ -251,9 +250,8 @@ function releaseTally(){
 /* ===== connection diagnostic ===== */
 document.getElementById('diagBtn').onclick=function(){
   var btn=this, out=document.getElementById('diagOut');
-  btn.disabled=true; out.style.display='block'; out.textContent='Running connection test — trying the two fast balance methods (up to 20s each)…';
-  var asOn=document.getElementById('asOn').value, prior=document.getElementById('priorAsOn').value;
-  fetch(API+'/api/fin/diag',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({from:(prior||asOn),to:asOn})}).then(function(r){return r.json();}).then(function(j){
+  btn.disabled=true; out.style.display='block'; out.textContent='Running connection test — detecting the company period and probing the balance reads…';
+  fetch(API+'/api/fin/diag',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({})}).then(function(r){return r.json();}).then(function(j){
     btn.disabled=false;
     var d=j.diag||{};
     function block(x){ if(!x) return '(no result)';
@@ -272,8 +270,8 @@ document.getElementById('diagBtn').onclick=function(){
 
 /* ===== step 1 ===== */
 document.getElementById('readBtn').onclick=function(){
-  var asOn=document.getElementById('asOn').value, prior=document.getElementById('priorAsOn').value;
-  if(!asOn){ document.getElementById('msgTally').textContent='Set the current year-end date.'; return; }
+  var from=document.getElementById('periodFrom').value, to=document.getElementById('periodTo').value;
+  if(!from||!to){ document.getElementById('msgTally').textContent='Set both period dates (from and to).'; return; }
   var btn=this; btn.disabled=true;
   document.getElementById('msgTally').textContent='⏳ Reading the trial balance — keep Tally open on the Gateway…';
   // Poll the connector's progress so the user sees which phase is running.
@@ -282,7 +280,7 @@ document.getElementById('readBtn').onclick=function(){
       if(p.active) document.getElementById('msgTally').textContent='⏳ '+p.phase+' ('+p.step+'/'+p.steps+')';
     }).catch(function(){});
   },1500);
-  fetch(API+'/api/fin/trialbalance',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({asOn:asOn,priorAsOn:prior})})
+  fetch(API+'/api/fin/trialbalance',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({from:from,to:to})})
     .then(function(r){return r.json();}).then(function(j){
       clearInterval(poll); btn.disabled=false;
       if(!j.ok){ document.getElementById('msgTally').innerHTML='<span class="msg bad">'+(j.error||'Failed — is Tally open?')+'</span>'; return; }
