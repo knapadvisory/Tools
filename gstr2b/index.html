@@ -52,7 +52,8 @@
 <div class="wrap">
   <h1>GSTR-2B → Tally poster <span class="muted" style="font-size:13px;font-weight:400" id="conn-ver"></span>
   <a href="/" class="muted" style="font-size:12.5px;font-weight:400;float:right;text-decoration:none">← All tools</a>
-  <button type="button" id="conn-upd" class="btn" onclick="updateConnector()" style="float:right;margin-right:12px;padding:5px 13px;font-size:12.5px" title="Fetch the newest connector from the server right now — otherwise it updates itself within a few hours">⟳ Update connector</button></h1>
+  <button type="button" id="conn-upd" class="btn" onclick="updateConnector()" style="float:right;margin-right:12px;padding:5px 13px;font-size:12.5px" title="Fetch the newest connector from the server right now — otherwise it updates itself within a few hours">⟳ Update connector</button>
+  <button type="button" class="btn" onclick="releaseTally()" style="float:right;margin-right:8px;padding:5px 13px;font-size:12.5px" title="Free Tally for normal use — stops any in-progress read so you don't have to close Tally from Task Manager">🔌 Release Tally</button></h1>
   <p class="sub">Everything runs on this computer only. Upload the portal's GSTR-2B JSON, review, tick, post to the open Tally company.
     <span style="white-space:nowrap"><span id="tally-dot"></span><span id="tally-status">checking Tally…</span></span></p>
   <div id="jarvis" class="muted" style="display:none;font-size:12px;margin:-12px 0 14px;line-height:1.7"></div>
@@ -1272,6 +1273,11 @@ function rsRemark(r) {
 }
 // Update the local connector on demand: POST /update, then watch /health until
 // the version changes (or time out with advice). Wired to the header button.
+function releaseTally() {
+  fetch(API + '/api/tally/release', { method: 'POST' }).then(function (r) { return r.json(); }).then(function (j) {
+    document.getElementById('bar-msg').textContent = '✅ Tally released — you can use Tally normally now.' + (j.released ? ' (a read in progress was stopped)' : '');
+  }).catch(function () { document.getElementById('bar-msg').textContent = 'Connector not reachable.'; });
+}
 function updateConnector() {
   var el = document.getElementById('conn-upd');
   var was = '';

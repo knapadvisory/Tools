@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '3.2';
+const VERSION = '3.3';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -272,26 +272,37 @@ const recoProgress = { active: false, phase: '', mode: '', monthsDone: 0, months
 // Live progress for the financials trial-balance read, polled by /finprep/.
 const finProgress = { active: false, phase: '', step: 0, steps: 3 };
 
-async function askTally(tallyUrl, body) {
-  const res = await fetch(tallyUrl, {
-    method: 'POST', body, headers: { 'content-type': 'text/xml' },
-    signal: AbortSignal.timeout(300000), // 5 min per chunk — a hung Tally fails loudly instead of forever
-  });
-  return res.text();
+// Every Tally call goes through one cancellable controller so a "Release Tally"
+// request can abort the in-flight fetch — dropping the socket is the only way
+// to free a Tally that's busy serving a heavy request (aborting our wait alone
+// leaves Tally computing). Also lets us cancel cleanly when a tab is closed.
+let currentTallyAbort = null;
+async function tallyFetch(tallyUrl, body, ms) {
+  const ctl = new AbortController();
+  currentTallyAbort = ctl;
+  const timer = ms ? setTimeout(() => ctl.abort(new Error('Tally request timed out')), ms) : null;
+  try {
+    const res = await fetch(tallyUrl, { method: 'POST', body, headers: { 'content-type': 'text/xml' }, signal: ctl.signal });
+    return await res.text();
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (currentTallyAbort === ctl) currentTallyAbort = null;
+  }
 }
-// Shorter timeout + one retry — for interactive reads where a 5-minute hang is
-// worse than a quick, clear failure. Returns the XML text or throws.
+async function askTally(tallyUrl, body) {
+  return tallyFetch(tallyUrl, body, 300000); // 5 min per chunk — a hung Tally fails loudly instead of forever
+}
+// Shorter timeout for interactive reads. Retries ONLY transient connection
+// errors — never a timeout or a user release, since re-sending a heavy request
+// just re-freezes Tally.
 async function askTallyFast(tallyUrl, body, ms = 60000) {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const res = await fetch(tallyUrl, {
-        method: 'POST', body, headers: { 'content-type': 'text/xml' },
-        signal: AbortSignal.timeout(ms),
-      });
-      return await res.text();
+      return await tallyFetch(tallyUrl, body, ms);
     } catch (e) {
-      if (attempt === 1) throw e;
-      await new Promise((r) => setTimeout(r, 1500)); // brief pause, then one retry
+      const msg = String((e && e.message) || e);
+      if (attempt === 1 || /abort|timed out|timeout|released/i.test(msg)) throw e;
+      await new Promise((r) => setTimeout(r, 1500)); // transient only: brief pause, one retry
     }
   }
 }
@@ -1905,7 +1916,16 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
     if (req.method === 'GET' && url.pathname === '/health') {
-      json(res, 200, { ok: true, version: VERSION });
+      json(res, 200, { ok: true, version: VERSION, tallyBusy: !!currentTallyAbort });
+      return;
+    }
+    // Release Tally: abort any in-flight request so Tally is freed for normal
+    // use, without killing it from Task Manager. Also clears progress state.
+    if (req.method === 'POST' && url.pathname === '/api/tally/release') {
+      const wasBusy = !!currentTallyAbort;
+      if (currentTallyAbort) { try { currentTallyAbort.abort(new Error('released by user')); } catch { /* */ } currentTallyAbort = null; }
+      finProgress.active = false; recoProgress.active = false;
+      json(res, 200, { ok: true, released: wasBusy });
       return;
     }
 

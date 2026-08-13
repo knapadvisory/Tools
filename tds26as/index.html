@@ -68,6 +68,7 @@
 <header class="site-head"><div class="site-head-inner">
   <span class="brand">🧮 TDS × 26AS Reconciler</span>
   <a class="back" href="/">← All tools</a>
+  <button type="button" onclick="releaseTally()" style="font:inherit;font-size:12.5px;font-weight:600;padding:6px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.35);background:transparent;color:#fff;cursor:pointer" title="Free Tally for normal use — stops any in-progress read so you don't have to close Tally from Task Manager">🔌 Release Tally</button>
   <button type="button" id="conn-upd" onclick="updateConnector()" style="font:inherit;font-size:12.5px;font-weight:600;padding:6px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.35);background:transparent;color:#fff;cursor:pointer" title="Fetch the newest connector from the server right now">⟳ Update connector</button>
 </div></header>
 
@@ -215,6 +216,11 @@ function checkConn(){
   });
 }
 checkConn();
+function releaseTally(){
+  fetch(API+'/api/tally/release',{method:'POST'}).then(function(r){return r.json();}).then(function(j){
+    document.getElementById('msgTally').innerHTML='<span class="msg ok">✅ Tally released — you can use Tally normally now.'+(j.released?' (a read in progress was stopped)':'')+'</span>';
+  }).catch(function(){ document.getElementById('msgTally').textContent='Connector not reachable.'; });
+}
 function updateConnector(){
   var el=document.getElementById('conn-upd'); el.disabled=true; el.textContent='⏳ Updating…';
   fetch(API+'/update',{method:'POST'}).then(function(resp){

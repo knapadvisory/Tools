@@ -86,6 +86,7 @@
   <h1>🧾 Tally Statutory Audit Assistant</h1>
   <span class="sub">every ledger · every voucher · graded findings · <a href="/" style="color:inherit">← all tools</a></span>
   <span style="margin-left:auto"><span class="dot" id="tdot"></span><span id="tstat" class="sub">checking Tally…</span>
+  <button type="button" onclick="releaseTally()" style="font:inherit;font-size:12px;font-weight:600;margin-left:10px;padding:5px 12px;border-radius:8px;border:1px solid #cbd5e1;background:#fff;cursor:pointer" title="Free Tally for normal use — stops any in-progress read so you don't have to close Tally from Task Manager">🔌 Release Tally</button>
   <button type="button" id="conn-upd" onclick="updateConnector()" style="font:inherit;font-size:12px;font-weight:600;margin-left:10px;padding:5px 12px;border-radius:8px;border:1px solid #cbd5e1;background:#fff;cursor:pointer" title="Fetch the newest connector + audit engine from the server right now">⟳ Update connector</button>
   <span id="upd-msg" style="font-size:12px;color:#64748b;margin-left:8px"></span></span>
 </header>
@@ -162,6 +163,11 @@
 var AUDIT_API = localStorage.getItem('knap_audit_url') || 'http://127.0.0.1:8799';
 var CONN_API = localStorage.getItem('knap_connector_url') || 'http://127.0.0.1:8797';
 
+function releaseTally() {
+  fetch(CONN_API + '/api/tally/release', { method: 'POST' }).then(function (r) { return r.json(); }).then(function (j) {
+    document.getElementById('upd-msg').textContent = '✅ Tally released — you can use Tally normally now.' + (j.released ? ' (a read was stopped)' : '');
+  }).catch(function () { document.getElementById('upd-msg').textContent = 'Connector not reachable.'; });
+}
 // Header button: update the connector (which supervises the audit engine) now.
 function updateConnector() {
   var el = document.getElementById('conn-upd'), msg = document.getElementById('upd-msg');
