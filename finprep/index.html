@@ -42,7 +42,7 @@
   .btn.primary { background: var(--header-bg); border-color: var(--header-bg); color: #fff; }
   .btn.go { background: #0e7490; border-color: #0e7490; color: #fff; box-shadow: 0 2px 8px rgba(14,116,144,.3); }
   .msg { font-size: 13px; margin-top: 8px; color: var(--muted); }
-  .msg.ok { color: var(--ok); } .msg.bad { color: var(--bad); }
+  .msg.ok { color: var(--ok); } .msg.bad { color: var(--bad); } .msg.warn { color: var(--warn); }
   .stats { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
   .stat { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 16px; }
   .stat .n { font-size: 18px; font-weight: 700; } .stat .l { font-size: 11.5px; color: var(--muted); }
@@ -71,10 +71,10 @@
 
 <main>
   <h1>Financial Statements — Schedule III <span id="conn-ver" style="font-size:12px;color:var(--muted);font-weight:400"></span></h1>
-  <p class="lede">Reads the grouped <b>trial balance straight from Tally</b> through the connector, classifies every ledger into
-  Schedule III heads (clubbing same-nature ledgers under the right note), and builds a Balance Sheet, Statement of Profit &amp; Loss
-  and notes — faces linked to notes, notes linked to the trial balance, with a remarks column showing where each ledger landed.
-  Anything it can't place with confidence is listed for you to assign.</p>
+  <p class="lede">Builds the <b>trial balance from Tally's vouchers</b> through the connector — the same fast read the GST tools use, so it
+  never freezes Tally — then classifies every ledger into Schedule III heads (clubbing same-nature ledgers under the right note) and
+  builds a Balance Sheet, Statement of Profit &amp; Loss and notes — faces linked to notes, notes linked to the trial balance, with a
+  remarks column showing where each ledger landed. Anything it can't place with confidence is listed for you to assign.</p>
 
   <!-- Step 1: read Tally -->
   <div class="card">
@@ -83,7 +83,7 @@
       <label>Period from <input type="date" id="periodFrom"></label>
       <label>Period to <input type="date" id="periodTo"></label>
       <button class="btn primary" id="readBtn">📖 Read from Tally</button>
-      <button class="btn" id="diagBtn" title="Ask Tally the two read requests with a short timeout and show exactly what it replies">🔧 Test Tally connection</button>
+      <button class="btn" id="diagBtn" title="Check the fast master reads and one month of vouchers, and show exactly what Tally replies">🔧 Test Tally connection</button>
       <span style="white-space:nowrap;font-size:12.5px"><span id="tally-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#c3ccd8;margin-right:5px"></span><span id="tally-status" class="msg" style="margin:0">checking connector…</span></span>
     </div>
     <div class="msg" id="msgTally"></div>
@@ -250,21 +250,26 @@ function releaseTally(){
 /* ===== connection diagnostic ===== */
 document.getElementById('diagBtn').onclick=function(){
   var btn=this, out=document.getElementById('diagOut');
-  btn.disabled=true; out.style.display='block'; out.textContent='Running connection test — detecting the company period and probing the balance reads…';
+  btn.disabled=true; out.style.display='block'; out.textContent='Running connection test — detecting the company period, the ledger list and one month of vouchers…';
   fetch(API+'/api/fin/diag',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({})}).then(function(r){return r.json();}).then(function(j){
     btn.disabled=false;
     var d=j.diag||{};
     function block(x){ if(!x) return '(no result)';
       return (x.ok?'✅ OK':'❌ FAILED')+'  ·  '+x.ms+' ms'+(x.ok?('  ·  '+x.length+' chars'):('  ·  '+(x.error||'')))+'\n'+
         (x.sample?('--- first part of Tally\'s reply ---\n'+x.sample):''); }
+    var vs=d.B_voucherSummary, vsTxt='(not run)';
+    if(vs){ vsTxt = vs.error ? ('error: '+vs.error) :
+      ('vouchers: '+vs.vouchers+'   ledgers touched: '+vs.ledgersTouched+'   net (should be ~0): '+vs.netShouldBeZero+'   unflagged entries: '+vs.unflaggedEntries+'\n'+
+       'Biggest movements this month (Dr +, Cr −):\n'+(vs.top||[]).map(function(t){return '   '+t.ledger+'  =  '+t.dr;}).join('\n')); }
     out.textContent =
-      'Tally URL       : '+d.tallyUrl+'\nConnector       : v'+d.version+'\n'+
-      'Detected company: '+d.detectedCompany+'\nDetected period : '+d.detectedPeriod+'\n'+
-      'Books start     : '+(d.detectedStart||'?')+'\nLast voucher    : '+(d.detectedLastVoucher||'?')+'\n\n'+
-      '=== 0) Company period read ===\n'+block(d.company0)+'\n\n'+
-      '=== A) Ledger CLOSING @ detected to-date ===\n'+block(d.A_ledgerClosingAtDetectedDate)+'\n\n'+
-      '=== B) Ledger OPEN+CLOSE @ detected period ===\n'+block(d.B_ledgerOpenClose)+'\n\n'+
-      '👉 Copy everything above and paste it back so we can pinpoint the fix.';
+      'Tally URL       : '+d.tallyUrl+'\nConnector       : v'+d.version+'\nRead path       : '+(d.readPath||'')+'\n'+
+      'Detected company: '+d.detectedCompany+'\nBooks start     : '+(d.detectedStart||'?')+'\nLast voucher    : '+(d.detectedLastVoucher||'?')+'\n'+
+      'One month probed: '+(d.oneMonthProbed||'?')+'\n\n'+
+      '=== 0) Company period (fast master read) ===\n'+block(d.company0)+'\n\n'+
+      '=== A) Ledger masters — name+parent+opening (fast) ===\n'+block(d.A_ledgerMasters)+'\n\n'+
+      '=== B) One month of vouchers (the proven read) ===\n'+block(d.B_oneMonthVouchers)+'\n\n'+
+      '=== B) What that month contained ===\n'+vsTxt+'\n\n'+
+      '👉 If A and B both say ✅ OK, the financials read will work. Copy this and paste it back if anything failed.';
   }).catch(function(){ btn.disabled=false; out.textContent='Connector not reachable on this computer.'; });
 };
 
@@ -277,7 +282,7 @@ document.getElementById('readBtn').onclick=function(){
   // Poll the connector's progress so the user sees which phase is running.
   var poll=setInterval(function(){
     fetch(API+'/api/fin/progress').then(function(r){return r.json();}).then(function(p){
-      if(p.active) document.getElementById('msgTally').textContent='⏳ '+p.phase+' ('+p.step+'/'+p.steps+')';
+      if(p.active) document.getElementById('msgTally').textContent='⏳ '+p.phase;
     }).catch(function(){});
   },1500);
   fetch(API+'/api/fin/trialbalance',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({from:from,to:to})})
@@ -285,13 +290,21 @@ document.getElementById('readBtn').onclick=function(){
       clearInterval(poll); btn.disabled=false;
       if(!j.ok){ document.getElementById('msgTally').innerHTML='<span class="msg bad">'+(j.error||'Failed — is Tally open?')+'</span>'; return; }
       TB=j;
-      document.getElementById('msgTally').innerHTML='<span class="msg ok">✅ Read '+j.ledgers.length+' ledgers across '+j.groupCount+' groups.</span>';
+      // The trial balance is built from vouchers, so it should tie to ~0. Show
+      // it plainly: a green tick if it does, an amber note with the gap if not.
+      var tie=Math.abs(j.tieCurrent||0);
+      var vtxt=(j.voucherCount!=null)?(' from '+j.voucherCount.toLocaleString('en-IN')+' vouchers'):'';
+      var tieHtml = tie<=1
+        ? '<span class="msg ok">✅ Read '+j.ledgers.length+' ledgers across '+j.groupCount+' groups'+vtxt+'. Trial balance ties out.</span>'
+        : '<span class="msg warn">✅ Read '+j.ledgers.length+' ledgers'+vtxt+'. Note: the trial balance is off by ₹'+inr(j.tieCurrent)+' — some entries may be unmapped; it is flagged in the workbook.</span>';
+      document.getElementById('msgTally').innerHTML=tieHtml;
       var dr=j.ledgers.filter(function(l){return l.current>0;}).reduce(function(s,l){return s+l.current;},0);
       var cr=-j.ledgers.filter(function(l){return l.current<0;}).reduce(function(s,l){return s+l.current;},0);
       var st=document.getElementById('readStats'); st.classList.remove('hidden');
       st.innerHTML='<div class="stat"><div class="n">'+j.ledgers.length+'</div><div class="l">ledgers</div></div>'+
         '<div class="stat"><div class="n">₹'+inr(dr)+'</div><div class="l">total debit</div></div>'+
-        '<div class="stat"><div class="n">₹'+inr(cr)+'</div><div class="l">total credit</div></div>';
+        '<div class="stat"><div class="n">₹'+inr(cr)+'</div><div class="l">total credit</div></div>'+
+        (j.voucherCount!=null?'<div class="stat"><div class="n">'+j.voucherCount.toLocaleString('en-IN')+'</div><div class="l">vouchers read</div></div>':'');
       document.getElementById('p2').classList.remove('hidden');
     }).catch(function(){ clearInterval(poll); btn.disabled=false; document.getElementById('msgTally').innerHTML='<span class="msg bad">Connector not reachable.</span>'; });
 };

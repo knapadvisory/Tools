@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '3.5';
+const VERSION = '3.6';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -393,13 +393,11 @@ function voucherCollectionRequest(from, to) {
 }
 
 // ---- Trial-balance reader (financial-statement tool) -----------------------
-// Two collections: every Group (Name + Parent, to walk up to the reserved
-// primary group) and every Ledger (Name, Parent, and closing balance as on
-// the report date). Closing balance follows SVTODATE, so two reads at the two
-// year-end dates give both comparative columns.
-// EXACTLY the shape of this connector's proven voucher reader: a collection
-// with only ISMODIFY="No" and FETCH tags. (Earlier attempts added extra
-// collection attributes / NATIVEMETHOD, which made Tally hang.)
+// The GROUP tree only: every Group's Name + Parent (to walk up to the reserved
+// primary group) and its debit/credit nature. All stored fields — never a
+// computed balance — so this read is fast (~0.2s) and never hangs Tally. The
+// ledger balances themselves are DERIVED from vouchers (see the block after
+// tallyAmt), because asking Tally to COMPUTE ClosingBalance in bulk hangs it.
 const COLL_ATTRS = 'ISMODIFY="No"';
 const GROUPS_REQUEST = () => `<ENVELOPE>
  <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>KnapGroups</ID></HEADER>
@@ -414,26 +412,6 @@ const GROUPS_REQUEST = () => `<ENVELOPE>
  </DESC></BODY>
 </ENVELOPE>`;
 
-// One ledger read over the chosen period gives BOTH columns: ClosingBalance
-// (as at SVTODATE = period-to) is the current column, OpeningBalance (as at
-// SVFROMDATE = period-from) is the prior/comparative column.
-const LEDGERS_PERIOD_REQUEST = (from, to) => `<ENVELOPE>
- <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>KnapLedgers</ID></HEADER>
- <BODY><DESC>
-  <STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-   <SVFROMDATE>${toTallyDate(from)}</SVFROMDATE>
-   <SVTODATE>${toTallyDate(to)}</SVTODATE>${svCompany()}</STATICVARIABLES>
-  <TDL><TDLMESSAGE>
-   <COLLECTION NAME="KnapLedgers" ${COLL_ATTRS}>
-    <TYPE>Ledger</TYPE>
-    <FETCH>NAME</FETCH><FETCH>PARENT</FETCH><FETCH>CLOSINGBALANCE</FETCH><FETCH>OPENINGBALANCE</FETCH>
-   </COLLECTION>
-  </TDLMESSAGE></TDL>
- </DESC></BODY>
-</ENVELOPE>`;
-// Back-compat alias used by the diagnostic probe.
-const LEDGERS_BAL_REQUEST = (asOn) => LEDGERS_PERIOD_REQUEST(new Date(Date.UTC(asOn.getUTCFullYear() - 1, asOn.getUTCMonth(), asOn.getUTCDate() + 1)), asOn);
-
 // Tally amounts arrive as "12,345.67", "-12345.67", or "12345.67 Cr" — a Cr
 // balance is a credit (negative in the Dr-positive convention we return).
 function tallyAmt(raw) {
@@ -446,6 +424,143 @@ function tallyAmt(raw) {
   if (cr) n = -Math.abs(n);
   else if (dr) n = Math.abs(n);
   return r2(n);
+}
+
+// ===========================================================================
+// VOUCHER-BASED TRIAL BALANCE  (financial-statement tool, v3.6+)
+// ---------------------------------------------------------------------------
+// Asking Tally for ledger CLOSING balances hangs it (ClosingBalance is a
+// computed field — Tally recomputes every ledger from scratch and the socket
+// times out). So instead we build the trial balance the same way this
+// connector already reads the books every day for the GST/TDS tools: pull the
+// VOUCHERS for the period (a plain collection Tally serves fast, honouring the
+// date range) and add up each ledger's movements. Balances we DERIVE ourselves
+// never hang Tally.
+//
+//   closing (Dr-positive) at period-to  = master opening + Σ movement(… → to)
+//   opening (Dr-positive) at period-from = master opening + Σ movement(… → from-)
+//
+// Each ledger ENTRY inside a voucher carries <ISDEEMEDPOSITIVE> (Yes = debit),
+// so we read the debit/credit side straight from Tally's own flag and never
+// depend on the amount's sign — which differs between Tally builds. A debit
+// adds +amount, a credit −amount, so assets/expenses come out positive and
+// liabilities/income/equity negative, and every balanced voucher contributes
+// net zero — the whole trial balance ties to ~0 automatically.
+
+// Ledger MASTERS — Name, Parent and the STORED opening balance only. All three
+// are stored fields (never computed like ClosingBalance), so this read is as
+// fast as the group read and never hangs Tally. Gives the ledger→group map (to
+// classify into Schedule III heads) and the opening position at books start.
+const LEDGER_MASTERS_REQUEST = () => `<ENVELOPE>
+ <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>KnapLedgerMasters</ID></HEADER>
+ <BODY><DESC>
+  <STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>${svCompany()}</STATICVARIABLES>
+  <TDL><TDLMESSAGE>
+   <COLLECTION NAME="KnapLedgerMasters" ISMODIFY="No">
+    <TYPE>Ledger</TYPE>
+    <FETCH>NAME</FETCH><FETCH>PARENT</FETCH><FETCH>OPENINGBALANCE</FETCH>
+   </COLLECTION>
+  </TDLMESSAGE></TDL>
+ </DESC></BODY>
+</ENVELOPE>`;
+
+// Convert a Tally opening-balance string to the Dr-positive convention
+// (assets/expenses +, liabilities/income/equity −). Tally writes the master
+// opening balance either as a plain signed number (debit negative, credit
+// positive) OR with a Dr/Cr suffix — handle both so the sign is always right.
+function openingDr(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return 0;
+  if (/(cr|dr)\.?\s*$/i.test(s)) {
+    const cr = /cr\.?\s*$/i.test(s);
+    const n = Math.abs(parseFloat(s.replace(/[^0-9.]/g, ''))) || 0;
+    return r2(cr ? -n : n);          // Dr → +, Cr → −
+  }
+  const n = parseFloat(s.replace(/[^0-9.\-]/g, '')) || 0;
+  return r2(-n);                     // plain signed number: Tally debit = negative
+}
+
+function parseLedgerMasters(xml) {
+  const out = {};
+  for (const b of xml.match(/<LEDGER[\s>][\s\S]*?<\/LEDGER>/gi) || []) {
+    const name = decodeXml((b.match(/<LEDGER[^>]*\sNAME="([^"]*)"/i)?.[1] ?? tag(b, 'NAME'))).trim();
+    if (!name) continue;
+    out[name] = {
+      parent: decodeXml(tag(b, 'PARENT')).trim(),
+      openingDr: openingDr(tag(b, 'OPENINGBALANCE')),
+    };
+  }
+  return out;
+}
+
+// Numeric YYYYMMDD key for a Tally DATE tag ("20260415" or "15-Apr-2026").
+function dateKey(v) {
+  const d = parseTallyFieldDate(v);
+  return d ? d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate() : 0;
+}
+
+// Add ONE export chunk's voucher ledger movements into the per-ledger
+// Dr-positive running sums. `sums[name] = { dr, priorDr }` where dr covers the
+// whole read window and priorDr covers only vouchers dated before `fromKey`
+// (so closing = opening+dr and period-opening = opening+priorDr). Deduped by
+// voucher GUID across chunks, so a Tally that repeats vouchers for every
+// monthly window can't multiply the books.
+function accumulateTB(xml, sums, seen, cal, fromKey) {
+  const sig = new Map(); // per-chunk signature counter for GUID-less vouchers
+  for (const block of xml.match(/<VOUCHER[\s>][\s\S]*?<\/VOUCHER>/gi) || []) {
+    if (/(^|>)\s*Yes\s*<\/ISCANCELLED>/i.test(block.match(/<ISCANCELLED>[\s\S]*?<\/ISCANCELLED>/i)?.[0] ?? '')) continue;
+    if (/<ISOPTIONAL>\s*Yes/i.test(block)) continue;
+    let key = tag(block, 'GUID');
+    if (!key) {
+      const s = `${tag(block, 'VOUCHERTYPENAME')}|${tag(block, 'DATE')}|${tag(block, 'VOUCHERNUMBER')}|${tag(block, 'PARTYLEDGERNAME')}`;
+      const n = (sig.get(s) ?? 0) + 1; sig.set(s, n);
+      key = s + '#' + n;
+    }
+    if (seen.has(key)) { cal.dupes++; continue; }
+    seen.add(key);
+    const isPrior = fromKey ? (dateKey(tag(block, 'DATE')) < fromKey) : false;
+    for (const e of block.match(/<(?:ALL)?LEDGERENTRIES\.LIST>[\s\S]*?<\/(?:ALL)?LEDGERENTRIES\.LIST>/gi) || []) {
+      const name = tag(e, 'LEDGERNAME');
+      if (!name) continue;
+      const rawAmt = toNum(tag(e, 'AMOUNT'));
+      const amt = Math.abs(rawAmt);
+      const dpStr = tag(e, 'ISDEEMEDPOSITIVE');
+      let c;                            // Dr-positive contribution
+      if (dpStr) c = /yes/i.test(dpStr) ? amt : -amt;
+      else { c = -rawAmt; cal.noFlag++; } // Tally standard fallback: debit is negative
+      let s = sums[name];
+      if (!s) s = sums[name] = { dr: 0, priorDr: 0 };
+      s.dr = r2(s.dr + c);
+      if (isPrior) s.priorDr = r2(s.priorDr + c);
+    }
+    cal.vouchers++;
+  }
+}
+
+// Read every voucher from the earliest needed date up to `to`, month by month,
+// discarding each chunk's XML after summing it (a multi-month window is far too
+// much XML to hold at once). Returns per-ledger Dr-positive movement sums.
+async function readTBFromVouchers(tallyUrl, readStart, from, to) {
+  const sums = {};
+  const seen = new Set();
+  const cal = { vouchers: 0, dupes: 0, noFlag: 0 };
+  const fromKey = from.getUTCFullYear() * 10000 + (from.getUTCMonth() + 1) * 100 + from.getUTCDate();
+  let monthsTotal = 0;
+  for (let d = new Date(Date.UTC(readStart.getUTCFullYear(), readStart.getUTCMonth(), 1)); d <= to;
+       d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1))) monthsTotal++;
+  let done = 0;
+  for (let d = new Date(Date.UTC(readStart.getUTCFullYear(), readStart.getUTCMonth(), 1)); d <= to;
+       d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1))) {
+    const mFrom = d < readStart ? readStart : d;
+    const mEnd = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
+    const mTo = mEnd > to ? to : mEnd;
+    finProgress.phase = `Reading vouchers · ${MONTH_NAMES[mFrom.getUTCMonth()]} ${mFrom.getUTCFullYear()} (${done + 1} of ${monthsTotal})…`;
+    const xml = await askTally(tallyUrl, voucherCollectionRequest(mFrom, mTo));
+    accumulateTB(xml, sums, seen, cal, fromKey);
+    done++;
+    finProgress.step = 2 + done / Math.max(1, monthsTotal);
+  }
+  return { sums, cal, monthsTotal };
 }
 
 // Company period — master data (no balance computation), so it's fast like the
@@ -494,20 +609,6 @@ function parseGroups(xml) {
       parent: decodeXml(tag(b, 'PARENT')).trim(),
       isRevenue: /yes/i.test(tag(b, 'ISREVENUE')),
       isDeemedPositive: /yes/i.test(tag(b, 'ISDEEMEDPOSITIVE')),
-    };
-  }
-  return out;
-}
-
-function parseLedgerBalances(xml) {
-  const out = {};
-  for (const b of xml.match(/<LEDGER[\s>][\s\S]*?<\/LEDGER>/gi) || []) {
-    const name = decodeXml((b.match(/<LEDGER[^>]*\sNAME="([^"]*)"/i)?.[1] ?? tag(b, 'NAME'))).trim();
-    if (!name) continue;
-    out[name] = {
-      parent: decodeXml(tag(b, 'PARENT')).trim(),
-      closing: tallyAmt(tag(b, 'CLOSINGBALANCE')),
-      opening: tallyAmt(tag(b, 'OPENINGBALANCE')),
     };
   }
   return out;
@@ -2103,24 +2204,41 @@ const server = http.createServer(async (req, res) => {
       const companyProbe = await probe('0) Company period', FIN_COMPANY_REQUEST(), 15000);
       let comp = null;
       try { comp = parseCompany(companyProbe.sample ? await askTallyFast(state.settings.tallyUrl, FIN_COMPANY_REQUEST(), 15000) : ''); } catch { /* */ }
-      // Use the DETECTED period (not the caller's dates) so we never ask for
-      // balances outside the data — the very thing that hangs Tally.
-      const to = comp && comp.lastVch ? toTallyDate(comp.lastVch)
-        : comp && comp.endingAt ? toTallyDate(comp.endingAt) : '20260331';
-      const from = comp && comp.start ? toTallyDate(comp.start) : '20250401';
-      // A) ledger closing balances at the DETECTED to-date
-      const closeReq = LEDGERS_BAL_REQUEST(tallyDateOf(to) || new Date());
-      // B) ledger masters + OpeningBalance at the detected period
-      const openReq = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>KnapLedgersOpen</ID></HEADER><BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT><SVFROMDATE>${from}</SVFROMDATE><SVTODATE>${to}</SVTODATE>${svCompany()}</STATICVARIABLES><TDL><TDLMESSAGE><COLLECTION NAME="KnapLedgersOpen" ISMODIFY="No"><TYPE>Ledger</TYPE><FETCH>NAME</FETCH><FETCH>PARENT</FETCH><FETCH>OPENINGBALANCE</FETCH><FETCH>CLOSINGBALANCE</FETCH></COLLECTION></TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
+      // The v3.6 read path: everything below is a FAST, stored-only or
+      // voucher read (no ClosingBalance computation), so none of it hangs.
+      const to = comp && comp.lastVch ? comp.lastVch
+        : comp && comp.endingAt ? comp.endingAt : new Date(Date.UTC(2026, 2, 31));
+      const from = comp && (comp.booksFrom || comp.start) ? (comp.booksFrom || comp.start) : new Date(Date.UTC(2025, 3, 1));
+      // A) ledger masters (Name + Parent + OpeningBalance) — stored only.
+      const mastersProbe = await probe('A) Ledger masters (name+parent+opening)', LEDGER_MASTERS_REQUEST(), 30000);
+      // B) one month of vouchers — the proven read the GST/TDS tools use daily.
+      const oneFrom = to ? new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), 1)) : from;
+      const vProbe = await probe('B) One month of vouchers', voucherCollectionRequest(oneFrom, to), 60000, 2600);
+      // Summarise what the voucher read actually contained.
+      let vSummary = null;
+      if (vProbe.ok) {
+        try {
+          const xml = await askTallyFast(state.settings.tallyUrl, voucherCollectionRequest(oneFrom, to), 60000);
+          const sums = {}, seen = new Set(), cal = { vouchers: 0, dupes: 0, noFlag: 0 };
+          accumulateTB(xml, sums, seen, cal, 0);
+          const led = Object.keys(sums).length;
+          const net = r2(Object.values(sums).reduce((s, v) => s + v.dr, 0));
+          const top = Object.entries(sums).map(([n, v]) => ({ ledger: n, dr: v.dr }))
+            .sort((a, b) => Math.abs(b.dr) - Math.abs(a.dr)).slice(0, 12);
+          vSummary = { vouchers: cal.vouchers, ledgersTouched: led, netShouldBeZero: net, unflaggedEntries: cal.noFlag, top };
+        } catch (e) { vSummary = { error: String((e && e.message) || e) }; }
+      }
       const out = {
         tallyUrl: state.settings.tallyUrl, company: state.settings.company || '(active company)', version: VERSION,
+        readPath: 'v3.6 vouchers (balances derived here, not computed by Tally)',
         detectedCompany: comp ? comp.name : '(unknown)',
-        detectedPeriod: (from && to) ? (from + ' → ' + to) : '(unknown)',
-        detectedStart: comp && comp.start ? comp.start.toISOString().slice(0, 10) : null,
+        detectedStart: from ? from.toISOString().slice(0, 10) : null,
         detectedLastVoucher: comp && comp.lastVch ? comp.lastVch.toISOString().slice(0, 10) : null,
+        oneMonthProbed: (oneFrom && to) ? (oneFrom.toISOString().slice(0, 10) + ' → ' + to.toISOString().slice(0, 10)) : '(unknown)',
         company0: companyProbe,
-        A_ledgerClosingAtDetectedDate: await probe('A) Ledger closing balances @ detected to-date', closeReq),
-        B_ledgerOpenClose: await probe('B) Ledger open+close @ detected period', openReq),
+        A_ledgerMasters: mastersProbe,
+        B_oneMonthVouchers: vProbe,
+        B_voucherSummary: vSummary,
       };
       json(res, 200, { ok: true, diag: out });
       return;
@@ -2131,41 +2249,80 @@ const server = http.createServer(async (req, res) => {
       const to = tallyDateOf(String(body.to || body.asOn || '').replace(/-/g, ''));
       const from = tallyDateOf(String(body.from || body.priorAsOn || '').replace(/-/g, ''));
       if (!to || !from) { json(res, 400, { ok: false, error: 'Set both period dates.' }); return; }
-      finProgress.active = true; finProgress.steps = 2;
+      if (from > to) { json(res, 400, { ok: false, error: 'Period-from is after period-to.' }); return; }
+      finProgress.active = true; finProgress.steps = 3; finProgress.step = 1;
       try {
-        finProgress.phase = 'Reading the group tree from Tally…'; finProgress.step = 1;
+        // 1) Group tree + ledger masters — both stored-only reads, fast, never
+        //    hang Tally (the group read has always worked in ~0.2s).
+        finProgress.phase = 'Reading the group tree from Tally…';
         const groups = parseGroups(await askTallyFast(state.settings.tallyUrl, GROUPS_REQUEST()));
-        finProgress.phase = 'Reading ledger balances for the period…'; finProgress.step = 2;
-        const led = parseLedgerBalances(await askTallyFast(state.settings.tallyUrl, LEDGERS_PERIOD_REQUEST(from, to)));
+        finProgress.phase = 'Reading the ledger list from Tally…';
+        const masters = parseLedgerMasters(await askTallyFast(state.settings.tallyUrl, LEDGER_MASTERS_REQUEST()));
+
+        // 2) Books start — informational only (confirms the right company is
+        //    open and the period sits inside the data).
+        let booksStart = null;
+        try {
+          const c = parseCompany(await askTallyFast(state.settings.tallyUrl, FIN_COMPANY_REQUEST(), 15000));
+          booksStart = c.booksFrom || c.start || null;
+        } catch { /* not essential */ }
+
+        // 3) Vouchers → per-ledger Dr-positive movements (the proven read path).
+        //    We read exactly the requested period, so:
+        //      • Balance-sheet ledgers  → master opening + this period's movement
+        //      • P&L ledgers            → this period's movement (opening is 0)
+        //    and the whole trial balance ties to ~0 automatically. (Reading from
+        //    books-start instead would make P&L accounts show life-to-date
+        //    figures — wrong for a period statement — so we don't. True prior-
+        //    year comparatives are a later enhancement.)
+        const readStart = from;
+        finProgress.step = 2; finProgress.phase = 'Reading vouchers for the period…';
+        const { sums, cal, monthsTotal } = await readTBFromVouchers(state.settings.tallyUrl, readStart, from, to);
         finProgress.active = false;
-        if (!Object.keys(led).length) {
-          json(res, 200, { ok: false, error: 'Tally returned no ledger balances. Make sure the company is open, and that F1 → Settings → Connectivity → Client/Server → "Both" is set on port 9000.' });
+
+        // Union of every ledger we know about: masters (group + opening) plus
+        // any ledger seen only in vouchers.
+        const names = new Set([...Object.keys(masters), ...Object.keys(sums)]);
+        if (!names.size || cal.vouchers === 0) {
+          json(res, 200, { ok: false, error: 'Tally returned no vouchers for this period. Make sure the right company is open and the period actually has transactions — then try again.' });
           return;
         }
-        const ledgers = Object.keys(led).map((name) => {
-          const l = led[name];
-          const primary = primaryGroupOf(l.parent, groups);
+        const anyRevenueAncestor = (gn) => (function up(g, d) {
+          if (!g || d > 30) return false; const gg = groups[g]; if (!gg) return false;
+          return gg.isRevenue || up(gg.parent, d + 1);
+        })(gn, 0);
+        const ledgers = [...names].map((name) => {
+          const m = masters[name] || { parent: '', openingDr: 0 };
+          const mv = sums[name] || { dr: 0, priorDr: 0 };
+          const open = m.openingDr || 0;
           return {
-            name, group: l.parent, primary,
-            isRevenue: !!(groups[l.parent] && (function up(gn, d) { // any ancestor revenue?
-              if (!gn || d > 30) return false; const gg = groups[gn]; if (!gg) return false;
-              return gg.isRevenue || up(gg.parent, d + 1);
-            })(l.parent, 0)),
-            current: l.closing,  // as at period-to
-            prior: l.opening,    // as at period-from (= prior comparative)
+            name, group: m.parent, primary: primaryGroupOf(m.parent, groups),
+            isRevenue: !!(groups[m.parent] && anyRevenueAncestor(m.parent)),
+            current: r2(open + mv.dr),        // closing at period-to
+            prior: r2(open + mv.priorDr),     // balance at period-from
           };
-        });
+        }).filter((l) => Math.abs(l.current) > 0.005 || Math.abs(l.prior) > 0.005);
+
+        // Diagnostics the page surfaces: the trial balance should tie to ~0.
+        const tieCurrent = r2(ledgers.reduce((s, l) => s + l.current, 0));
+        const tiePrior = r2(ledgers.reduce((s, l) => s + l.prior, 0));
         json(res, 200, {
-          ok: true, version: VERSION,
+          ok: true, version: VERSION, basis: 'vouchers',
           asOn: to.toISOString().slice(0, 10),
           priorAsOn: from.toISOString().slice(0, 10),
+          readFrom: readStart.toISOString().slice(0, 10),
+          booksStart: booksStart ? booksStart.toISOString().slice(0, 10) : null,
           groupCount: Object.keys(groups).length,
+          ledgerCount: Object.keys(masters).length,
+          voucherCount: cal.vouchers, duplicatesDropped: cal.dupes,
+          monthsRead: monthsTotal, unflaggedEntries: cal.noFlag,
+          tieCurrent, tiePrior,
           ledgers,
         });
       } catch (e) {
         finProgress.active = false;
-        const msg = /timeout|abort/i.test(String((e && e.message) || e))
-          ? 'Tally did not respond in time. It usually means the request reached Tally but it is busy or the company is large — try again, and keep Tally on the Gateway (not inside a report). If it keeps failing, tell us your Tally version.'
+        const msg = /timeout|abort|released/i.test(String((e && e.message) || e))
+          ? 'Tally stopped responding while reading vouchers. Keep Tally on the Gateway (not inside a report) and try again. If it keeps failing, use “Release Tally”, then retry a shorter period.'
           : 'Could not read Tally: ' + String((e && e.message) || e);
         json(res, 502, { ok: false, error: msg });
       }
