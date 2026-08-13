@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TDS × 26AS Reconciler — KNAP Tools</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧮</text></svg>">
+<script src="/session.js" defer></script>
+<script src="/gstr2b/exceljs.js" defer></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --accent: #4f46e5; --accent-hover: #4338ca; --on-accent: #fff;
+    --bg: #f4f5f8; --surface: #ffffff; --surface-2: #f5f6f9; --border: #e4e6ec;
+    --text: #1d1c1d; --muted: #6b7280; --shadow: rgba(20,25,45,.08);
+    --ok: #16a34a; --ok-soft: #e7f6ec; --warn: #d97706; --warn-soft: #fbf4dc;
+    --bad: #dc2626; --bad-soft: #fdecec;
+    --header-bg: #1e1b4b; --header-text: rgba(255,255,255,.85);
+  }
+  body { background: var(--bg); color: var(--text); font: 14.5px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; min-height: 100vh; }
+  a { color: var(--accent); text-decoration: none; }
+  .site-head { background: var(--header-bg); color: var(--header-text); }
+  .site-head-inner { max-width: 1100px; margin: 0 auto; padding: 13px 24px; display: flex; align-items: center; gap: 14px; }
+  .brand { font-weight: 700; font-size: 16.5px; color: #fff; }
+  .back { margin-left: auto; color: var(--header-text); font-size: 13px; padding: 6px 12px; border-radius: 8px; }
+  .back:hover { background: rgba(255,255,255,.1); }
+  main { max-width: 1100px; margin: 0 auto; padding: 26px 24px 60px; }
+  h1 { font-size: 21px; letter-spacing: -.01em; }
+  .lede { color: var(--muted); font-size: 13px; margin: 6px 0 20px; max-width: 760px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 1px 2px var(--shadow); padding: 18px 20px; margin-bottom: 16px; }
+  .card h2 { font-size: 15px; margin-bottom: 10px; }
+  .stepno { display: inline-flex; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 12px; font-weight: 700; align-items: center; justify-content: center; margin-right: 8px; }
+  .drop { border: 2px dashed var(--border); border-radius: 12px; padding: 26px 18px; text-align: center; cursor: pointer; transition: border-color .15s; }
+  .drop:hover, .drop.over { border-color: var(--accent); }
+  .drop .big { font-weight: 700; }
+  .drop .hint { color: var(--muted); font-size: 12.5px; margin-top: 4px; }
+  .kv { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 12px; font-size: 13px; }
+  .kv b { display: block; font-size: 12px; color: var(--muted); font-weight: 600; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+  input[type=text], input[type=date], select { font: inherit; padding: 8px 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text); }
+  input.small { width: 130px; } input.tiny { width: 90px; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 13.5px; font-weight: 600; padding: 9px 16px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); cursor: pointer; }
+  .btn:hover { border-color: var(--accent); }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
+  .btn.go { background: #0e7490; border-color: #0e7490; color: #fff; box-shadow: 0 2px 8px rgba(14,116,144,.3); }
+  .msg { font-size: 13px; margin-top: 10px; color: var(--muted); }
+  .msg.ok { color: var(--ok); } .msg.bad { color: var(--bad); }
+  table { width: 100%; border-collapse: collapse; font-size: 12.8px; margin-top: 12px; }
+  th { text-align: left; font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); border-bottom: 1px solid var(--border); padding: 6px 8px; }
+  td { padding: 6px 8px; border-bottom: 1px solid var(--surface-2); vertical-align: top; }
+  td.r, th.r { text-align: right; }
+  .pill { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 999px; }
+  .pill.ok { background: var(--ok-soft); color: var(--ok); }
+  .pill.watch { background: var(--warn-soft); color: var(--warn); }
+  .pill.flag { background: var(--bad-soft); color: var(--bad); }
+  .stats { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+  .stat { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 16px; }
+  .stat .n { font-size: 19px; font-weight: 700; } .stat .l { font-size: 11.5px; color: var(--muted); }
+  .hidden { display: none; }
+  .maprow input { margin: 0; }
+  .sug { color: var(--accent); font-size: 12px; cursor: pointer; }
+  footer { border-top: 1px solid var(--border); margin-top: 40px; padding: 18px 24px; text-align: center; font-size: 12.5px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header class="site-head"><div class="site-head-inner">
+  <span class="brand">🧮 TDS × 26AS Reconciler</span>
+  <a class="back" href="/">← All tools</a>
+</div></header>
+
+<main>
+  <h1>TDS Receivable × Form 26AS <span id="conn-ver" style="font-size:12px;color:var(--muted);font-weight:400"></span></h1>
+  <p class="lede">Drop the fresh <b>26AS text file</b> from TRACES, read the <b>TDS Receivable ledger straight from Tally</b>
+  through the connector, map each deductor to its TAN once (remembered forever), and reconcile —
+  matched / not filed / unbooked / mismatched, with an Excel working paper.</p>
+
+  <!-- Step 1: 26AS -->
+  <div class="card">
+    <h2><span class="stepno">1</span>Form 26AS (text file from TRACES)</h2>
+    <div class="drop" id="drop26">
+      <span class="big">Drop the 26AS .txt here, or click to choose</span>
+      <div class="hint">TRACES → View / Download 26AS → Text format. Part-I TDS and Part-VI TCS are read.</div>
+    </div>
+    <div class="kv" id="hdr26" style="display:none"></div>
+    <div class="msg" id="msg26"></div>
+  </div>
+
+  <!-- Step 2: Tally -->
+  <div class="card" id="p2">
+    <h2><span class="stepno">2</span>TDS Receivable from Tally</h2>
+    <div class="row">
+      <label>Period <input type="date" id="from"> → <input type="date" id="to"></label>
+      <label>Ledger name contains <input type="text" class="small" id="pattern" value="TDS Receivable" title="Regular expression matched against ledger names"></label>
+      <button class="btn primary" id="readBtn">📖 Read from Tally</button>
+      <span style="white-space:nowrap;font-size:12.5px"><span id="tally-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#c3ccd8;margin-right:5px"></span><span id="tally-status" class="msg" style="margin:0">checking connector…</span></span>
+      <button class="btn" id="conn-upd" style="padding:5px 12px;font-size:12px" onclick="updateConnector()">⟳ Update connector</button>
+    </div>
+    <div class="msg" id="msgTally"></div>
+    <div id="bookStats" class="stats hidden"></div>
+  </div>
+
+  <!-- Step 3: mapping -->
+  <div class="card hidden" id="p3">
+    <h2><span class="stepno">3</span>Deductor → TAN map <span style="font-weight:400;font-size:12px;color:var(--muted)">(saved in the connector — next time it's automatic)</span></h2>
+    <div id="mapWrap" style="max-height:340px;overflow-y:auto"></div>
+    <div class="row">
+      <button class="btn primary" id="saveMapBtn">💾 Save mappings</button>
+      <span class="msg" id="msgMap"></span>
+    </div>
+  </div>
+
+  <!-- Step 4: reconcile -->
+  <div class="card hidden" id="p4">
+    <h2><span class="stepno">4</span>Reconcile</h2>
+    <div class="row">
+      <label>26AS basis
+        <select id="recBasis">
+          <option value="deducted">Tax deducted</option>
+          <option value="deposited">TDS deposited</option>
+          <option value="finalDed">Deducted — final (F) rows only</option>
+        </select></label>
+      <label>Tolerance ₹ <input type="text" class="tiny" id="tol" value="1"></label>
+      <label><input type="checkbox" id="collapseJ" checked> treat 194JA/JB as 194J</label>
+      <label><input type="checkbox" id="useSec" checked> match on section too</label>
+      <button class="btn go" id="recBtn">🧮 Reconcile</button>
+      <button class="btn" id="exportBtn" disabled>📊 Download reco sheet</button>
+    </div>
+    <div class="msg" id="msgRec"></div>
+    <div id="recStats" class="stats"></div>
+    <div style="overflow-x:auto"><table id="recTbl" class="hidden">
+      <thead><tr><th>Deductor</th><th>TAN</th><th>Section</th><th class="r">Books TDS</th><th class="r">26AS TDS</th><th class="r">Difference</th><th class="r">Deducted</th><th class="r">Deposited</th><th>Flags</th><th>Status</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </div>
+</main>
+
+<footer>KNAP Advisory · internal tools · books data flows browser ↔ connector ↔ Tally on this computer; the 26AS file never leaves the browser.</footer>
+
+<script>
+var API = localStorage.getItem('knap_connector_url') || 'http://127.0.0.1:8797';
+
+/* ================= 26AS text parser — ported unchanged from the tested tool ================= */
+function partNumeral(raw){ var m=raw.replace(/\^/g,' ').match(/PART\s*-?\s*([IVX]+|A|B|C)\b/i); return m?m[1].toUpperCase():null; }
+function parseHeader(text){
+  var lines=text.split(/\r?\n/);
+  for(var i=0;i<lines.length-1;i++){
+    if(/Permanent Account Number/i.test(lines[i])&&/Assessment Year/i.test(lines[i])){
+      var labels=lines[i].split('^').map(function(s){return s.trim();});
+      var vals=lines[i+1].split('^').map(function(s){return s.trim();});
+      var get=function(name){var idx=labels.findIndex(function(l){return l.toLowerCase().includes(name);});return idx>=0?(vals[idx]||''):'';};
+      return {pan:get('permanent account number'),status:get('current status'),fy:get('financial year'),ay:get('assessment year'),name:get('name of assessee')};
+    }
+  }
+  return null;
+}
+function segmentParts(text){
+  var lines=text.split(/\r?\n/); var parts={}; var cur='HEADER'; parts[cur]=[];
+  for(var i=0;i<lines.length;i++){ var raw=lines[i]; var p=partNumeral(raw);
+    if(p){cur=p; if(!parts[cur])parts[cur]=[]; continue;}
+    (parts[cur]=parts[cur]||[]).push(raw); }
+  return parts;
+}
+function parseTDSBlock(lines,partTag){
+  var TAN=/\b([A-Z]{4}[0-9]{5}[A-Z])\b/, SEC=/^(19[2-6]|20[0-9])[A-Z]{0,2}$/;
+  var cur=null, rows=[];
+  (lines||[]).forEach(function(raw){
+    var f=raw.split('^').map(function(s){return s.trim();});
+    var tanField=f.find(function(x){return TAN.test(x);});
+    if(/^\d+$/.test(f[0])&&tanField){ var tan=tanField.match(TAN)[1]; var i=f.indexOf(tanField); cur={tan:tan,name:(f[i-1]||'').trim()}; return; }
+    var secField=f.find(function(x){return SEC.test(x.replace(/\s|-/g,''));});
+    if(secField&&cur){
+      var section=secField.replace(/\s|-/g,'');
+      var status=(f.find(function(x){return /^[FUOP]$/.test(x);}))||'';
+      var dates=f.filter(function(x){return /^\d{1,2}-[A-Za-z]{3}-\d{4}$/.test(x);});
+      var nums=f.filter(function(x){return /^-?\d+(\.\d+)?$/.test(x);}).map(Number);
+      if(nums.length>=3){
+        rows.push({tan:cur.tan,name:cur.name,section:section,status:status,part:partTag,
+          txnDate:dates[0]||'',bookDate:dates[1]||'',
+          paid:nums[nums.length-3],deducted:nums[nums.length-2],deposited:nums[nums.length-1]});
+      }
+    }
+  });
+  return rows;
+}
+function aggregate(rows,keyFn){
+  var m=new Map();
+  rows.forEach(function(r){ var k=keyFn(r);
+    if(!m.has(k))m.set(k,Object.assign({},r,{paid:0,deducted:0,deposited:0,finalDed:0,nonFinal:0}));
+    var a=m.get(k); a.paid+=r.paid; a.deducted+=r.deducted; a.deposited+=r.deposited;
+    if(r.status&&r.status!=='F')a.nonFinal++; else a.finalDed+=r.deducted; });
+  return Array.from(m.values());
+}
+function collapseJ(sec,on){ return on?String(sec).replace(/^194J[AB]$/,'194J'):sec; }
+var cleanSec=function(s){ return String(s||'').toUpperCase().replace(/[^0-9A-Z]/g,'').replace(/^SECTION/,'').replace(/^US/,''); };
+var fmt=function(n){ return n==null?'':Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); };
+var r2=function(n){ return Math.round(n*100)/100; };
+
+/* ================= state ================= */
+var raw26=[], header26=null, bookEntries=[], tdsMap={}, recResult=[], connVer='';
+
+/* ================= connector ================= */
+function checkConn(){
+  fetch(API+'/health',{signal:AbortSignal.timeout(3000)}).then(function(r){return r.json();}).then(function(h){
+    connVer=h.version||'';
+    document.getElementById('tally-dot').style.background='var(--ok)';
+    document.getElementById('tally-status').textContent='connector v'+connVer;
+    document.getElementById('conn-ver').textContent='· connector v'+connVer;
+    if(parseFloat(connVer)<2.6){ document.getElementById('msgTally').innerHTML='This tool needs connector <b>v2.6+</b> — press ⟳ Update connector.'; }
+    fetch(API+'/api/tds/data').then(function(r){return r.json();}).then(function(d){ tdsMap=d.map||{}; }).catch(function(){});
+  }).catch(function(){
+    document.getElementById('tally-dot').style.background='var(--bad)';
+    document.getElementById('tally-status').innerHTML='connector not found — <a href="/connector/Install-Tally-Connector.bat" download>install it</a> (once) on this PC';
+  });
+}
+checkConn();
+function updateConnector(){
+  var el=document.getElementById('conn-upd'); el.disabled=true; el.textContent='⏳ Updating…';
+  fetch(API+'/update',{method:'POST'}).then(function(resp){
+    if(!resp.ok){ el.disabled=false; el.textContent='⟳ Update connector'; document.getElementById('msgTally').textContent='This connector is too old for one-click update — re-run the installer once.'; return; }
+    var was=connVer, tries=0;
+    var t=setInterval(function(){
+      tries++;
+      fetch(API+'/health').then(function(r){return r.json();}).then(function(h){
+        if(h.version&&h.version!==was){ clearInterval(t); el.disabled=false; el.textContent='⟳ Update connector'; checkConn(); document.getElementById('msgTally').textContent='✅ Connector updated to v'+h.version+'.'; }
+      }).catch(function(){});
+      if(tries>30){ clearInterval(t); el.disabled=false; el.textContent='⟳ Update connector'; document.getElementById('msgTally').textContent='Already the newest (v'+was+'), or it could not restart.'; }
+    },3000);
+  }).catch(function(){ el.disabled=false; el.textContent='⟳ Update connector'; });
+}
+
+/* ================= step 1: 26AS ================= */
+(function(){
+  var drop=document.getElementById('drop26');
+  var inp=document.createElement('input'); inp.type='file'; inp.accept='.txt,.text'; inp.style.display='none'; document.body.appendChild(inp);
+  function handle(f){
+    var r=new FileReader();
+    r.onload=function(){
+      var text=r.result, parts=segmentParts(text);
+      header26=parseHeader(text);
+      raw26=parseTDSBlock(parts.I,'I').concat(parseTDSBlock(parts.VI,'VI'));
+      drop.querySelector('.big').textContent='✓ '+f.name;
+      drop.querySelector('.hint').textContent=raw26.length+' transaction lines · '+aggregate(raw26,function(x){return x.tan+'|'+x.section;}).length+' deductor × section combos';
+      var h=header26, el=document.getElementById('hdr26');
+      if(h){ el.style.display='flex'; el.innerHTML='<span><b>Assessee</b>'+(h.name||'—')+'</span><span><b>PAN</b>'+(h.pan||'—')+'</span><span><b>FY</b>'+(h.fy||'—')+'</span><span><b>AY</b>'+(h.ay||'—')+'</span>';
+        var m=(h.fy||'').match(/^(\d{4})/); if(m){ document.getElementById('from').value=m[1]+'-04-01'; document.getElementById('to').value=(+m[1]+1)+'-03-31'; } }
+      document.getElementById('msg26').textContent=raw26.length?'':'No Part-I/VI transactions found — is this the TRACES text-format 26AS?';
+    };
+    r.readAsText(f);
+  }
+  drop.onclick=function(){inp.click();};
+  inp.onchange=function(){ if(inp.files[0])handle(inp.files[0]); inp.value=''; };
+  drop.ondragover=function(e){e.preventDefault();drop.classList.add('over');};
+  drop.ondragleave=function(){drop.classList.remove('over');};
+  drop.ondrop=function(e){e.preventDefault();drop.classList.remove('over');if(e.dataTransfer.files[0])handle(e.dataTransfer.files[0]);};
+})();
+
+/* ================= step 2: read Tally ================= */
+document.getElementById('readBtn').onclick=function(){
+  var from=document.getElementById('from').value, to=document.getElementById('to').value;
+  if(!from||!to){ document.getElementById('msgTally').textContent='Set the period first (drop the 26AS to auto-fill it).'; return; }
+  var btn=this; btn.disabled=true;
+  document.getElementById('msgTally').textContent='⏳ Reading the Tally books month by month — keep Tally open, this can take a few minutes…';
+  fetch(API+'/api/tds/read',{method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({from:from,to:to,pattern:document.getElementById('pattern').value})})
+    .then(function(r){return r.json();})
+    .then(function(j){
+      btn.disabled=false;
+      if(!j.ok){ document.getElementById('msgTally').innerHTML='<span class="msg bad">'+(j.error||'Failed — is Tally open?')+'</span>'; return; }
+      bookEntries=j.entries||[];
+      var parties={}; bookEntries.forEach(function(e){ parties[e.party]=(parties[e.party]||0)+e.tds; });
+      var totTds=bookEntries.reduce(function(s,e){return s+e.tds;},0);
+      document.getElementById('msgTally').innerHTML='<span class="msg ok">✅ Read '+j.vouchers+' voucher(s) across '+j.months+' month(s) — '+bookEntries.length+' TDS entries found.</span>';
+      var st=document.getElementById('bookStats'); st.classList.remove('hidden');
+      st.innerHTML='<div class="stat"><div class="n">'+bookEntries.length+'</div><div class="l">TDS entries</div></div>'+
+        '<div class="stat"><div class="n">'+Object.keys(parties).length+'</div><div class="l">deductors (Tally parties)</div></div>'+
+        '<div class="stat"><div class="n">₹'+fmt(r2(totTds))+'</div><div class="l">TDS receivable (books)</div></div>';
+      buildMapping(parties);
+    })
+    .catch(function(){ btn.disabled=false; document.getElementById('msgTally').innerHTML='<span class="msg bad">Connector not reachable.</span>'; });
+};
+
+/* ================= step 3: mapping ================= */
+function normName(s){
+  var noise={'PVT':1,'PRIVATE':1,'LTD':1,'LIMITED':1,'LLP':1,'CO':1,'COMPANY':1,'THE':1,'AND':1,'ENTERPRISES':1,'INDIA':1,'SERVICES':1,'M':1,'S':1,'MS':1};
+  return String(s||'').toUpperCase().replace(/[^A-Z0-9 ]/g,' ').split(/\s+/).filter(function(t){return t&&!noise[t];});
+}
+function suggestFor(party){
+  var pt=normName(party); if(!pt.length)return null;
+  var byTan={};
+  aggregate(raw26,function(x){return x.tan;}).forEach(function(a){ byTan[a.tan]=a; });
+  var best=null,bestScore=0;
+  Object.keys(byTan).forEach(function(tan){
+    var a=byTan[tan], at=normName(a.name);
+    var shared=pt.filter(function(t){return at.indexOf(t)>=0&&t.length>=3;});
+    var score=shared.length + (shared.some(function(t){return t.length>=5;})?1:0);
+    if(score>bestScore){bestScore=score;best=a;}
+  });
+  if(!best||bestScore<2)return null;
+  var secs={}; raw26.filter(function(x){return x.tan===best.tan;}).forEach(function(x){secs[x.section]=(secs[x.section]||0)+1;});
+  var topSec=Object.keys(secs).sort(function(a,b){return secs[b]-secs[a];})[0]||'';
+  return {tan:best.tan,name:best.name,section:topSec};
+}
+function buildMapping(parties){
+  var wrap=document.getElementById('mapWrap'); var names=Object.keys(parties).sort(function(a,b){return parties[b]-parties[a];});
+  var h='<table><thead><tr><th>Tally party</th><th class="r">Books TDS</th><th>TAN</th><th>Section</th><th>Suggestion (from 26AS)</th></tr></thead><tbody>';
+  names.forEach(function(n,i){
+    var saved=tdsMap[n]||{}; var sug=(!saved.tan)?suggestFor(n):null;
+    h+='<tr class="maprow"><td>'+n+'</td><td class="r">'+fmt(r2(parties[n]))+'</td>'+
+      '<td><input type="text" class="small" data-n="'+i+'" data-f="tan" value="'+(saved.tan||'')+'" placeholder="ABCD12345E"></td>'+
+      '<td><input type="text" class="tiny" data-n="'+i+'" data-f="section" value="'+(saved.section||'')+'" placeholder="194J"></td>'+
+      '<td>'+(sug?('<span class="sug" data-n="'+i+'" data-tan="'+sug.tan+'" data-sec="'+sug.section+'">↪ '+sug.tan+' · '+sug.section+' ('+sug.name+')</span>'):(saved.tan?'✓ saved':'—'))+'</td></tr>';
+  });
+  h+='</tbody></table>';
+  wrap.innerHTML=h; wrap.dataset.names=JSON.stringify(names);
+  wrap.querySelectorAll('.sug').forEach(function(s){
+    s.onclick=function(){ var i=s.getAttribute('data-n');
+      wrap.querySelector('input[data-n="'+i+'"][data-f="tan"]').value=s.getAttribute('data-tan');
+      wrap.querySelector('input[data-n="'+i+'"][data-f="section"]').value=s.getAttribute('data-sec');
+      s.textContent='✓ applied'; };
+  });
+  document.getElementById('p3').classList.remove('hidden');
+  document.getElementById('p4').classList.remove('hidden');
+}
+document.getElementById('saveMapBtn').onclick=function(){
+  var wrap=document.getElementById('mapWrap'); var names=JSON.parse(wrap.dataset.names||'[]');
+  var m={};
+  names.forEach(function(n,i){
+    var tan=(wrap.querySelector('input[data-n="'+i+'"][data-f="tan"]')||{}).value||'';
+    var sec=(wrap.querySelector('input[data-n="'+i+'"][data-f="section"]')||{}).value||'';
+    if(tan.trim()||sec.trim())m[n]={tan:tan.trim().toUpperCase(),section:cleanSec(sec)};
+  });
+  fetch(API+'/api/tds/map',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({map:m})})
+    .then(function(r){return r.json();})
+    .then(function(j){ Object.assign(tdsMap,m); document.getElementById('msgMap').textContent=j.ok?'✅ Saved — remembered for every future run.':'Save failed.'; })
+    .catch(function(){ document.getElementById('msgMap').textContent='Connector not reachable — mappings kept for this session only.'; Object.assign(tdsMap,m); });
+};
+
+/* ================= step 4: reconcile — engine ported from the tested tool ================= */
+function reconcile(){
+  var tol=+document.getElementById('tol').value||0;
+  var basis=document.getElementById('recBasis').value;
+  var useSection=document.getElementById('useSec').checked;
+  var cj=document.getElementById('collapseJ').checked;
+  // books aggregate: entries -> TAN(+section) via the saved map
+  var bAgg=new Map(); var unmapped={};
+  bookEntries.forEach(function(e){
+    var mp=tdsMap[e.party]||{};
+    var tan=/^[A-Z]{4}[0-9]{5}[A-Z]$/.test(mp.tan||'')?mp.tan:('NOTAN:'+e.party);
+    if(tan.indexOf('NOTAN:')===0)unmapped[e.party]=1;
+    var section=useSection?collapseJ(cleanSec(mp.section||''),cj):'*';
+    var key=tan+'|'+section;
+    if(!bAgg.has(key))bAgg.set(key,{tan:tan,name:e.party,section:useSection?section:'(all)',books:0,entries:[]});
+    var g=bAgg.get(key); g.books+=e.tds; g.entries.push(e);
+  });
+  var a26=aggregate(raw26,function(x){return x.tan+'|'+(useSection?collapseJ(x.section,cj):'*');});
+  var m26=new Map(a26.map(function(r){return [r.tan+'|'+(useSection?collapseJ(r.section,cj):'*'),r];}));
+  var txnsByKey=new Map();
+  raw26.forEach(function(x){ var tk=x.tan+'|'+(useSection?collapseJ(x.section,cj):'*');
+    if(!txnsByKey.has(tk))txnsByKey.set(tk,[]); txnsByKey.get(tk).push(x); });
+  var keys=new Set([].concat(Array.from(bAgg.keys()),Array.from(m26.keys())));
+  recResult=[];
+  keys.forEach(function(key){
+    var b=bAgg.get(key), a=m26.get(key);
+    var books=b?r2(b.books):0;
+    var as26=a?r2(a[basis]):0;
+    var deducted=a?r2(a.deducted):0, deposited=a?r2(a.deposited):0, paid=a?r2(a.paid):0;
+    var name=(b&&b.name)||(a&&a.name)||'', tan=(b&&b.tan)||(a&&a.tan)||'', section=(b&&b.section)||(a&&a.section)||'';
+    var diff=r2(books-as26);
+    var cls,label;
+    if(books>0&&as26===0){cls='flag';label='In books, not in 26AS — not filed / wrong PAN';}
+    else if(as26>0&&books===0){cls='watch';label='In 26AS, not in books — unbooked / Rule 37BA timing';}
+    else if(Math.abs(diff)<=tol){cls='ok';label='Matched';}
+    else{cls='watch';label='Amount mismatch — gross-net / timing / partial';}
+    recResult.push({name:name,tan:tan,section:section,books:books,as26:as26,diff:diff,
+      deducted:deducted,deposited:deposited,paid:paid,cls:cls,label:label,
+      shortDep:!!(a&&Math.abs(deducted-deposited)>tol),nonFinal:!!(a&&a.nonFinal>0),
+      txns:txnsByKey.get(key)||[],bookEntries:(b&&b.entries)||[]});
+  });
+  recResult.sort(function(x,y){ var o=function(c){return c==='flag'?-2:c==='watch'?-1:0;}; return o(x.cls)-o(y.cls)||y.books-x.books; });
+  var c={ok:0,watch:0,flag:0}; recResult.forEach(function(r){c[r.cls]++;});
+  var sB=r2(recResult.reduce(function(s,r){return s+r.books;},0));
+  var sA=r2(recResult.reduce(function(s,r){return s+r.as26;},0));
+  document.getElementById('recStats').innerHTML=
+    '<div class="stat"><div class="n">'+c.ok+'</div><div class="l">matched</div></div>'+
+    '<div class="stat"><div class="n">'+c.watch+'</div><div class="l">to review</div></div>'+
+    '<div class="stat"><div class="n">'+c.flag+'</div><div class="l">in books, not in 26AS</div></div>'+
+    '<div class="stat"><div class="n">₹'+fmt(sB)+'</div><div class="l">books TDS</div></div>'+
+    '<div class="stat"><div class="n">₹'+fmt(sA)+'</div><div class="l">26AS TDS</div></div>'+
+    '<div class="stat"><div class="n">₹'+fmt(r2(sB-sA))+'</div><div class="l">difference</div></div>';
+  var un=Object.keys(unmapped).length;
+  document.getElementById('msgRec').textContent=un?('⚠ '+un+' Tally part'+(un===1?'y has':'ies have')+' no TAN mapped — they can only match by nothing and show as "not in 26AS". Map them in step 3 for a true reconcile.'):'';
+  var tb=document.querySelector('#recTbl tbody'); tb.innerHTML='';
+  recResult.forEach(function(r){
+    tb.insertAdjacentHTML('beforeend','<tr><td>'+r.name+'</td><td>'+(r.tan.indexOf('NOTAN')===0?'—':r.tan)+'</td><td>'+r.section+'</td>'+
+      '<td class="r">'+fmt(r.books)+'</td><td class="r">'+fmt(r.as26)+'</td><td class="r">'+fmt(r.diff)+'</td>'+
+      '<td class="r">'+fmt(r.deducted)+'</td><td class="r">'+fmt(r.deposited)+'</td>'+
+      '<td>'+(r.shortDep?'<span class="pill flag">short deposit</span> ':'')+(r.nonFinal?'<span class="pill watch">non-final</span>':'')+'</td>'+
+      '<td><span class="pill '+r.cls+'">'+r.label+'</span></td></tr>');
+  });
+  document.getElementById('recTbl').classList.remove('hidden');
+  document.getElementById('exportBtn').disabled=false;
+}
+document.getElementById('recBtn').onclick=function(){
+  if(!raw26.length){ document.getElementById('msgRec').textContent='Drop the 26AS first (step 1).'; return; }
+  if(!bookEntries.length){ document.getElementById('msgRec').textContent='Read the Tally books first (step 2).'; return; }
+  reconcile();
+};
+
+/* ================= export — reco sheet ================= */
+document.getElementById('exportBtn').onclick=function(){
+  if(typeof ExcelJS==='undefined'){ alert('Excel library still loading — try again in a moment.'); return; }
+  if(!recResult.length)return;
+  document.getElementById('msgRec').textContent='⏳ Generating the reco sheet…';
+  setTimeout(buildRecoWb,60);
+};
+function ymKey(d){ var m=String(d||'').match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/); if(m){var mo={Jan:1,Feb:2,Mar:3,Apr:4,May:5,Jun:6,Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12}[m[2]];return m[3]+'-'+String(mo).padStart(2,'0');} m=String(d||'').match(/^(\d{4})-(\d{2})/); return m?m[1]+'-'+m[2]:''; }
+function buildRecoWb(){
+  var wb=new ExcelJS.Workbook();
+  var head={fill:{type:'pattern',pattern:'solid',fgColor:{argb:'FF1F4E78'}},font:{color:{argb:'FFFFFFFF'},bold:true,size:9},alignment:{horizontal:'center'}};
+  var fl={flag:'FFFDECEC',watch:'FFFBF4DC',c2:'FFEAF1FA',cb:'FFF2F0EA'};
+  // ---- Sheet 1: Summary (one row per TAN × section, live difference formulas)
+  var ws=wb.addWorksheet('Summary');
+  ws.columns=[{width:34},{width:13},{width:10},{width:13},{width:13},{width:13},{width:13},{width:13},{width:12},{width:11},{width:40}];
+  var H=['Deductor','TAN','Section','Books TDS','26AS TDS','Difference','26AS Deducted','26AS Deposited','Short deposit?','Non-final?','Status'];
+  var hr=ws.addRow(H); hr.eachCell(function(c){ c.fill=head.fill;c.font=head.font;c.alignment=head.alignment; });
+  recResult.forEach(function(r){
+    var row=ws.addRow([r.name,r.tan.indexOf('NOTAN')===0?'':r.tan,r.section,r.books,r.as26,null,r.deducted,r.deposited,r.shortDep?'YES':'',r.nonFinal?'YES':'',r.label]);
+    var R=row.number;
+    row.getCell(6).value={formula:'D'+R+'-E'+R,result:r.diff};
+    row.font={size:9};
+    [4,5,6,7,8].forEach(function(i){ row.getCell(i).numFmt='#,##0.00'; row.getCell(i).alignment={horizontal:'right'}; });
+    if(r.cls==='flag')for(var i2=1;i2<=11;i2++)row.getCell(i2).fill={type:'pattern',pattern:'solid',fgColor:{argb:fl.flag}};
+    else if(r.cls==='watch')for(var i3=1;i3<=11;i3++)row.getCell(i3).fill={type:'pattern',pattern:'solid',fgColor:{argb:fl.watch}};
+  });
+  var last=ws.lastRow.number, tr=last+1;
+  ws.getCell('A'+tr).value='TOTAL (current filter)'; ws.getCell('A'+tr).font={bold:true,size:9}; ws.getCell('A'+tr).border={top:{style:'thin'}};
+  ['D','E','F','G','H'].forEach(function(col){
+    var c=ws.getCell(col+tr);
+    var res=r2(recResult.reduce(function(s,r){return s+({D:r.books,E:r.as26,F:r.diff,G:r.deducted,H:r.deposited})[col];},0));
+    c.value={formula:'SUBTOTAL(9,'+col+'2:'+col+last+')',result:res};
+    c.numFmt='#,##0.00'; c.font={bold:true,size:9}; c.alignment={horizontal:'right'}; c.border={top:{style:'thin'}};
+  });
+  ws.getCell('A'+(tr+2)).value='Difference = Books TDS − 26AS TDS ('+document.getElementById('recBasis').selectedOptions[0].textContent+' basis, tolerance ₹'+(document.getElementById('tol').value||0)+'). Filter the Status column; totals follow.';
+  ws.getCell('A'+(tr+2)).font={italic:true,size:8,color:{argb:'FF6B7280'}};
+  ws.autoFilter='A1:K'+last; ws.views=[{state:'frozen',ySplit:1}];
+  // ---- Sheet 2: Month-wise (per combo × month)
+  var ws2=wb.addWorksheet('Month-wise');
+  var H2=['Deductor','TAN','Section','Month','Books TDS','26AS Deducted','26AS Deposited','Difference (books − deducted)'];
+  var h2=ws2.addRow(H2); h2.eachCell(function(c){ c.fill=head.fill;c.font=head.font;c.alignment=head.alignment; });
+  ws2.columns=[{width:34},{width:13},{width:10},{width:10},{width:13},{width:14},{width:14},{width:22}];
+  recResult.forEach(function(r){
+    var M=new Map();
+    var get=function(ym){ if(!M.has(ym))M.set(ym,{b:0,d:0,p:0}); return M.get(ym); };
+    (r.bookEntries||[]).forEach(function(e){ get(ymKey(e.date)).b+=e.tds; });
+    (r.txns||[]).forEach(function(x){ var g=get(ymKey(x.txnDate)); g.d+=x.deducted; g.p+=x.deposited; });
+    Array.from(M.keys()).sort().forEach(function(ym){
+      var g=M.get(ym);
+      var row=ws2.addRow([r.name,r.tan.indexOf('NOTAN')===0?'':r.tan,r.section,ym,r2(g.b),r2(g.d),r2(g.p),null]);
+      var R=row.number;
+      row.getCell(8).value={formula:'E'+R+'-F'+R,result:r2(g.b-g.d)};
+      row.font={size:9};
+      [5,6,7,8].forEach(function(i){ row.getCell(i).numFmt='#,##0.00'; row.getCell(i).alignment={horizontal:'right'}; });
+    });
+  });
+  ws2.autoFilter='A1:H'+ws2.lastRow.number; ws2.views=[{state:'frozen',ySplit:1}];
+  // ---- Sheet 3: Books entries (raw Tally legs with mapping applied)
+  var ws3=wb.addWorksheet('Books entries');
+  var H3=['Date','Tally party','TAN (mapped)','Section (mapped)','Voucher','Type','TDS ledger','TDS amount','Narration'];
+  var h3=ws3.addRow(H3); h3.eachCell(function(c){ c.fill=head.fill;c.font=head.font;c.alignment=head.alignment; });
+  ws3.columns=[{width:11},{width:34},{width:13},{width:10},{width:14},{width:12},{width:22},{width:12},{width:50}];
+  bookEntries.forEach(function(e){
+    var mp=tdsMap[e.party]||{};
+    var row=ws3.addRow([e.date,e.party,mp.tan||'',mp.section||'',e.vno,e.vtype,e.ledger,e.tds,e.narration]);
+    row.font={size:9}; row.getCell(8).numFmt='#,##0.00'; row.getCell(8).alignment={horizontal:'right'};
+  });
+  ws3.autoFilter='A1:I'+ws3.lastRow.number; ws3.views=[{state:'frozen',ySplit:1}];
+  wb.xlsx.writeBuffer().then(function(buf){
+    var a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+    a.download='tds-26as-reco'+(header26&&header26.fy?('-FY'+header26.fy.replace(/[^0-9-]/g,'')):'')+'.xlsx';
+    a.style.display='none'; document.body.appendChild(a); a.click();
+    setTimeout(function(){a.remove();URL.revokeObjectURL(a.href);},1500);
+    document.getElementById('msgRec').textContent='✅ Reco sheet downloaded — Summary, Month-wise, and Books entries sheets.';
+  });
+}
+</script>
+</body>
+</html>
