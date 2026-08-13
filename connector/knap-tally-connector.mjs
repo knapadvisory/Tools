@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '2.8';
+const VERSION = '2.9';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -361,6 +361,91 @@ function voucherCollectionRequest(from, to) {
   </TDLMESSAGE></TDL>
  </DESC></BODY>
 </ENVELOPE>`;
+}
+
+// ---- Trial-balance reader (financial-statement tool) -----------------------
+// Two collections: every Group (Name + Parent, to walk up to the reserved
+// primary group) and every Ledger (Name, Parent, and closing balance as on
+// the report date). Closing balance follows SVTODATE, so two reads at the two
+// year-end dates give both comparative columns.
+const GROUPS_REQUEST = () => `<ENVELOPE>
+ <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>KnapGroups</ID></HEADER>
+ <BODY><DESC>
+  <STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>${svCompany()}</STATICVARIABLES>
+  <TDL><TDLMESSAGE>
+   <COLLECTION NAME="KnapGroups" ISMODIFY="No">
+    <TYPE>Group</TYPE>
+    <NATIVEMETHOD>Name</NATIVEMETHOD><NATIVEMETHOD>Parent</NATIVEMETHOD>
+    <NATIVEMETHOD>IsRevenue</NATIVEMETHOD><NATIVEMETHOD>IsDeemedPositive</NATIVEMETHOD>
+   </COLLECTION>
+  </TDLMESSAGE></TDL>
+ </DESC></BODY>
+</ENVELOPE>`;
+
+const LEDGERS_BAL_REQUEST = (asOn) => `<ENVELOPE>
+ <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>KnapLedgers</ID></HEADER>
+ <BODY><DESC>
+  <STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+   <SVFROMDATE>${toTallyDate(new Date(Date.UTC(asOn.getUTCFullYear() - 1, asOn.getUTCMonth(), asOn.getUTCDate())))}</SVFROMDATE>
+   <SVTODATE>${toTallyDate(asOn)}</SVTODATE>${svCompany()}</STATICVARIABLES>
+  <TDL><TDLMESSAGE>
+   <COLLECTION NAME="KnapLedgers" ISMODIFY="No">
+    <TYPE>Ledger</TYPE>
+    <NATIVEMETHOD>Name</NATIVEMETHOD><NATIVEMETHOD>Parent</NATIVEMETHOD>
+    <NATIVEMETHOD>ClosingBalance</NATIVEMETHOD><NATIVEMETHOD>OpeningBalance</NATIVEMETHOD>
+   </COLLECTION>
+  </TDLMESSAGE></TDL>
+ </DESC></BODY>
+</ENVELOPE>`;
+
+// Tally amounts arrive as "12,345.67", "-12345.67", or "12345.67 Cr" — a Cr
+// balance is a credit (negative in the Dr-positive convention we return).
+function tallyAmt(raw) {
+  let s = String(raw || '').trim();
+  if (!s) return 0;
+  const cr = /cr\.?$/i.test(s), dr = /dr\.?$/i.test(s);
+  s = s.replace(/[^0-9.\-]/g, '');
+  let n = parseFloat(s);
+  if (isNaN(n)) return 0;
+  if (cr) n = -Math.abs(n);
+  else if (dr) n = Math.abs(n);
+  return r2(n);
+}
+
+function parseGroups(xml) {
+  const out = {};
+  for (const b of xml.match(/<GROUP[\s>][\s\S]*?<\/GROUP>/gi) || []) {
+    const name = decodeXml((b.match(/<GROUP[^>]*\sNAME="([^"]*)"/i)?.[1] ?? tag(b, 'NAME'))).trim();
+    if (!name) continue;
+    out[name] = {
+      parent: decodeXml(tag(b, 'PARENT')).trim(),
+      isRevenue: /yes/i.test(tag(b, 'ISREVENUE')),
+      isDeemedPositive: /yes/i.test(tag(b, 'ISDEEMEDPOSITIVE')),
+    };
+  }
+  return out;
+}
+
+function parseLedgerBalances(xml) {
+  const out = {};
+  for (const b of xml.match(/<LEDGER[\s>][\s\S]*?<\/LEDGER>/gi) || []) {
+    const name = decodeXml((b.match(/<LEDGER[^>]*\sNAME="([^"]*)"/i)?.[1] ?? tag(b, 'NAME'))).trim();
+    if (!name) continue;
+    out[name] = {
+      parent: decodeXml(tag(b, 'PARENT')).trim(),
+      closing: tallyAmt(tag(b, 'CLOSINGBALANCE')),
+      opening: tallyAmt(tag(b, 'OPENINGBALANCE')),
+    };
+  }
+  return out;
+}
+
+// Walk a ledger's parent groups up to the reserved primary group.
+function primaryGroupOf(groupName, groups, depth = 0) {
+  if (!groupName || depth > 30) return groupName || '';
+  const g = groups[groupName];
+  if (!g || !g.parent) return groupName; // no parent => this IS a primary group
+  return primaryGroupOf(g.parent, groups, depth + 1);
 }
 
 const LEDGER_GSTIN_REQUEST = () => `<ENVELOPE>
@@ -1889,6 +1974,46 @@ const server = http.createServer(async (req, res) => {
           }
         }
         json(res, 200, { ok: true, entries, months, vouchers });
+      } catch (e) {
+        json(res, 502, { ok: false, error: 'Could not read Tally: ' + String((e && e.message) || e) });
+      }
+      return;
+    }
+
+    // ---------------- Financial statements (page: HUB/finprep/) -----------
+    // Grouped trial balance for two year-ends: every ledger with its closing
+    // balance (current + prior) and its full group path up to the reserved
+    // primary group, so the page can classify into Schedule III heads.
+    if (req.method === 'POST' && url.pathname === '/api/fin/trialbalance') {
+      const body = JSON.parse(await readBody(req));
+      const cur = tallyDateOf(String(body.asOn || '').replace(/-/g, ''));
+      const pri = tallyDateOf(String(body.priorAsOn || '').replace(/-/g, ''));
+      if (!cur) { json(res, 400, { ok: false, error: 'Bad current year-end date.' }); return; }
+      try {
+        const groups = parseGroups(await askTally(state.settings.tallyUrl, GROUPS_REQUEST()));
+        const curLed = parseLedgerBalances(await askTally(state.settings.tallyUrl, LEDGERS_BAL_REQUEST(cur)));
+        const priLed = pri ? parseLedgerBalances(await askTally(state.settings.tallyUrl, LEDGERS_BAL_REQUEST(pri))) : {};
+        const ledgers = Object.keys(curLed).map((name) => {
+          const l = curLed[name];
+          const primary = primaryGroupOf(l.parent, groups);
+          const g = groups[l.parent] || {};
+          return {
+            name, group: l.parent, primary,
+            isRevenue: !!(groups[l.parent] && (function up(gn, d) { // any ancestor revenue?
+              if (!gn || d > 30) return false; const gg = groups[gn]; if (!gg) return false;
+              return gg.isRevenue || up(gg.parent, d + 1);
+            })(l.parent, 0)),
+            current: l.closing,
+            prior: priLed[name] ? priLed[name].closing : 0,
+          };
+        });
+        json(res, 200, {
+          ok: true, version: VERSION,
+          asOn: cur.toISOString().slice(0, 10),
+          priorAsOn: pri ? pri.toISOString().slice(0, 10) : null,
+          groupCount: Object.keys(groups).length,
+          ledgers,
+        });
       } catch (e) {
         json(res, 502, { ok: false, error: 'Could not read Tally: ' + String((e && e.message) || e) });
       }

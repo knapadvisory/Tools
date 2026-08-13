@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Financial Statements (Schedule III) — KNAP Tools</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📗</text></svg>">
+<script src="/session.js" defer></script>
+<script src="/gstr2b/exceljs.js" defer></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --accent: #4f46e5; --accent-hover: #4338ca; --on-accent: #fff;
+    --bg: #f4f5f8; --surface: #ffffff; --surface-2: #f5f6f9; --border: #e4e6ec;
+    --text: #1d1c1d; --muted: #6b7280; --shadow: rgba(20,25,45,.08);
+    --ok: #16a34a; --ok-soft: #e7f6ec; --warn: #d97706; --warn-soft: #fbf4dc;
+    --bad: #dc2626; --bad-soft: #fdecec; --header-bg: #14532d; --header-text: rgba(255,255,255,.85);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f1117; --surface:#171a22; --surface-2:#20242e; --border:#2b303c; --text:#e7e9ee; --muted:#9aa3b2; --shadow:rgba(0,0,0,.45);
+      --ok-soft:rgba(74,222,128,.16); --warn-soft:rgba(251,191,36,.16); --bad-soft:rgba(248,113,113,.16); --header-bg:#0c3d21; }
+  }
+  body { background: var(--bg); color: var(--text); font: 14.5px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; min-height: 100vh; }
+  a { color: var(--accent); text-decoration: none; }
+  .site-head { background: var(--header-bg); }
+  .site-head-inner { max-width: 1180px; margin: 0 auto; padding: 13px 24px; display: flex; align-items: center; gap: 14px; }
+  .brand { font-weight: 700; font-size: 16.5px; color: #fff; }
+  .back { color: var(--header-text); font-size: 13px; padding: 6px 12px; border-radius: 8px; }
+  .back:hover { background: rgba(255,255,255,.1); }
+  .hbtn { font: inherit; font-size: 12.5px; font-weight: 600; padding: 6px 12px; border-radius: 8px; border: 1px solid rgba(255,255,255,.35); background: transparent; color: #fff; cursor: pointer; }
+  main { max-width: 1180px; margin: 0 auto; padding: 24px; }
+  h1 { font-size: 21px; letter-spacing: -.01em; }
+  .lede { color: var(--muted); font-size: 13px; margin: 6px 0 20px; max-width: 820px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 1px 2px var(--shadow); padding: 18px 20px; margin-bottom: 16px; }
+  .card h2 { font-size: 15px; margin-bottom: 10px; }
+  .stepno { display: inline-flex; width: 22px; height: 22px; border-radius: 50%; background: var(--header-bg); color: #fff; font-size: 12px; font-weight: 700; align-items: center; justify-content: center; margin-right: 8px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
+  input[type=text], input[type=date], select { font: inherit; padding: 8px 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text); }
+  .btn { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 13.5px; font-weight: 600; padding: 9px 16px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); cursor: pointer; }
+  .btn:hover { border-color: var(--accent); }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .btn.primary { background: var(--header-bg); border-color: var(--header-bg); color: #fff; }
+  .btn.go { background: #0e7490; border-color: #0e7490; color: #fff; box-shadow: 0 2px 8px rgba(14,116,144,.3); }
+  .msg { font-size: 13px; margin-top: 8px; color: var(--muted); }
+  .msg.ok { color: var(--ok); } .msg.bad { color: var(--bad); }
+  .stats { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+  .stat { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 16px; }
+  .stat .n { font-size: 18px; font-weight: 700; } .stat .l { font-size: 11.5px; color: var(--muted); }
+  .diff-ok { background: var(--ok-soft); }
+  .diff-bad { background: var(--bad-soft); }
+  table { width: 100%; border-collapse: collapse; font-size: 12.8px; margin-top: 10px; }
+  th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); border-bottom: 1px solid var(--border); padding: 6px 8px; }
+  td { padding: 5px 8px; border-bottom: 1px solid var(--surface-2); }
+  td.r, th.r { text-align: right; }
+  .grp { font-weight: 700; background: var(--surface-2); }
+  .sub td { color: var(--muted); }
+  .hidden { display: none; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 900px) { .two { grid-template-columns: 1fr; } }
+  select.assign { padding: 4px 8px; font-size: 12px; }
+  .pill { display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;background:var(--warn-soft);color:var(--warn); }
+</style>
+</head>
+<body>
+<header class="site-head"><div class="site-head-inner">
+  <span class="brand">📗 Financial Statements · Schedule III</span>
+  <a class="back" href="/">← All tools</a>
+  <button type="button" id="conn-upd" class="hbtn" onclick="updateConnector()" title="Fetch the newest connector from the server">⟳ Update connector</button>
+</div></header>
+
+<main>
+  <h1>Financial Statements — Schedule III <span id="conn-ver" style="font-size:12px;color:var(--muted);font-weight:400"></span></h1>
+  <p class="lede">Reads the grouped <b>trial balance straight from Tally</b> through the connector, classifies every ledger into
+  Schedule III heads (clubbing same-nature ledgers under the right note), and builds a Balance Sheet, Statement of Profit &amp; Loss
+  and notes — faces linked to notes, notes linked to the trial balance, with a remarks column showing where each ledger landed.
+  Anything it can't place with confidence is listed for you to assign.</p>
+
+  <!-- Step 1: read Tally -->
+  <div class="card">
+    <h2><span class="stepno">1</span>Read the trial balance from Tally</h2>
+    <div class="row">
+      <label>Current year-end <input type="date" id="asOn"></label>
+      <label>Prior year-end <input type="date" id="priorAsOn"></label>
+      <button class="btn primary" id="readBtn">📖 Read from Tally</button>
+      <span style="white-space:nowrap;font-size:12.5px"><span id="tally-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#c3ccd8;margin-right:5px"></span><span id="tally-status" class="msg" style="margin:0">checking connector…</span></span>
+    </div>
+    <div class="msg" id="msgTally"></div>
+    <div id="readStats" class="stats hidden"></div>
+  </div>
+
+  <!-- Step 2: prepare -->
+  <div class="card hidden" id="p2">
+    <h2><span class="stepno">2</span>Prepare financials</h2>
+    <div class="row">
+      <label>Entity name <input type="text" id="entity" placeholder="ABC Private Limited" style="width:240px"></label>
+      <button class="btn go" id="prepBtn">🧮 Prepare financials</button>
+      <button class="btn" id="exportBtn" disabled>📗 Download working paper (Excel)</button>
+    </div>
+    <div class="msg" id="msgPrep"></div>
+    <div id="diffBox" class="stats"></div>
+  </div>
+
+  <!-- Review panel -->
+  <div class="card hidden" id="pReview">
+    <h2><span class="stepno">!</span>Review — ledgers to confirm <span style="font-weight:400;font-size:12px;color:var(--muted)">(saved in the connector for next time)</span></h2>
+    <div class="msg">These ledgers were placed by best guess or could not be placed. Assign the right Schedule III head; blanks stay under their guess.</div>
+    <div id="reviewWrap" style="max-height:360px;overflow-y:auto"></div>
+    <div class="row"><button class="btn primary" id="saveMapBtn">💾 Save & re-prepare</button><span class="msg" id="msgMap"></span></div>
+  </div>
+
+  <!-- Faces preview -->
+  <div class="two">
+    <div class="card hidden" id="pBS"><h2>Balance Sheet</h2><div id="bsWrap"></div></div>
+    <div class="card hidden" id="pPL"><h2>Statement of Profit &amp; Loss</h2><div id="plWrap"></div></div>
+  </div>
+</main>
+
+<footer style="border-top:1px solid var(--border);margin-top:30px;padding:18px 24px;text-align:center;font-size:12.5px;color:var(--muted)">
+  KNAP Advisory · internal tools · the trial balance flows browser ↔ connector ↔ Tally on this computer.
+</footer>
+
+<script>
+var API = localStorage.getItem('knap_connector_url') || 'http://127.0.0.1:8797';
+var connVer = '';
+
+/* ===== connector ===== */
+function checkConn(){
+  fetch(API+'/health',{signal:AbortSignal.timeout(3000)}).then(function(r){return r.json();}).then(function(h){
+    connVer=h.version||'';
+    document.getElementById('tally-dot').style.background='var(--ok)';
+    document.getElementById('tally-status').textContent='connector v'+connVer;
+    document.getElementById('conn-ver').textContent='· connector v'+connVer;
+    if(parseFloat(connVer)<2.9) document.getElementById('msgTally').innerHTML='This tool needs connector <b>v2.9+</b> — press ⟳ Update connector.';
+  }).catch(function(){
+    document.getElementById('tally-dot').style.background='var(--bad)';
+    document.getElementById('tally-status').innerHTML='connector not found — <a href="/connector/Install-Tally-Connector.bat" download>install it</a> on this PC';
+  });
+}
+checkConn();
+function updateConnector(){
+  var el=document.getElementById('conn-upd'); el.disabled=true; el.textContent='⏳ Updating…';
+  fetch(API+'/health').then(function(r){return r.json();}).then(function(h){
+    var was=h.version||'';
+    return fetch(API+'/update',{method:'POST'}).then(function(resp){
+      if(!resp.ok){ el.disabled=false; el.textContent='⟳ Update connector'; document.getElementById('msgTally').textContent='Connector too old for one-click update — re-run the installer once.'; return; }
+      var n=0,t=setInterval(function(){ n++;
+        fetch(API+'/health').then(function(r){return r.json();}).then(function(h2){
+          if(h2.version&&h2.version!==was){ clearInterval(t); el.disabled=false; el.textContent='⟳ Update connector'; checkConn(); document.getElementById('msgTally').textContent='✅ Updated to v'+h2.version+'.'; }
+        }).catch(function(){});
+        if(n>30){ clearInterval(t); el.disabled=false; el.textContent='⟳ Update connector'; document.getElementById('msgTally').textContent='Already newest (v'+was+').'; }
+      },3000);
+    });
+  }).catch(function(){ el.disabled=false; el.textContent='⟳ Update connector'; });
+}
+
+/* default dates: current & prior 31 March */
+(function(){ var now=new Date(); var y=now.getMonth()>=3?now.getFullYear():now.getFullYear()-1;
+  document.getElementById('asOn').value=y+'-03-31'; document.getElementById('priorAsOn').value=(y-1)+'-03-31'; })();
+
+/* ===== Schedule III note catalogue ===== */
+var NOTES = {
+  1:{head:'Share capital',face:'EQ'}, 2:{head:'Reserves and surplus',face:'EQ'},
+  4:{head:'Long-term borrowings',face:'NCL'}, 5:{head:'Deferred tax liabilities (Net)',face:'NCL'}, 6:{head:'Other long term liabilities',face:'NCL'}, 7:{head:'Long-term provisions',face:'NCL'},
+  8:{head:'Short-term borrowings',face:'CL'}, 9:{head:'Trade payables',face:'CL'}, 10:{head:'Other current liabilities',face:'CL'}, 11:{head:'Short-term provisions',face:'CL'},
+  12:{head:'Property, Plant and Equipment',face:'NCA'}, 13:{head:'Non-current investments',face:'NCA'}, 14:{head:'Deferred tax assets (Net)',face:'NCA'}, 15:{head:'Long-term loans and advances',face:'NCA'}, 16:{head:'Other non-current assets',face:'NCA'},
+  17:{head:'Current investments',face:'CA'}, 18:{head:'Inventories',face:'CA'}, 19:{head:'Trade receivables',face:'CA'}, 20:{head:'Cash and cash equivalents',face:'CA'}, 21:{head:'Short-term loans and advances',face:'CA'}, 22:{head:'Other current assets',face:'CA'},
+  23:{head:'Revenue from operations',face:'INC'}, 24:{head:'Other income',face:'INC'},
+  25:{head:'Cost of materials consumed',face:'EXP'}, 26:{head:'Changes in inventories',face:'EXP'}, 27:{head:'Employee benefits expense',face:'EXP'}, 28:{head:'Finance costs',face:'EXP'}, 29:{head:'Other expenses',face:'EXP'},
+  99:{head:'Unclassified — review',face:'REVIEW'}
+};
+var NOTE_ORDER = [1,2,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,99];
+
+/* ===== classification engine ===== */
+function has(s, arr){ s=(s||'').toLowerCase(); return arr.some(function(k){ return s.indexOf(k)>=0; }); }
+function classify(led){
+  var pg=(led.primary||'').toLowerCase(), g=(led.group||'').toLowerCase(), n=(led.name||'').toLowerCase();
+  var gn=g+' '+n;
+  if(led.isRevenue){
+    // P&L nature
+    if(pg.indexOf('sales')>=0||pg.indexOf('direct income')>=0) return 23;
+    if(pg.indexOf('indirect income')>=0) return 24;
+    if(pg.indexOf('purchase')>=0) return 25;
+    if(has(gn,['salary','wages','bonus','staff','employee','provident','gratuity','esi',"director's remuneration",'director remuneration','stipend'])) return 27;
+    if(has(gn,['interest','finance cost','bank charges','processing fee','loan processing'])) return 28;
+    if(has(gn,['depreciation','amortis','amortiz'])) return 12;
+    if(pg.indexOf('direct expense')>=0) return 29;
+    return 29; // indirect expenses & anything revenue-nature else -> other expenses
+  }
+  // Balance-sheet nature by primary group
+  if(pg.indexOf('capital account')>=0){
+    if(has(gn,['reserve','surplus','p&l','profit & loss','profit and loss','retained'])) return 2;
+    return 1;
+  }
+  if(pg.indexOf('loans (liability)')>=0||pg.indexOf('loans(liability)')>=0){
+    if(has(gn,['bank od','overdraft','cash credit',' cc','o/d','packing credit','wc loan','working capital'])) return 8;
+    return 4;
+  }
+  if(pg.indexOf('current liabilit')>=0){
+    if(has(gn,['duties & taxes','duties and taxes','gst','tds','tcs','statutory','pf payable','esi payable','professional tax'])) return 10;
+    if(has(gn,['sundry creditor','trade payable','creditors for goods','payable for goods','supplier'])) return 9;
+    if(has(gn,['provision'])) return 11;
+    return 10;
+  }
+  if(pg.indexOf('provisions')>=0) return 11;
+  if(pg.indexOf('fixed asset')>=0) return 12;
+  if(pg.indexOf('investment')>=0){ return has(gn,['current','short'])?17:13; }
+  if(pg.indexOf('current asset')>=0){
+    if(has(gn,['sundry debtor','trade receivable','receivable from customer','debtors','receivables'])) return 19;
+    if(has(gn,['cash','bank','petty cash'])) return 20;
+    if(has(gn,['stock','inventory','closing stock','raw material','finished goods','work-in-progress','wip'])) return 18;
+    if(has(gn,['input gst','input tax','itc','gst receivable','input cgst','input sgst','input igst'])) return 22;
+    if(has(gn,['loans & advance','loans and advance','advance','tds receivable','tcs receivable','prepaid','deposit','advance tax'])) return 21;
+    return 22;
+  }
+  if(pg.indexOf('loans & advances')>=0||pg.indexOf('loans and advances')>=0) return 21;
+  if(pg.indexOf('deposit')>=0) return 15;
+  if(pg.indexOf('misc')>=0||pg.indexOf('branch')>=0||pg.indexOf('suspense')>=0) return 99;
+  return 99;
+}
+
+/* ===== state ===== */
+var TB=null, overrides={}, prepared=null, entity='';
+
+/* ===== step 1 ===== */
+document.getElementById('readBtn').onclick=function(){
+  var asOn=document.getElementById('asOn').value, prior=document.getElementById('priorAsOn').value;
+  if(!asOn){ document.getElementById('msgTally').textContent='Set the current year-end date.'; return; }
+  var btn=this; btn.disabled=true;
+  document.getElementById('msgTally').textContent='⏳ Reading the trial balance — keep Tally open…';
+  fetch(API+'/api/fin/trialbalance',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({asOn:asOn,priorAsOn:prior})})
+    .then(function(r){return r.json();}).then(function(j){
+      btn.disabled=false;
+      if(!j.ok){ document.getElementById('msgTally').innerHTML='<span class="msg bad">'+(j.error||'Failed — is Tally open?')+'</span>'; return; }
+      TB=j;
+      document.getElementById('msgTally').innerHTML='<span class="msg ok">✅ Read '+j.ledgers.length+' ledgers across '+j.groupCount+' groups.</span>';
+      var dr=j.ledgers.filter(function(l){return l.current>0;}).reduce(function(s,l){return s+l.current;},0);
+      var cr=-j.ledgers.filter(function(l){return l.current<0;}).reduce(function(s,l){return s+l.current;},0);
+      var st=document.getElementById('readStats'); st.classList.remove('hidden');
+      st.innerHTML='<div class="stat"><div class="n">'+j.ledgers.length+'</div><div class="l">ledgers</div></div>'+
+        '<div class="stat"><div class="n">₹'+inr(dr)+'</div><div class="l">total debit</div></div>'+
+        '<div class="stat"><div class="n">₹'+inr(cr)+'</div><div class="l">total credit</div></div>';
+      document.getElementById('p2').classList.remove('hidden');
+    }).catch(function(){ btn.disabled=false; document.getElementById('msgTally').innerHTML='<span class="msg bad">Connector not reachable.</span>'; });
+};
+
+/* ===== step 2: prepare ===== */
+function inr(n){ return Number(Math.round(n)).toLocaleString('en-IN'); }
+function fmt(n){ return (n===0||n)?Number(n).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}):''; }
+
+function prepare(){
+  if(!TB){ return; }
+  entity=document.getElementById('entity').value.trim()||'Entity';
+  // classify each ledger, applying saved overrides
+  var byNote={}; NOTE_ORDER.forEach(function(no){ byNote[no]={cur:0,pri:0,lines:[]}; });
+  TB.ledgers.forEach(function(l){
+    var note = overrides[l.name]!=null ? overrides[l.name] : classify(l);
+    // display sign: liabilities/equity/income are credit (negative) -> show positive; assets/expense debit -> positive
+    var face=NOTES[note].face;
+    var flip=(face==='EQ'||face==='NCL'||face==='CL'||face==='INC'); // credit-nature: positive when negative
+    var cur=flip? -l.current : l.current;
+    var pri=flip? -l.prior : l.prior;
+    byNote[note].cur+=cur; byNote[note].pri+=pri;
+    byNote[note].lines.push({name:l.name, group:l.group, primary:l.primary, cur:cur, pri:pri, note:note});
+    l._note=note;
+  });
+  // Note 12 collects BOTH the PPE asset ledgers (balance-sheet nature) and any
+  // depreciation ledgers (revenue nature) the engine routed to 12. Split them:
+  // the revenue-nature ones are the P&L depreciation line; the rest stay as PPE.
+  var depCur=0, depPri=0;
+  byNote[12].lines = byNote[12].lines.filter(function(x){
+    var isDep = false;
+    var l=TB.ledgers.find(function(z){return z.name===x.name;});
+    if(l&&l.isRevenue){ isDep=true; depCur+=x.cur; depPri+=x.pri; }
+    return !isDep; // keep only asset PPE in note 12
+  });
+  byNote[12].cur -= depCur; byNote[12].pri -= depPri;
+  var expCur = byNote[25].cur+byNote[26].cur+byNote[27].cur+byNote[28].cur+byNote[29].cur+depCur;
+  var expPri = byNote[25].pri+byNote[26].pri+byNote[27].pri+byNote[28].pri+byNote[29].pri+depPri;
+  var incCur = byNote[23].cur+byNote[24].cur, incPri = byNote[23].pri+byNote[24].pri;
+  var pbtCur = incCur-expCur, pbtPri = incPri-expPri;
+  // add current-year profit to reserves (surplus) for the balance sheet tie
+  var resCur = byNote[2].cur + pbtCur;   // reserves incl. current year profit
+  var resPri = byNote[2].pri + pbtPri;
+
+  // Balance sheet head totals
+  function faceTotal(f, yr){ var t=0; NOTE_ORDER.forEach(function(no){ if(NOTES[no].face===f) t+= (yr==='cur'?byNote[no].cur:byNote[no].pri); }); return t; }
+  var eqLiabCur = byNote[1].cur+resCur + faceTotal('NCL','cur') + faceTotal('CL','cur');
+  var eqLiabPri = byNote[1].pri+resPri + faceTotal('NCL','pri') + faceTotal('CL','pri');
+  var assetsCur = faceTotal('NCA','cur') + faceTotal('CA','cur');
+  var assetsPri = faceTotal('NCA','pri') + faceTotal('CA','pri');
+  var diffCur = assetsCur - eqLiabCur, diffPri = assetsPri - eqLiabPri;
+
+  prepared = { byNote:byNote, depCur:depCur, depPri:depPri, incCur:incCur, incPri:incPri, expCur:expCur, expPri:expPri,
+    pbtCur:pbtCur, pbtPri:pbtPri, resCur:resCur, resPri:resPri, eqLiabCur:eqLiabCur, eqLiabPri:eqLiabPri,
+    assetsCur:assetsCur, assetsPri:assetsPri, diffCur:diffCur, diffPri:diffPri };
+
+  renderDiff(); renderReview(); renderBS(); renderPL();
+  document.getElementById('exportBtn').disabled=false;
+}
+document.getElementById('prepBtn').onclick=prepare;
+
+function renderDiff(){
+  var p=prepared, d=document.getElementById('diffBox');
+  var okC=Math.abs(p.diffCur)<1, okP=Math.abs(p.diffPri)<1;
+  d.innerHTML=
+    '<div class="stat"><div class="n">₹'+inr(p.assetsCur)+'</div><div class="l">Total assets (CY)</div></div>'+
+    '<div class="stat"><div class="n">₹'+inr(p.eqLiabCur)+'</div><div class="l">Equity + liabilities (CY)</div></div>'+
+    '<div class="stat '+(okC?'diff-ok':'diff-bad')+'"><div class="n">'+(okC?'✓ ₹0':'⚠ ₹'+inr(p.diffCur))+'</div><div class="l">Difference (CY)</div></div>'+
+    '<div class="stat"><div class="n">₹'+inr(p.pbtCur)+'</div><div class="l">Profit before tax (CY)</div></div>';
+  document.getElementById('msgPrep').innerHTML = okC
+    ? '<span class="msg ok">✅ Balance sheet tallies for the current year.</span>'
+    : '<span class="msg bad">⚠ Difference of ₹'+inr(Math.abs(p.diffCur))+' — see the review panel; unmapped or misclassified ledgers below drive this.</span>';
+}
+
+function renderReview(){
+  // ledgers in the review note, plus anything whose classification is a best-guess "Other" bucket
+  var rows=[];
+  TB.ledgers.forEach(function(l){
+    var note=l._note;
+    var guessy = (note===99) || (note===10&&!has((l.group+' '+l.name).toLowerCase(),['gst','tds','statutory','creditor'])) ||
+                 (note===22) || (note===29 && !l.isRevenue);
+    if(note===99||overrides[l.name]!=null||guessy) rows.push(l);
+  });
+  var wrap=document.getElementById('reviewWrap');
+  if(!rows.length){ wrap.innerHTML='<div class="msg ok">Every ledger placed with confidence — nothing to review.</div>'; document.getElementById('pReview').classList.remove('hidden'); return; }
+  var opts=NOTE_ORDER.filter(function(n){return n!==99;}).map(function(n){return '<option value="'+n+'">'+n+' · '+NOTES[n].head+'</option>';}).join('');
+  var h='<table><thead><tr><th>Ledger</th><th>Tally group</th><th class="r">Amount (CY)</th><th>Placed in</th></tr></thead><tbody>';
+  rows.forEach(function(l){
+    var cur=overrides[l.name]!=null?overrides[l.name]:classify(l);
+    h+='<tr><td>'+esc(l.name)+(l._note===99?' <span class="pill">unplaced</span>':'')+'</td><td class="sub">'+esc(l.primary||l.group)+'</td>'+
+      '<td class="r">'+fmt(l.current)+'</td>'+
+      '<td><select class="assign" data-n="'+esc(l.name)+'"><option value="">— keep guess ('+cur+') —</option>'+opts+'</select></td></tr>';
+  });
+  h+='</tbody></table>';
+  wrap.innerHTML=h;
+  wrap.querySelectorAll('select.assign').forEach(function(s){
+    var cur=overrides[s.getAttribute('data-n')]; if(cur!=null)s.value=String(cur);
+  });
+  document.getElementById('pReview').classList.remove('hidden');
+}
+document.getElementById('saveMapBtn').onclick=function(){
+  document.querySelectorAll('#reviewWrap select.assign').forEach(function(s){
+    var name=s.getAttribute('data-n'); if(s.value) overrides[name]=Number(s.value); else delete overrides[name];
+  });
+  document.getElementById('msgMap').textContent='Re-prepared with your assignments.';
+  prepare();
+};
+
+function renderBS(){
+  var p=prepared, h='<table><thead><tr><th>Particulars</th><th>Note</th><th class="r">Current</th><th class="r">Prior</th></tr></thead><tbody>';
+  function line(label,note,curOverride,priOverride){
+    var cur=curOverride!=null?curOverride:p.byNote[note].cur, pri=priOverride!=null?priOverride:p.byNote[note].pri;
+    return '<tr><td>'+label+'</td><td class="sub">'+(note||'')+'</td><td class="r">'+fmt(cur)+'</td><td class="r">'+fmt(pri)+'</td></tr>';
+  }
+  h+='<tr class="grp"><td colspan="4">EQUITY AND LIABILITIES</td></tr>';
+  h+=line('Share capital',1);
+  h+=line('Reserves and surplus',2,p.resCur,p.resPri);
+  [4,5,6,7].forEach(function(n){ h+=line(NOTES[n].head,n); });
+  [8,9,10,11].forEach(function(n){ h+=line(NOTES[n].head,n); });
+  h+='<tr class="grp"><td>Total equity and liabilities</td><td></td><td class="r">'+fmt(p.eqLiabCur)+'</td><td class="r">'+fmt(p.eqLiabPri)+'</td></tr>';
+  h+='<tr class="grp"><td colspan="4">ASSETS</td></tr>';
+  [12,13,14,15,16].forEach(function(n){ h+=line(NOTES[n].head,n); });
+  [17,18,19,20,21,22].forEach(function(n){ h+=line(NOTES[n].head,n); });
+  h+='<tr class="grp"><td>Total assets</td><td></td><td class="r">'+fmt(p.assetsCur)+'</td><td class="r">'+fmt(p.assetsPri)+'</td></tr>';
+  h+='</tbody></table>';
+  document.getElementById('bsWrap').innerHTML=h;
+  document.getElementById('pBS').classList.remove('hidden');
+}
+function renderPL(){
+  var p=prepared, h='<table><thead><tr><th>Particulars</th><th>Note</th><th class="r">Current</th><th class="r">Prior</th></tr></thead><tbody>';
+  function L(label,c,pr){ return '<tr><td>'+label+'</td><td class="sub"></td><td class="r">'+fmt(c)+'</td><td class="r">'+fmt(pr)+'</td></tr>'; }
+  h+=L('Revenue from operations (23)',p.byNote[23].cur,p.byNote[23].pri);
+  h+=L('Other income (24)',p.byNote[24].cur,p.byNote[24].pri);
+  h+='<tr class="grp"><td>Total income</td><td></td><td class="r">'+fmt(p.incCur)+'</td><td class="r">'+fmt(p.incPri)+'</td></tr>';
+  h+=L('Cost of materials consumed (25)',p.byNote[25].cur,p.byNote[25].pri);
+  h+=L('Changes in inventories (26)',p.byNote[26].cur,p.byNote[26].pri);
+  h+=L('Employee benefits expense (27)',p.byNote[27].cur,p.byNote[27].pri);
+  h+=L('Finance costs (28)',p.byNote[28].cur,p.byNote[28].pri);
+  h+=L('Depreciation and amortization (12)',p.depCur,p.depPri);
+  h+=L('Other expenses (29)',p.byNote[29].cur,p.byNote[29].pri);
+  h+='<tr class="grp"><td>Total expenses</td><td></td><td class="r">'+fmt(p.expCur)+'</td><td class="r">'+fmt(p.expPri)+'</td></tr>';
+  h+='<tr class="grp"><td>Profit / (loss) before tax</td><td></td><td class="r">'+fmt(p.pbtCur)+'</td><td class="r">'+fmt(p.pbtPri)+'</td></tr>';
+  h+='</tbody></table>';
+  document.getElementById('plWrap').innerHTML=h;
+  document.getElementById('pPL').classList.remove('hidden');
+}
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+
+/* ===== export ===== */
+document.getElementById('exportBtn').onclick=function(){
+  if(typeof ExcelJS==='undefined'){ alert('Excel library still loading — try again.'); return; }
+  if(!prepared){ return; }
+  document.getElementById('msgPrep').textContent='⏳ Generating the working paper…';
+  setTimeout(buildWorkbook,60);
+};
+function buildWorkbook(){
+  var p=prepared, wb=new ExcelJS.Workbook();
+  var head={fill:{type:'pattern',pattern:'solid',fgColor:{argb:'FF14532D'}},font:{color:{argb:'FFFFFFFF'},bold:true,size:10},alignment:{horizontal:'center'}};
+  var money='#,##0.00';
+  var curLabel=TB.asOn, priLabel=TB.priorAsOn||'';
+
+  // ---- Trial Balance (with remarks) ----
+  var tb=wb.addWorksheet('Trial Balance');
+  tb.columns=[{width:38},{width:24},{width:22},{width:15},{width:15},{width:30}];
+  var hr=tb.addRow(['Ledger','Tally group','Primary group','Closing (CY)','Closing (PY)','Used in (Note)']);
+  hr.eachCell(function(c){c.fill=head.fill;c.font=head.font;c.alignment=head.alignment;});
+  TB.ledgers.forEach(function(l){
+    var note=l._note!=null?l._note:classify(l);
+    var r=tb.addRow([l.name,l.group,l.primary,l.current,l.prior,'Note '+note+' · '+NOTES[note].head]);
+    r.font={size:9}; r.getCell(4).numFmt=money; r.getCell(5).numFmt=money;
+  });
+  tb.autoFilter='A1:F'+tb.lastRow.number; tb.views=[{state:'frozen',ySplit:1}];
+
+  // ---- Notes ----
+  var ns=wb.addWorksheet('Notes');
+  ns.columns=[{width:52},{width:15},{width:15}];
+  var nr=ns.addRow(['Notes to the financial statements','Current','Prior']); nr.eachCell(function(c){c.fill=head.fill;c.font=head.font;c.alignment=head.alignment;});
+  var noteRow={}; // note -> total row number for face linking
+  NOTE_ORDER.forEach(function(no){
+    if(no===99 && !p.byNote[99].lines.length) return;
+    var bn=p.byNote[no];
+    var title=ns.addRow(['Note '+no+' : '+NOTES[no].head,'','']); title.getCell(1).font={bold:true,size:10,color:{argb:'FF14532D'}};
+    bn.lines.sort(function(a,b){return Math.abs(b.cur)-Math.abs(a.cur);}).forEach(function(x){
+      var r=ns.addRow([x.name,x.cur,x.pri]); r.font={size:9}; r.getCell(2).numFmt=money; r.getCell(3).numFmt=money;
+    });
+    var curTot = (no===2)?p.resCur:bn.cur, priTot=(no===2)?p.resPri:bn.pri;
+    if(no===2 && bn.lines.length){ var rr=ns.addRow(['Add: Profit for the year',p.pbtCur,p.pbtPri]); rr.font={size:9,italic:true}; rr.getCell(2).numFmt=money; rr.getCell(3).numFmt=money; }
+    if(no===12){ curTot=bn.cur; priTot=bn.pri; }
+    var tot=ns.addRow(['Total — Note '+no, curTot, priTot]);
+    tot.font={bold:true,size:9}; tot.getCell(2).numFmt=money; tot.getCell(3).numFmt=money;
+    tot.getCell(1).border={top:{style:'thin'}}; tot.getCell(2).border={top:{style:'thin'}}; tot.getCell(3).border={top:{style:'thin'}};
+    noteRow[no]=tot.number;
+    ns.addRow([]);
+  });
+  ns.views=[{state:'frozen',ySplit:1}];
+
+  // ---- Balance Sheet (links to Notes totals) ----
+  var bs=wb.addWorksheet('Balance Sheet');
+  bs.columns=[{width:52},{width:8},{width:16},{width:16}];
+  bs.addRow([entity]).getCell(1).font={bold:true,size:13};
+  bs.addRow(['Balance Sheet as at '+curLabel]).getCell(1).font={bold:true,size:11};
+  bs.addRow(['(All amounts in Indian Rupees)']).getCell(1).font={italic:true,size:9,color:{argb:'FF6B7280'}};
+  var bh=bs.addRow(['Particulars','Note','As at '+curLabel,'As at '+priLabel]); bh.eachCell(function(c){c.fill=head.fill;c.font=head.font;c.alignment=head.alignment;});
+  function faceLine(label,no){
+    var link = noteRow[no] ? {formula:"Notes!C"+noteRow[no]} : null;
+    var linkP = noteRow[no] ? {formula:"Notes!C"+noteRow[no]} : null; // placeholder, fixed below
+    var r=bs.addRow([label,no,null,null]);
+    r.font={size:10};
+    if(noteRow[no]){ r.getCell(3).value={formula:'Notes!B'+noteRow[no],result:(no===2?p.resCur:p.byNote[no].cur)}; r.getCell(4).value={formula:'Notes!C'+noteRow[no],result:(no===2?p.resPri:p.byNote[no].pri)}; }
+    r.getCell(3).numFmt=money; r.getCell(4).numFmt=money;
+    return r.number;
+  }
+  bs.addRow(['EQUITY AND LIABILITIES']).getCell(1).font={bold:true,size:10};
+  var elRows=[];
+  elRows.push(faceLine('Share capital',1));
+  elRows.push(faceLine('Reserves and surplus',2));
+  [4,5,6,7,8,9,10,11].forEach(function(n){ elRows.push(faceLine(NOTES[n].head,n)); });
+  var elTot=bs.addRow(['Total equity and liabilities','',{formula:elRows.map(function(x){return 'C'+x;}).join('+'),result:p.eqLiabCur},{formula:elRows.map(function(x){return 'D'+x;}).join('+'),result:p.eqLiabPri}]);
+  elTot.font={bold:true,size:10}; elTot.getCell(3).numFmt=money; elTot.getCell(4).numFmt=money; elTot.eachCell(function(c){c.border={top:{style:'thin'},bottom:{style:'double'}};});
+  bs.addRow([]);
+  bs.addRow(['ASSETS']).getCell(1).font={bold:true,size:10};
+  var aRows=[];
+  [12,13,14,15,16,17,18,19,20,21,22].forEach(function(n){ aRows.push(faceLine(NOTES[n].head,n)); });
+  var aTot=bs.addRow(['Total assets','',{formula:aRows.map(function(x){return 'C'+x;}).join('+'),result:p.assetsCur},{formula:aRows.map(function(x){return 'D'+x;}).join('+'),result:p.assetsPri}]);
+  aTot.font={bold:true,size:10}; aTot.getCell(3).numFmt=money; aTot.getCell(4).numFmt=money; aTot.eachCell(function(c){c.border={top:{style:'thin'},bottom:{style:'double'}};});
+  bs.addRow([]);
+  var chk=bs.addRow(['Difference (Assets − Equity & Liabilities) — should be nil','',{formula:'C'+aTot.number+'-C'+elTot.number,result:p.diffCur},{formula:'D'+aTot.number+'-D'+elTot.number,result:p.diffPri}]);
+  chk.font={italic:true,size:9,color:{argb:Math.abs(p.diffCur)<1?'FF16A34A':'FFDC2626'}}; chk.getCell(3).numFmt=money; chk.getCell(4).numFmt=money;
+  bs.views=[{state:'frozen',ySplit:4}];
+
+  // ---- Profit & Loss ----
+  var pl=wb.addWorksheet('Profit & Loss');
+  pl.columns=[{width:52},{width:8},{width:16},{width:16}];
+  pl.addRow([entity]).getCell(1).font={bold:true,size:13};
+  pl.addRow(['Statement of Profit and Loss for the year ended '+curLabel]).getCell(1).font={bold:true,size:11};
+  var ph=pl.addRow(['Particulars','Note','Year ended '+curLabel,'Year ended '+priLabel]); ph.eachCell(function(c){c.fill=head.fill;c.font=head.font;c.alignment=head.alignment;});
+  function plLine(label,no,c,pr){ var r=pl.addRow([label,no||'',c,pr]); r.font={size:10}; r.getCell(3).numFmt=money; r.getCell(4).numFmt=money; return r.number; }
+  var rIncA=plLine('Revenue from operations',23,p.byNote[23].cur,p.byNote[23].pri);
+  var rIncB=plLine('Other income',24,p.byNote[24].cur,p.byNote[24].pri);
+  var rIncT=pl.addRow(['Total income','',{formula:'C'+rIncA+'+C'+rIncB,result:p.incCur},{formula:'D'+rIncA+'+D'+rIncB,result:p.incPri}]); rIncT.font={bold:true}; rIncT.getCell(3).numFmt=money; rIncT.getCell(4).numFmt=money;
+  var e1=plLine('Cost of materials consumed',25,p.byNote[25].cur,p.byNote[25].pri);
+  var e2=plLine('Changes in inventories',26,p.byNote[26].cur,p.byNote[26].pri);
+  var e3=plLine('Employee benefits expense',27,p.byNote[27].cur,p.byNote[27].pri);
+  var e4=plLine('Finance costs',28,p.byNote[28].cur,p.byNote[28].pri);
+  var e5=plLine('Depreciation and amortization',12,p.depCur,p.depPri);
+  var e6=plLine('Other expenses',29,p.byNote[29].cur,p.byNote[29].pri);
+  var eT=pl.addRow(['Total expenses','',{formula:['C'+e1,'C'+e2,'C'+e3,'C'+e4,'C'+e5,'C'+e6].join('+'),result:p.expCur},{formula:['D'+e1,'D'+e2,'D'+e3,'D'+e4,'D'+e5,'D'+e6].join('+'),result:p.expPri}]); eT.font={bold:true}; eT.getCell(3).numFmt=money; eT.getCell(4).numFmt=money;
+  var pbt=pl.addRow(['Profit / (loss) before tax','',{formula:'C'+rIncT.number+'-C'+eT.number,result:p.pbtCur},{formula:'D'+rIncT.number+'-D'+eT.number,result:p.pbtPri}]); pbt.font={bold:true}; pbt.getCell(3).numFmt=money; pbt.getCell(4).numFmt=money; pbt.eachCell(function(c){c.border={top:{style:'thin'}};});
+  pl.views=[{state:'frozen',ySplit:3}];
+
+  // ---- Review sheet ----
+  var rev=wb.addWorksheet('Review');
+  rev.columns=[{width:38},{width:24},{width:16},{width:30}];
+  var rh=rev.addRow(['Ledger','Primary group','Closing (CY)','Placed in note']); rh.eachCell(function(c){c.fill=head.fill;c.font=head.font;c.alignment=head.alignment;});
+  TB.ledgers.filter(function(l){ return l._note===99 || overrides[l.name]!=null; }).forEach(function(l){
+    var r=rev.addRow([l.name,l.primary,l.current,'Note '+l._note+' · '+NOTES[l._note].head]); r.font={size:9}; r.getCell(3).numFmt=money;
+  });
+  if(rev.lastRow.number===1) rev.addRow(['(nothing needed review — every ledger placed with confidence)']);
+
+  wb.xlsx.writeBuffer().then(function(buf){
+    var a=document.createElement('a');
+    a.href=URL.createObjectURL(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+    a.download=(entity.replace(/[^A-Za-z0-9]+/g,'_')||'Financials')+'_ScheduleIII_'+curLabel+'.xlsx';
+    a.style.display='none'; document.body.appendChild(a); a.click();
+    setTimeout(function(){a.remove();URL.revokeObjectURL(a.href);},1500);
+    document.getElementById('msgPrep').innerHTML='<span class="msg ok">✅ Working paper downloaded — Balance Sheet, P&L, Notes, Trial Balance (with remarks) and Review sheets.</span>';
+  });
+}
+</script>
+</body>
+</html>

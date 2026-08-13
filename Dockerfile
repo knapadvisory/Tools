@@ -20,6 +20,7 @@ COPY fee-parser/ ./fee-parser/
 COPY gstr2b/ ./gstr2b/
 COPY audit/ ./audit/
 COPY tds26as/ ./tds26as/
+COPY finprep/ ./finprep/
 COPY gstr1/ ./gstr1/
 COPY gstr1-engine/ ./gstr1-engine/
 COPY connector/ ./connector/

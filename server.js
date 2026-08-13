@@ -214,6 +214,10 @@ app.use('/tds26as', express.static(path.join(__dirname, 'tds26as'), {
   setHeaders: (res) => res.set(NO_CACHE),
 }));
 
+app.use('/finprep', express.static(path.join(__dirname, 'finprep'), {
+  setHeaders: (res) => res.set(NO_CACHE),
+}));
+
 // ------------------------------------------------------ GSTR-1 summary tool
 // The proven single-file tool runs UNMODIFIED as an internal child process on
 // 127.0.0.1:8788; its page is hosted at /gstr1/ and its API reached through
