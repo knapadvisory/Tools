@@ -198,7 +198,7 @@ var fmt=function(n){ return n==null?'':Number(n).toLocaleString('en-IN',{minimum
 var r2=function(n){ return Math.round(n*100)/100; };
 
 /* ================= state ================= */
-var raw26=[], header26=null, bookEntries=[], tdsMap={}, recResult=[], connVer='';
+var raw26=[], header26=null, bookEntries=[], tdsMap={}, recResult=[], connVer='', lastParties=null;
 
 /* ================= connector ================= */
 function checkConn(){
@@ -246,6 +246,9 @@ function updateConnector(){
       if(h){ el.style.display='flex'; el.innerHTML='<span><b>Assessee</b>'+(h.name||'—')+'</span><span><b>PAN</b>'+(h.pan||'—')+'</span><span><b>FY</b>'+(h.fy||'—')+'</span><span><b>AY</b>'+(h.ay||'—')+'</span>';
         var m=(h.fy||'').match(/^(\d{4})/); if(m){ document.getElementById('from').value=m[1]+'-04-01'; document.getElementById('to').value=(+m[1]+1)+'-03-31'; } }
       document.getElementById('msg26').textContent=raw26.length?'':'No Part-I/VI transactions found — is this the TRACES text-format 26AS?';
+      // 26AS dropped after the Tally read: rebuild the map panel so the TAN
+      // suggestions (matched against these deductors) appear.
+      if(lastParties)buildMapping(lastParties);
     };
     r.readAsText(f);
   }
@@ -303,8 +306,10 @@ function suggestFor(party){
   return {tan:best.tan,name:best.name,section:topSec};
 }
 function buildMapping(parties){
+  lastParties=parties;
   var wrap=document.getElementById('mapWrap'); var names=Object.keys(parties).sort(function(a,b){return parties[b]-parties[a];});
-  var h='<table><thead><tr><th>Tally party</th><th class="r">Books TDS</th><th>TAN</th><th>Section</th><th>Suggestion (from 26AS)</th></tr></thead><tbody>';
+  var h=raw26.length?'':'<div class="msg">⚠ Drop the 26AS (step 1) to get TAN suggestions matched from its deductor list.</div>';
+  h+='<table><thead><tr><th>Tally party</th><th class="r">Books TDS</th><th>TAN</th><th>Section</th><th>Suggestion (from 26AS)</th></tr></thead><tbody>';
   names.forEach(function(n,i){
     var saved=tdsMap[n]||{}; var sug=(!saved.tan)?suggestFor(n):null;
     h+='<tr class="maprow"><td>'+n+'</td><td class="r">'+fmt(r2(parties[n]))+'</td>'+

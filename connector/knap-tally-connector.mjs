@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '2.6';
+const VERSION = '2.7';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -1833,6 +1833,10 @@ const server = http.createServer(async (req, res) => {
       if (!from || !to || from > to) { json(res, 400, { ok: false, error: 'Bad period.' }); return; }
       const pat = new RegExp(String(body.pattern || 'tds.*receivable').trim() || 'tds.*receivable', 'i');
       const entries = [];
+      // Tally's collection export can emit the same voucher block several
+      // times (seen in the field: every entry exactly 4×). Dedupe by GUID,
+      // falling back to a full signature for GUID-less blocks.
+      const seenV = new Set();
       let months = 0, vouchers = 0;
       try {
         for (let d = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 1)); d <= to;
@@ -1844,7 +1848,6 @@ const server = http.createServer(async (req, res) => {
           months++;
           for (const block of xml.match(/<VOUCHER[\s>][\s\S]*?<\/VOUCHER>/gi) || []) {
             if (/<ISCANCELLED>\s*Yes/i.test(block) || /<ISOPTIONAL>\s*Yes/i.test(block)) continue;
-            vouchers++;
             const legs = [];
             for (const e of block.match(/<(?:ALL)?LEDGERENTRIES\.LIST>[\s\S]*?<\/(?:ALL)?LEDGERENTRIES\.LIST>/gi) || []) {
               const name = tag(e, 'LEDGERNAME');
@@ -1852,6 +1855,12 @@ const server = http.createServer(async (req, res) => {
             }
             const tdsLegs = legs.filter((l) => pat.test(l.name));
             if (!tdsLegs.length) continue;
+            const vid = tag(block, 'GUID') ||
+              (tag(block, 'DATE') + '|' + tag(block, 'VOUCHERTYPENAME') + '|' + tag(block, 'VOUCHERNUMBER') + '|' +
+               legs.map((l) => l.name + '=' + l.amt).join(';'));
+            if (seenV.has(vid)) continue;
+            seenV.add(vid);
+            vouchers++;
             const date = tallyDateOf(tag(block, 'DATE'));
             const partyTag = tag(block, 'PARTYLEDGERNAME');
             for (const tl of tdsLegs) {
