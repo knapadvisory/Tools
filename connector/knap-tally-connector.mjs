@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.0';
+const VERSION = '4.1';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -406,7 +406,7 @@ const GROUPS_REQUEST = () => `<ENVELOPE>
   <TDL><TDLMESSAGE>
    <COLLECTION NAME="KnapGroups" ${COLL_ATTRS}>
     <TYPE>Group</TYPE>
-    <FETCH>NAME</FETCH><FETCH>PARENT</FETCH><FETCH>ISREVENUE</FETCH><FETCH>ISDEEMEDPOSITIVE</FETCH>
+    <FETCH>NAME</FETCH><FETCH>PARENT</FETCH><FETCH>ISREVENUE</FETCH><FETCH>ISDEEMEDPOSITIVE</FETCH><FETCH>RESERVEDNAME</FETCH>
    </COLLECTION>
   </TDLMESSAGE></TDL>
  </DESC></BODY>
@@ -619,9 +619,26 @@ function parseGroups(xml) {
       parent: decodeXml(tag(b, 'PARENT')).trim(),
       isRevenue: /yes/i.test(tag(b, 'ISREVENUE')),
       isDeemedPositive: /yes/i.test(tag(b, 'ISDEEMEDPOSITIVE')),
+      // Tally's canonical name for a reserved group — STABLE across every
+      // company even if the client renamed the display name or uses another
+      // language. Empty for user-created groups. This is the backbone the
+      // financials tool classifies on, so a client's custom sub-groups don't
+      // matter — only which reserved group they ultimately sit under.
+      reserved: decodeXml(tag(b, 'RESERVEDNAME')).trim(),
     };
   }
   return out;
+}
+// The canonical reserved-group chain a ledger's group rolls up through, nearest
+// first (skipping the client's own custom groups, which have no reserved name),
+// e.g. a ledger under "Trade Creditors — Delhi" → ["Sundry Creditors",
+// "Current Liabilities"]. Lets classification key off Tally's fixed skeleton.
+function reservedChainOf(groupName, groups, depth = 0) {
+  if (!groupName || depth > 30) return [];
+  const g = groups[groupName];
+  const here = g && g.reserved ? [g.reserved] : [];
+  if (isPrimaryGroup(g)) return here;
+  return here.concat(reservedChainOf(g.parent, groups, depth + 1));
 }
 
 // A Tally primary (reserved top-level) group: no parent, or its parent is
@@ -2378,6 +2395,7 @@ const server = http.createServer(async (req, res) => {
           return {
             name, group: m.parent, primary: primaryGroupOf(m.parent, groups),
             groupPath: path,                  // full "Booked under" chain, ledger → primary
+            reservedPath: reservedChainOf(m.parent, groups), // Tally's canonical reserved names (client-independent)
             gstin: m.gstin || '',             // party GSTIN from the master (sharpens classification)
             opening: r2(open),                // stored master opening balance (Dr +)
             isRevenue: !!(groups[m.parent] && anyRevenueAncestor(m.parent)),

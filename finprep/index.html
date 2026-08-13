@@ -489,6 +489,7 @@ function has(s,arr){ s=(s||'').toLowerCase(); return arr.some(function(k){return
    inside "unsecured loan" — while plurals still match ("sales account" hits
    "sales accounts"). Used for reserved Tally group names. */
 function hasG(s,arr){ s=(s||'').toLowerCase(); return arr.some(function(k){ return new RegExp('\\b'+k.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).test(s); }); }
+function normRes(s){ return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(); }
 /* returns {note, conf:'high'|'low', reason} — classified from the FULL Tally
    "booked under" chain (every ancestor group name), so a ledger parked under
    "Sales Accounts" is Revenue even when the resolved primary is noisy. */
@@ -505,6 +506,44 @@ function classifyFull(led){
   var gstOK=!!(led.gstin && GSTIN_RX.test(String(led.gstin).toUpperCase()));
   var cr=(led.current||0)<0;                    // credit balance?
   function R(note,conf,reason){ return {note:note,conf:conf,reason:reason}; }
+  function expNote(){ // split an expense group by ledger name
+    if(has(gn,['salar','wages','bonus','staff','employee','provident',' pf ','gratuity','esi','leave encash','remuneration','stipend','payroll','director sitting'])) return R(27,'high','Employee benefits');
+    if(has(gn,['depreciation','amortis','amortiz'])) return R(12,'high','Depreciation');
+    if(has(gn,['interest','finance cost','bank charge','processing fee','loan processing'])) return R(28,'high','Finance costs');
+    return R(29,'high','Other expenses');
+  }
+  // ===== Reserved-group backbone: Tally's canonical group names are identical
+  // across every company (regardless of who set the books up), so this classifies
+  // deterministically off the reserved skeleton, not the client's custom names.
+  // Only "Current Assets"/"Current Liabilities" primaries defer to the sign/GSTIN
+  // refinement below. =====
+  var rp=led.reservedPath||[];
+  for(var i=0;i<rp.length;i++){
+    var rr=normRes(rp[i]), nm='reserved “'+rp[i]+'” → ';
+    if(rr==='sundry creditors') return R(9,'high',nm+'Trade payables');
+    if(rr==='sundry debtors') return R(19,'high',nm+'Trade receivables');
+    if(rr==='bank accounts'||rr==='cash in hand') return R(20,'high',nm+'Cash & equivalents');
+    if(rr==='bank occ a c'||rr==='bank od a c'||rr==='bank occ'||rr==='bank od') return R(8,'high',nm+'Short-term borrowings');
+    if(rr==='secured loans'||rr==='unsecured loans') return R(4,'high',nm+'Long-term borrowings');
+    if(rr==='stock in hand') return R(18,'high',nm+'Inventories');
+    if(rr==='deposits asset'||rr==='deposit asset') return R(15,'high',nm+'Long-term loans & advances');
+    if(rr==='loans advances asset'||rr==='loans amp advances asset') return R(21,'high',nm+'Short-term loans & advances');
+    if(rr==='provisions') return cr?R(11,'high',nm+'Short-term provisions'):R(21,'high',nm+'Short-term loans & advances');
+    if(rr==='duties taxes') return cr?R(10,'high',nm+'Other current liabilities'):R(22,'high',nm+'Other current assets (input tax)');
+    if(rr==='reserves surplus') return R(2,'high',nm+'Reserves and surplus');
+    if(rr==='investments') return has(gn,['current','short','mutual fund','liquid'])?R(17,'high',nm+'Current investments'):R(13,'high',nm+'Non-current investments');
+    if(rr==='fixed assets') return R(12,'high',nm+'Property, Plant & Equipment');
+    if(rr==='misc expenses asset'||rr==='misc expenses assets') return R(16,'high',nm+'Other non-current assets');
+    if(rr==='sales accounts') return R(23,'high',nm+'Revenue from operations');
+    if(rr==='purchase accounts') return R(25,'high',nm+'Cost of materials');
+    if(rr==='direct incomes'||rr==='direct income') return R(23,'high',nm+'Revenue from operations');
+    if(rr==='indirect incomes'||rr==='indirect income') return R(24,'high',nm+'Other income');
+    if(rr==='direct expenses'||rr==='indirect expenses'){ var e=expNote(); return R(e.note,'high',nm+NOTES[e.note].head); }
+    if(rr==='capital account') return has(gn,['reserve','surplus','retained','p l','profit'])?R(2,'high',nm+'Reserves and surplus'):R(1,'high',nm+'Share capital');
+    if(rr==='loans liability') return R(4,'high',nm+'Long-term borrowings');
+    if(rr==='suspense a c'||rr==='branch divisions') return R(99,'low',nm+'assign a head');
+    // 'current assets' / 'current liabilities' → fall through to the refinement below
+  }
   // ---------- P&L nature (from the connector's ISREVENUE walk OR the chain) ----------
   var isRev = led.isRevenue || hasG(path,['sales account','purchase account','direct income','indirect income','direct expense','indirect expense']);
   if(isRev){
