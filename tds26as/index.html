@@ -68,6 +68,7 @@
 <header class="site-head"><div class="site-head-inner">
   <span class="brand">🧮 TDS × 26AS Reconciler</span>
   <a class="back" href="/">← All tools</a>
+  <button type="button" id="conn-upd" onclick="updateConnector()" style="font:inherit;font-size:12.5px;font-weight:600;padding:6px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.35);background:transparent;color:#fff;cursor:pointer" title="Fetch the newest connector from the server right now">⟳ Update connector</button>
 </div></header>
 
 <main>
@@ -95,7 +96,6 @@
       <label>Ledger name contains <input type="text" class="small" id="pattern" value="TDS Receivable" title="Regular expression matched against ledger names"></label>
       <button class="btn primary" id="readBtn">📖 Read from Tally</button>
       <span style="white-space:nowrap;font-size:12.5px"><span id="tally-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#c3ccd8;margin-right:5px"></span><span id="tally-status" class="msg" style="margin:0">checking connector…</span></span>
-      <button class="btn" id="conn-upd" style="padding:5px 12px;font-size:12px" onclick="updateConnector()">⟳ Update connector</button>
     </div>
     <div class="msg" id="msgTally"></div>
     <div id="bookStats" class="stats hidden"></div>

@@ -85,7 +85,9 @@
 <header>
   <h1>🧾 Tally Statutory Audit Assistant</h1>
   <span class="sub">every ledger · every voucher · graded findings · <a href="/" style="color:inherit">← all tools</a></span>
-  <span style="margin-left:auto"><span class="dot" id="tdot"></span><span id="tstat" class="sub">checking Tally…</span></span>
+  <span style="margin-left:auto"><span class="dot" id="tdot"></span><span id="tstat" class="sub">checking Tally…</span>
+  <button type="button" id="conn-upd" onclick="updateConnector()" style="font:inherit;font-size:12px;font-weight:600;margin-left:10px;padding:5px 12px;border-radius:8px;border:1px solid #cbd5e1;background:#fff;cursor:pointer" title="Fetch the newest connector + audit engine from the server right now">⟳ Update connector</button>
+  <span id="upd-msg" style="font-size:12px;color:#64748b;margin-left:8px"></span></span>
 </header>
 <main>
   <div class="card">
@@ -158,6 +160,27 @@
 // is the KNAP Tally Audit Engine, run on THIS computer by the KNAP Tally
 // Connector. All books data flows browser ↔ engine ↔ Tally — never the server.
 var AUDIT_API = localStorage.getItem('knap_audit_url') || 'http://127.0.0.1:8799';
+var CONN_API = localStorage.getItem('knap_connector_url') || 'http://127.0.0.1:8797';
+
+// Header button: update the connector (which supervises the audit engine) now.
+function updateConnector() {
+  var el = document.getElementById('conn-upd'), msg = document.getElementById('upd-msg');
+  el.disabled = true; el.textContent = '⏳ Updating…'; msg.textContent = '';
+  fetch(CONN_API + '/health').then(function (r) { return r.json(); }).then(function (h) {
+    var was = h.version || '';
+    return fetch(CONN_API + '/update', { method: 'POST' }).then(function (resp) {
+      if (!resp.ok) { el.disabled = false; el.textContent = '⟳ Update connector'; msg.textContent = 'Connector v' + was + ' is too old for one-click update — re-run the installer once.'; return; }
+      var tries = 0;
+      var t = setInterval(function () {
+        tries++;
+        fetch(CONN_API + '/health').then(function (r) { return r.json(); }).then(function (h2) {
+          if (h2.version && h2.version !== was) { clearInterval(t); el.disabled = false; el.textContent = '⟳ Update connector'; msg.textContent = '✅ Updated to v' + h2.version + ' — reload this page.'; }
+        }).catch(function () {});
+        if (tries > 30) { clearInterval(t); el.disabled = false; el.textContent = '⟳ Update connector'; msg.textContent = 'Already the newest (v' + was + ').'; }
+      }, 3000);
+    });
+  }).catch(function () { el.disabled = false; el.textContent = '⟳ Update connector'; msg.textContent = 'Connector not reachable on this computer.'; });
+}
 
 // One-time setup screen when no engine answers on this machine.
 (function () {
