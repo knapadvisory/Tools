@@ -353,7 +353,10 @@ function ensureProgressWatcher() {
       if (!p.active) {
         clearInterval(progWatch);
         progWatch = null;
-        prog.style.display = 'none';
+        // Say DONE where the progress was, instead of vanishing silently.
+        document.getElementById('reco-fill').style.width = '100%';
+        document.getElementById('reco-ptext').innerHTML = '<b style="color:var(--ok,#16a34a)">✅ Reconciliation done</b> — results are updated below.';
+        setTimeout(function () { prog.style.display = 'none'; }, 7000);
         autoPoll();
         checkTally();
         return;
@@ -1179,7 +1182,7 @@ function renderRecoSummary(c) {
     (s.matchedPct != null ? ' <span class="muted">· ' + s.matchedPct + '% of eligible ITC matched</span>' : '') +
     '<span class="muted"> · tick the not-booked ones (☑ button above) and Post to Tally to book them.</span>' +
     '<div style="margin-top:12px"><button type="button" class="btn primary" style="padding:10px 22px;font-size:14.5px;font-weight:700;box-shadow:0 2px 8px rgba(21,94,239,.35)" onclick="downloadRecoExcel()">📊 Download Excel summary (working paper)</button>' +
-    ' <button type="button" class="btn" style="padding:10px 22px;font-size:14.5px;font-weight:700" onclick="downloadRecoSheet()" title="One sheet, 2B row beside its books voucher: GSTIN / name / taxable / GST / voucher checks as live formulas, remarks per row, summary by remark, filter-aware totals">📋 Reco sheet (2B vs Books)</button>' +
+    ' <button type="button" class="btn" style="padding:10px 22px;font-size:14.5px;font-weight:700;background:#0e7490;border-color:#0e7490;color:#fff;box-shadow:0 2px 8px rgba(14,116,144,.35);cursor:pointer" onclick="downloadRecoSheet()" title="One sheet, 2B row beside its books voucher: GSTIN / name / taxable / GST / voucher checks as live formulas, remarks per row, summary by remark, filter-aware totals. Credit notes get their own sheet.">📋 Reco sheet (2B vs Books)</button>' +
     (ownList().length > 1 ? '<span class="muted" style="font-size:12px;margin-left:10px">the Excel follows the registration chip — pick one GSTIN for a per-registration report, or All for combined (every sheet also carries a Regn column)</span>' : '') +
     '</div>';
   if ((s.byOwn || []).length) {
@@ -1322,7 +1325,7 @@ function buildRecoSheet() {
     var tax2b = r2((d.igst || 0) + (d.cgst || 0) + (d.sgst || 0) + (d.cess || 0));
     var docNo = (d.type === 'creditnote' ? 'CN: ' : d.type === 'debitnote' ? 'DN: ' : '') + (d.no || '');
     rows.push({
-      x: { own: d.own || r.own || '', gstin: d.gstin || '', party: d.name || '', no: docNo, pd: rsDate(d.date || d.dt), val: d.val ?? '', txval: d.txval ?? '', igst: d.igst || 0, cgst: d.cgst || 0, sgst: d.sgst || 0, tax: tax2b, rcm: d.rcm ? 'Yes' : '', period: d.period || '' },
+      x: { own: d.own || r.own || '', gstin: d.gstin || '', party: d.name || '', no: docNo, pd: rsDate(d.date || d.dt), val: d.val ?? '', txval: d.txval ?? '', igst: d.igst || 0, cgst: d.cgst || 0, sgst: d.sgst || 0, tax: tax2b, rcm: d.rcm ? 'Yes' : '', period: d.period || '', isCN: d.type === 'creditnote' },
       b: r.bookRef != null && r.bookRef !== '' ? { regn: r.bookRegn || '', gstin: r.bookGstin || '', pd: rsDate(r.bookDate), party: r.bookParty || '', vch: r.bookRef || '', igst: (typeof r.bookIgst === 'number' ? r.bookIgst : null), cgst: (typeof r.bookCgst === 'number' ? r.bookCgst : null), sgst: (typeof r.bookSgst === 'number' ? r.bookSgst : null), tax: (typeof r.bookTax === 'number' ? r.bookTax : null), txval: (typeof r.bookTaxable === 'number' ? r.bookTaxable : null) } : null,
       rem: rsRemark(r), note: r.note || '',
     });
@@ -1342,7 +1345,25 @@ function buildRecoSheet() {
     return vb - va;
   });
 
-  var wb = new ExcelJS.Workbook(), ws = wb.addWorksheet('reconciled');
+  var wb = new ExcelJS.Workbook();
+  // Credit notes reduce ITC, so they get their own sheet — mixing them into
+  // the invoice totals with a positive sign would overstate the 2B claim.
+  var cnRows = rows.filter(function (r) { return r.x && r.x.isCN; });
+  var mainRows = rows.filter(function (r) { return !(r.x && r.x.isCN); });
+  addRecoSheet(wb, 'reconciled', mainRows, true);
+  if (cnRows.length) addRecoSheet(wb, 'Credit Notes', cnRows, false);
+  wb.xlsx.writeBuffer().then(function (buf) {
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    a.download = 'gstr2b-books-reco-sheet.xlsx'; a.style.display = 'none';
+    document.body.appendChild(a); a.click();
+    setTimeout(function () { a.remove(); URL.revokeObjectURL(a.href); }, 1500);
+    document.getElementById('bar-msg').textContent = '✅ Reco sheet downloaded' + (cnRows.length ? ' — invoices on "reconciled", ' + cnRows.length + ' credit note(s) on their own sheet.' : '.');
+  });
+}
+
+function addRecoSheet(wb, sheetName, rows, withBridge) {
+  var ws = wb.addWorksheet(sheetName);
   ws.columns = [{ width: 17 }, { width: 18 }, { width: 24 }, { width: 16 }, { width: 11 }, { width: 13 }, { width: 13 }, { width: 11 }, { width: 11 }, { width: 11 }, { width: 11 }, { width: 7 }, { width: 9 }, { width: 12 }, { width: 11 }, { width: 12 }, { width: 13 }, { width: 12 }, { width: 11 }, { width: 26 }, { width: 17 }, { width: 18 }, { width: 11 }, { width: 24 }, { width: 16 }, { width: 11 }, { width: 11 }, { width: 11 }, { width: 13 }, { width: 14 }, { width: 46 }];
   // The per-head columns sit in collapsible groups (the +/− buttons above the
   // sheet) so the default view stays as compact as the original reco tool.
@@ -1424,6 +1445,7 @@ function buildRecoSheet() {
   ws.getCell('E' + rr).value = { formula: 'SUM(E' + first + ':E' + (rr - 1) + ')', result: r2(sAc) }; ws.getCell('E' + rr).numFmt = '#,##0.00';
   ['B', 'C', 'D', 'E'].forEach(function (col) { var c = ws.getCell(col + rr); c.font = { bold: true, size: 9 }; c.border = { top: { style: 'thin' } }; });
   // ---- How the gap is made up (the original tool's on-screen bridge, as live formulas)
+  if (withBridge) {
   var nbAc = 0, boAc = 0;
   rows.forEach(function (r) {
     var ac = ((r.x ? r.x.tax : 0) || 0) - ((r.b && typeof r.b.tax === 'number') ? r.b.tax : 0);
@@ -1448,18 +1470,13 @@ function buildRecoSheet() {
     if (i === 3) { ws.getCell('B' + R).border = { top: { style: 'thin' } }; ws.getCell('E' + R).border = { top: { style: 'thin' } }; }
   });
   rr = b4 + 1;
-  ws.getCell('B' + (rr + 1)).value = 'GST-check total = Σ(GST 2B − GST as per Books) = the reconciliation gap. Filter column T (remarks) or A (registration) and the TOTAL row follows. The +/− buttons above the sheet collapse the IGST/CGST/SGST columns.';
+  }
+  ws.getCell('B' + (rr + 1)).value = (sheetName === 'Credit Notes'
+    ? 'CREDIT NOTES — these REDUCE the ITC claim; amounts shown as printed in the 2B. Matched against Debit Note vouchers in the books. '
+    : '') + 'GST-check total = Σ(GST 2B − GST as per Books) = the reconciliation gap. Filter column T (remarks) or A (registration) and the TOTAL row follows. The +/− buttons above the sheet collapse the IGST/CGST/SGST columns.';
   ws.getCell('B' + (rr + 1)).font = { italic: true, size: 8, color: { argb: 'FF6B7280' } };
   ws.autoFilter = 'A1:AE' + last;
   ws.views = [{ state: 'frozen', ySplit: 1 }];
-  wb.xlsx.writeBuffer().then(function (buf) {
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
-    a.download = 'gstr2b-books-reco-sheet.xlsx'; a.style.display = 'none';
-    document.body.appendChild(a); a.click();
-    setTimeout(function () { a.remove(); URL.revokeObjectURL(a.href); }, 1500);
-    document.getElementById('bar-msg').textContent = '✅ Reco sheet downloaded.';
-  });
 }
 
 function downloadRecoExcel() {
