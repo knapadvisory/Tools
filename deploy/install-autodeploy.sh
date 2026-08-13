@@ -8,8 +8,15 @@
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
-( crontab -l 2>/dev/null | grep -v 'knap.*auto-redeploy\|Tools/deploy/auto-redeploy'; \
-  echo "*/2 * * * * bash $DIR/deploy/auto-redeploy.sh" ) | crontab -
+# NOTE: every `|| true` here is load-bearing. On a server with an EMPTY
+# crontab, `crontab -l` and the filtering grep both exit non-zero, and under
+# set -e that silently killed the script before anything was installed.
+EXISTING="$(crontab -l 2>/dev/null | grep -v 'knap.*auto-redeploy\|Tools/deploy/auto-redeploy' || true)"
+{ [ -n "$EXISTING" ] && printf '%s\n' "$EXISTING"; \
+  echo "*/2 * * * * bash $DIR/deploy/auto-redeploy.sh"; } | crontab -
+
+echo "Installed cron line:"
+crontab -l | grep 'auto-redeploy'
 
 touch /var/log/knap-tools-redeploy.log
 echo "============================================================"
