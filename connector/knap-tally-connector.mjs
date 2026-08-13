@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '3.3';
+const VERSION = '3.4';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -441,6 +441,43 @@ function tallyAmt(raw) {
   if (cr) n = -Math.abs(n);
   else if (dr) n = Math.abs(n);
   return r2(n);
+}
+
+// Company period — master data (no balance computation), so it's fast like the
+// group read. Tells us the real books range so we never ask Tally for balances
+// at dates outside its data (which hangs Tally).
+const FIN_COMPANY_REQUEST = () => `<ENVELOPE>
+ <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>KnapCompany</ID></HEADER>
+ <BODY><DESC>
+  <STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>${svCompany()}</STATICVARIABLES>
+  <TDL><TDLMESSAGE>
+   <COLLECTION NAME="KnapCompany" ISMODIFY="No">
+    <TYPE>Company</TYPE>
+    <FETCH>NAME</FETCH><FETCH>STARTINGFROM</FETCH><FETCH>BOOKSFROM</FETCH><FETCH>ENDINGAT</FETCH><FETCH>LASTVOUCHERDATE</FETCH>
+   </COLLECTION>
+  </TDLMESSAGE></TDL>
+ </DESC></BODY>
+</ENVELOPE>`;
+
+// Tally dates in XML export come as "YYYYMMDD" or "1-Apr-2026" — normalise to
+// a Date (UTC midnight) or null.
+function parseTallyFieldDate(v) {
+  const s = String(v || '').trim();
+  let m = s.match(/^(\d{4})(\d{2})(\d{2})$/);
+  if (m) return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  const MON = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+  m = s.match(/^(\d{1,2})[-\/ ]([A-Za-z]{3})[-\/ ](\d{4})$/);
+  if (m) return new Date(Date.UTC(+m[3], MON[m[2].toLowerCase()], +m[1]));
+  return null;
+}
+function parseCompany(xml) {
+  const b = (xml.match(/<COMPANY[\s>][\s\S]*?<\/COMPANY>/i) || [])[0] || xml;
+  const name = decodeXml((b.match(/<COMPANY[^>]*\sNAME="([^"]*)"/i)?.[1] ?? tag(b, 'NAME'))).trim();
+  const start = parseTallyFieldDate(tag(b, 'STARTINGFROM')) || parseTallyFieldDate(tag(b, 'BOOKSFROM'));
+  const booksFrom = parseTallyFieldDate(tag(b, 'BOOKSFROM')) || start;
+  const lastVch = parseTallyFieldDate(tag(b, 'LASTVOUCHERDATE'));
+  const endingAt = parseTallyFieldDate(tag(b, 'ENDINGAT'));
+  return { name, start, booksFrom, lastVch, endingAt };
 }
 
 function parseGroups(xml) {
@@ -2028,15 +2065,27 @@ const server = http.createServer(async (req, res) => {
       json(res, 200, finProgress);
       return;
     }
+    // Company + its books period (fast master read) so the page can default to
+    // dates that are actually inside the data.
+    if (req.method === 'GET' && url.pathname === '/api/fin/company') {
+      try {
+        const c = parseCompany(await askTallyFast(state.settings.tallyUrl, FIN_COMPANY_REQUEST(), 15000));
+        json(res, 200, {
+          ok: true, name: c.name,
+          start: c.start ? c.start.toISOString().slice(0, 10) : null,
+          lastVoucher: c.lastVch ? c.lastVch.toISOString().slice(0, 10) : null,
+          endingAt: c.endingAt ? c.endingAt.toISOString().slice(0, 10) : null,
+        });
+      } catch (e) {
+        json(res, 200, { ok: false, error: String((e && e.message) || e) });
+      }
+      return;
+    }
     // Diagnostic: probe the FAST candidate ways to get balances (the bulk
     // ClosingBalance collection is known-slow), returning exactly what Tally
     // replies so we can pick the working method and parse its real structure.
     if (req.method === 'POST' && url.pathname === '/api/fin/diag') {
-      const body0 = await readBody(req).catch(() => '{}');
-      let dates = {}; try { dates = JSON.parse(body0 || '{}'); } catch { /* */ }
-      const from = String(dates.from || '20250401').replace(/-/g, '');
-      const to = String(dates.to || '20260331').replace(/-/g, '');
-      const probe = async (label, body, ms = 20000, sampleLen = 2400) => {
+      const probe = async (label, body, ms = 20000, sampleLen = 2200) => {
         const t0 = Date.now();
         try {
           const xml = await askTallyFast(state.settings.tallyUrl, body, ms);
@@ -2045,14 +2094,28 @@ const server = http.createServer(async (req, res) => {
           return { label, ok: false, ms: Date.now() - t0, error: String((e && e.message) || e) };
         }
       };
-      // A) ledger masters with OpeningBalance only (stored field -> should be fast)
-      const openReq = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>KnapLedgersOpen</ID></HEADER><BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT><SVFROMDATE>${from}</SVFROMDATE><SVTODATE>${to}</SVTODATE>${svCompany()}</STATICVARIABLES><TDL><TDLMESSAGE><COLLECTION NAME="KnapLedgersOpen" ISMODIFY="No"><TYPE>Ledger</TYPE><FETCH>NAME</FETCH><FETCH>PARENT</FETCH><FETCH>OPENINGBALANCE</FETCH></COLLECTION></TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
-      // B) native Trial Balance report (Tally computes balances in bulk -> fast)
-      const tbReport = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Data</TYPE><ID>Trial Balance</ID></HEADER><BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT><SVFROMDATE>${from}</SVFROMDATE><SVTODATE>${to}</SVTODATE><EXPLODEFLAG>Yes</EXPLODEFLAG>${svCompany()}</STATICVARIABLES></DESC></BODY></ENVELOPE>`;
+      // Step 1: detect the company's real books period (fast master read).
+      const companyProbe = await probe('0) Company period', FIN_COMPANY_REQUEST(), 15000);
+      let comp = null;
+      try { comp = parseCompany(companyProbe.sample ? await askTallyFast(state.settings.tallyUrl, FIN_COMPANY_REQUEST(), 15000) : ''); } catch { /* */ }
+      // Use the DETECTED period (not the caller's dates) so we never ask for
+      // balances outside the data — the very thing that hangs Tally.
+      const to = comp && comp.lastVch ? toTallyDate(comp.lastVch)
+        : comp && comp.endingAt ? toTallyDate(comp.endingAt) : '20260331';
+      const from = comp && comp.start ? toTallyDate(comp.start) : '20250401';
+      // A) ledger closing balances at the DETECTED to-date
+      const closeReq = LEDGERS_BAL_REQUEST(tallyDateOf(to) || new Date());
+      // B) ledger masters + OpeningBalance at the detected period
+      const openReq = `<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>KnapLedgersOpen</ID></HEADER><BODY><DESC><STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT><SVFROMDATE>${from}</SVFROMDATE><SVTODATE>${to}</SVTODATE>${svCompany()}</STATICVARIABLES><TDL><TDLMESSAGE><COLLECTION NAME="KnapLedgersOpen" ISMODIFY="No"><TYPE>Ledger</TYPE><FETCH>NAME</FETCH><FETCH>PARENT</FETCH><FETCH>OPENINGBALANCE</FETCH><FETCH>CLOSINGBALANCE</FETCH></COLLECTION></TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>`;
       const out = {
-        tallyUrl: state.settings.tallyUrl, company: state.settings.company || '(none set)', version: VERSION, from, to,
-        A_ledgerMastersOpening: await probe('A) Ledger masters + OpeningBalance', openReq),
-        B_trialBalanceReport: await probe('B) Trial Balance report (native)', tbReport),
+        tallyUrl: state.settings.tallyUrl, company: state.settings.company || '(active company)', version: VERSION,
+        detectedCompany: comp ? comp.name : '(unknown)',
+        detectedPeriod: (from && to) ? (from + ' → ' + to) : '(unknown)',
+        detectedStart: comp && comp.start ? comp.start.toISOString().slice(0, 10) : null,
+        detectedLastVoucher: comp && comp.lastVch ? comp.lastVch.toISOString().slice(0, 10) : null,
+        company0: companyProbe,
+        A_ledgerClosingAtDetectedDate: await probe('A) Ledger closing balances @ detected to-date', closeReq),
+        B_ledgerOpenClose: await probe('B) Ledger open+close @ detected period', openReq),
       };
       json(res, 200, { ok: true, diag: out });
       return;

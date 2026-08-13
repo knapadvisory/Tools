@@ -133,7 +133,8 @@ function checkConn(){
     document.getElementById('tally-dot').style.background='var(--ok)';
     document.getElementById('tally-status').textContent='connector v'+connVer;
     document.getElementById('conn-ver').textContent='· connector v'+connVer;
-    if(parseFloat(connVer)<3.2) document.getElementById('msgTally').innerHTML='This tool needs connector <b>v3.2+</b> — press ⟳ Update connector.';
+    if(parseFloat(connVer)<3.4){ document.getElementById('msgTally').innerHTML='This tool needs connector <b>v3.4+</b> — press ⟳ Update connector.'; return; }
+    detectCompany();
   }).catch(function(){
     document.getElementById('tally-dot').style.background='var(--bad)';
     document.getElementById('tally-status').innerHTML='connector not found — <a href="/connector/Install-Tally-Connector.bat" download>install it</a> on this PC';
@@ -156,9 +157,24 @@ function updateConnector(){
   }).catch(function(){ el.disabled=false; el.textContent='⟳ Update connector'; });
 }
 
-/* default dates: current & prior 31 March */
+/* default dates: current & prior 31 March (overridden by detectCompany once Tally answers) */
 (function(){ var now=new Date(); var y=now.getMonth()>=3?now.getFullYear():now.getFullYear()-1;
   document.getElementById('asOn').value=y+'-03-31'; document.getElementById('priorAsOn').value=(y-1)+'-03-31'; })();
+
+/* Ask Tally for the company's real books period and set the dates to match,
+   so we never request balances at dates outside the data (which hangs Tally). */
+function detectCompany(){
+  fetch(API+'/api/fin/company').then(function(r){return r.json();}).then(function(c){
+    if(!c.ok) return;
+    var end = c.lastVoucher || c.endingAt; // as-on = last voucher (stub period) or year-end
+    if(end){ document.getElementById('asOn').value=end;
+      // prior year-end = day before this FY start (standard comparative)
+      if(c.start){ var s=new Date(c.start); var p=new Date(Date.UTC(s.getUTCFullYear(),s.getUTCMonth(),s.getUTCDate()-1)); document.getElementById('priorAsOn').value=p.toISOString().slice(0,10); }
+    }
+    var lbl = (c.name||'company')+' · books '+(c.start||'?')+' → '+(end||'?');
+    document.getElementById('msgTally').innerHTML='<span class="msg ok">📅 Detected '+lbl+' — dates set to match. Press Read from Tally.</span>';
+  }).catch(function(){});
+}
 
 /* ===== Schedule III note catalogue ===== */
 var NOTES = {
@@ -244,9 +260,12 @@ document.getElementById('diagBtn').onclick=function(){
       return (x.ok?'✅ OK':'❌ FAILED')+'  ·  '+x.ms+' ms'+(x.ok?('  ·  '+x.length+' chars'):('  ·  '+(x.error||'')))+'\n'+
         (x.sample?('--- first part of Tally\'s reply ---\n'+x.sample):''); }
     out.textContent =
-      'Tally URL : '+d.tallyUrl+'\nCompany   : '+d.company+'\nConnector : v'+d.version+'\nPeriod    : '+d.from+' → '+d.to+'\n\n'+
-      '=== A) Ledger masters + Opening Balance ===\n'+block(d.A_ledgerMastersOpening)+'\n\n'+
-      '=== B) Trial Balance report (native) ===\n'+block(d.B_trialBalanceReport)+'\n\n'+
+      'Tally URL       : '+d.tallyUrl+'\nConnector       : v'+d.version+'\n'+
+      'Detected company: '+d.detectedCompany+'\nDetected period : '+d.detectedPeriod+'\n'+
+      'Books start     : '+(d.detectedStart||'?')+'\nLast voucher    : '+(d.detectedLastVoucher||'?')+'\n\n'+
+      '=== 0) Company period read ===\n'+block(d.company0)+'\n\n'+
+      '=== A) Ledger CLOSING @ detected to-date ===\n'+block(d.A_ledgerClosingAtDetectedDate)+'\n\n'+
+      '=== B) Ledger OPEN+CLOSE @ detected period ===\n'+block(d.B_ledgerOpenClose)+'\n\n'+
       '👉 Copy everything above and paste it back so we can pinpoint the fix.';
   }).catch(function(){ btn.disabled=false; out.textContent='Connector not reachable on this computer.'; });
 };
