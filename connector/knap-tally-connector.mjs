@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '3.6';
+const VERSION = '3.7';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -591,7 +591,12 @@ function parseTallyFieldDate(v) {
   return null;
 }
 function parseCompany(xml) {
-  const b = (xml.match(/<COMPANY[\s>][\s\S]*?<\/COMPANY>/i) || [])[0] || xml;
+  // Tally's reply carries a bare "<COMPANY>1</COMPANY>" counter inside CMPINFO
+  // BEFORE the real company master (<COMPANY NAME="…"> … </COMPANY>). Require a
+  // space after COMPANY (so the bare counter is skipped) and prefer the block
+  // that actually carries a period.
+  const blocks = xml.match(/<COMPANY\s[\s\S]*?<\/COMPANY>/gi) || [];
+  const b = blocks.find((x) => /STARTINGFROM|BOOKSFROM|LASTVOUCHERDATE/i.test(x)) || blocks[0] || xml;
   const name = decodeXml((b.match(/<COMPANY[^>]*\sNAME="([^"]*)"/i)?.[1] ?? tag(b, 'NAME'))).trim();
   const start = parseTallyFieldDate(tag(b, 'STARTINGFROM')) || parseTallyFieldDate(tag(b, 'BOOKSFROM'));
   const booksFrom = parseTallyFieldDate(tag(b, 'BOOKSFROM')) || start;
@@ -2176,11 +2181,20 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/api/fin/company') {
       try {
         const c = parseCompany(await askTallyFast(state.settings.tallyUrl, FIN_COMPANY_REQUEST(), 15000));
+        // Ledger + group counts are cheap stored-only reads (like the group
+        // tree) — best-effort so the page can show "312 across 43 groups"
+        // before the (heavier) voucher read. Never block company detection on
+        // them.
+        let groupCount = null, ledgerCount = null;
+        try { groupCount = Object.keys(parseGroups(await askTallyFast(state.settings.tallyUrl, GROUPS_REQUEST(), 20000))).length; } catch { /* */ }
+        try { ledgerCount = Object.keys(parseLedgerMasters(await askTallyFast(state.settings.tallyUrl, LEDGER_MASTERS_REQUEST(), 25000))).length; } catch { /* */ }
         json(res, 200, {
-          ok: true, name: c.name,
+          ok: true, name: c.name, version: VERSION,
           start: c.start ? c.start.toISOString().slice(0, 10) : null,
+          booksFrom: c.booksFrom ? c.booksFrom.toISOString().slice(0, 10) : null,
           lastVoucher: c.lastVch ? c.lastVch.toISOString().slice(0, 10) : null,
           endingAt: c.endingAt ? c.endingAt.toISOString().slice(0, 10) : null,
+          groupCount, ledgerCount,
         });
       } catch (e) {
         json(res, 200, { ok: false, error: String((e && e.message) || e) });
