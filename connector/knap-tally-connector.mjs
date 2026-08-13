@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '3.9';
+const VERSION = '4.0';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -459,7 +459,7 @@ const LEDGER_MASTERS_REQUEST = () => `<ENVELOPE>
    <COLLECTION NAME="KnapLedgerMasters" ISMODIFY="No">
     <TYPE>Ledger</TYPE>
     <FETCH>NAME</FETCH><FETCH>PARENT</FETCH><FETCH>OPENINGBALANCE</FETCH>
-    <FETCH>PARTYGSTIN</FETCH><FETCH>GSTREGISTRATIONNUMBER</FETCH><FETCH>VATTINNUMBER</FETCH><FETCH>LEDGSTREGDETAILS.LIST</FETCH>
+    <FETCH>PARTYGSTIN</FETCH><FETCH>GSTREGISTRATIONNUMBER</FETCH><FETCH>VATTINNUMBER</FETCH>
    </COLLECTION>
   </TDLMESSAGE></TDL>
  </DESC></BODY>
@@ -2202,27 +2202,31 @@ const server = http.createServer(async (req, res) => {
     }
     // Company + its books period (fast master read) so the page can default to
     // dates that are actually inside the data.
+    // Company + its books period — a single FAST master read, so the page can
+    // fill the name/period/entity instantly. Ledger + group COUNTS are a
+    // separate call (/api/fin/counts) so nothing heavy delays the name.
     if (req.method === 'GET' && url.pathname === '/api/fin/company') {
       try {
         const c = parseCompany(await askTallyFast(state.settings.tallyUrl, FIN_COMPANY_REQUEST(), 15000));
-        // Ledger + group counts are cheap stored-only reads (like the group
-        // tree) — best-effort so the page can show "312 across 43 groups"
-        // before the (heavier) voucher read. Never block company detection on
-        // them.
-        let groupCount = null, ledgerCount = null;
-        try { groupCount = Object.keys(parseGroups(await askTallyFast(state.settings.tallyUrl, GROUPS_REQUEST(), 20000))).length; } catch { /* */ }
-        try { ledgerCount = Object.keys(parseLedgerMasters(await askTallyFast(state.settings.tallyUrl, LEDGER_MASTERS_REQUEST(), 25000))).length; } catch { /* */ }
         json(res, 200, {
           ok: true, name: c.name, version: VERSION,
           start: c.start ? c.start.toISOString().slice(0, 10) : null,
           booksFrom: c.booksFrom ? c.booksFrom.toISOString().slice(0, 10) : null,
           lastVoucher: c.lastVch ? c.lastVch.toISOString().slice(0, 10) : null,
           endingAt: c.endingAt ? c.endingAt.toISOString().slice(0, 10) : null,
-          groupCount, ledgerCount,
         });
       } catch (e) {
         json(res, 200, { ok: false, error: String((e && e.message) || e) });
       }
+      return;
+    }
+    // Cheap stored-only counts (group tree + ledger list) for the books grid —
+    // best-effort, fetched in the background so they never hold up the name.
+    if (req.method === 'GET' && url.pathname === '/api/fin/counts') {
+      let groupCount = null, ledgerCount = null;
+      try { groupCount = Object.keys(parseGroups(await askTallyFast(state.settings.tallyUrl, GROUPS_REQUEST(), 20000))).length; } catch { /* */ }
+      try { ledgerCount = Object.keys(parseLedgerMasters(await askTallyFast(state.settings.tallyUrl, LEDGER_MASTERS_REQUEST(), 25000))).length; } catch { /* */ }
+      json(res, 200, { ok: true, groupCount, ledgerCount });
       return;
     }
     // Saved ledger → Schedule III note map, remembered on THIS machine so the
@@ -2269,6 +2273,22 @@ const server = http.createServer(async (req, res) => {
       const from = comp && (comp.booksFrom || comp.start) ? (comp.booksFrom || comp.start) : new Date(Date.UTC(2025, 3, 1));
       // A) ledger masters (Name + Parent + OpeningBalance) — stored only.
       const mastersProbe = await probe('A) Ledger masters (name+parent+opening)', LEDGER_MASTERS_REQUEST(), 30000);
+      // A2) group tree + how sample ledgers resolve (raw parent → primary →
+      //     full "booked under" chain). This is what pins down any group-tree
+      //     surprise (e.g. reserved groups whose parent is "Primary").
+      let groupResolve = null;
+      try {
+        const groups = parseGroups(await askTallyFast(state.settings.tallyUrl, GROUPS_REQUEST(), 20000));
+        const masters = parseLedgerMasters(await askTallyFast(state.settings.tallyUrl, LEDGER_MASTERS_REQUEST(), 30000));
+        const primaries = Object.entries(groups).filter(([, g]) => isPrimaryGroup(g)).map(([n]) => n);
+        const sample = Object.keys(masters).slice(0, 15).map((name) => ({
+          ledger: name, rawParent: masters[name].parent,
+          primary: primaryGroupOf(masters[name].parent, groups),
+          path: groupPathOf(masters[name].parent, groups).join(' > '),
+          gstin: masters[name].gstin || '',
+        }));
+        groupResolve = { groupCount: Object.keys(groups).length, primaryGroups: primaries.slice(0, 40), sampleLedgers: sample };
+      } catch (e) { groupResolve = { error: String((e && e.message) || e) }; }
       // B) one month of vouchers — the proven read the GST/TDS tools use daily.
       const oneFrom = to ? new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), 1)) : from;
       const vProbe = await probe('B) One month of vouchers', voucherCollectionRequest(oneFrom, to), 60000, 2600);
@@ -2295,6 +2315,7 @@ const server = http.createServer(async (req, res) => {
         oneMonthProbed: (oneFrom && to) ? (oneFrom.toISOString().slice(0, 10) + ' → ' + to.toISOString().slice(0, 10)) : '(unknown)',
         company0: companyProbe,
         A_ledgerMasters: mastersProbe,
+        A2_groupResolve: groupResolve,
         B_oneMonthVouchers: vProbe,
         B_voucherSummary: vSummary,
       };

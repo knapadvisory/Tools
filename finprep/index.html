@@ -440,12 +440,16 @@ function detectCompany(){
     document.getElementById('bkCo').textContent=cleanCoName(c.name)||'—';
     document.getElementById('bkPeriod').textContent=(c.start&&end)?(niceDate(c.start)+' – '+niceDate(end)):'—';
     document.getElementById('bkPeriodSub').textContent=fy.cur+' · books open';
-    document.getElementById('bkLed').textContent=(c.ledgerCount!=null?c.ledgerCount:'—')+(c.groupCount!=null?(' across '+c.groupCount+' groups'):'');
+    document.getElementById('bkLed').textContent='counting…';
     document.getElementById('bkLedSub').textContent='ledgers detected';
     document.getElementById('bkLast').textContent=niceDate(c.lastVoucher||c.endingAt);
     document.getElementById('bkLastSub').textContent='connector v'+(c.version||connVer);
     document.getElementById('books').classList.remove('hidden');
     banner('','Tally connected — ready to read','Connector v'+(c.version||connVer)+' is talking to Tally on this computer. Books are open and responding.');
+    // counts are a heavier read — fetch them in the background so the name is instant
+    fetch(API+'/api/fin/counts').then(function(r){return r.json();}).then(function(k){
+      document.getElementById('bkLed').textContent=(k.ledgerCount!=null?k.ledgerCount:'—')+(k.groupCount!=null?(' across '+k.groupCount+' groups'):'');
+    }).catch(function(){ document.getElementById('bkLed').textContent='—'; });
   }).catch(function(){ banner('wait','Connected — set the period and read','Enter the period and press Read from Tally.'); });
 }
 
@@ -458,7 +462,9 @@ document.getElementById('btnTest').onclick=function(){
     function block(x){ if(!x) return '(no result)'; return (x.ok?'✅ OK':'❌ FAILED')+'  ·  '+x.ms+' ms'+(x.ok?('  ·  '+x.length+' chars'):('  ·  '+(x.error||'')))+'\n'+(x.sample?('--- first part of Tally\'s reply ---\n'+x.sample):''); }
     var vs=d.B_voucherSummary, vsTxt='(not run)';
     if(vs){ vsTxt=vs.error?('error: '+vs.error):('vouchers: '+vs.vouchers+'   ledgers touched: '+vs.ledgersTouched+'   net (should be ~0): '+vs.netShouldBeZero+'   unflagged entries: '+vs.unflaggedEntries+'\nBiggest movements this month (Dr +, Cr −):\n'+(vs.top||[]).map(function(t){return '   '+t.ledger+'  =  '+t.dr;}).join('\n')); }
-    out.textContent='Tally URL       : '+d.tallyUrl+'\nConnector       : v'+d.version+'\nRead path       : '+(d.readPath||'')+'\nDetected company: '+d.detectedCompany+'\nBooks start     : '+(d.detectedStart||'?')+'\nLast voucher    : '+(d.detectedLastVoucher||'?')+'\nOne month probed: '+(d.oneMonthProbed||'?')+'\n\n=== 0) Company period (fast master read) ===\n'+block(d.company0)+'\n\n=== A) Ledger masters — name+parent+opening (fast) ===\n'+block(d.A_ledgerMasters)+'\n\n=== B) One month of vouchers (the proven read) ===\n'+block(d.B_oneMonthVouchers)+'\n\n=== B) What that month contained ===\n'+vsTxt+'\n\n👉 If A and B both say ✅ OK, the financials read will work.';
+    var gr=d.A2_groupResolve, grTxt='(not run)';
+    if(gr){ grTxt=gr.error?('error: '+gr.error):('groups: '+gr.groupCount+'\nprimary groups: '+(gr.primaryGroups||[]).join(', ')+'\n\nsample ledger → parent → primary → booked-under chain:\n'+(gr.sampleLedgers||[]).map(function(s){return '   '+s.ledger+'  |  parent="'+s.rawParent+'"  |  primary="'+s.primary+'"  |  '+s.path+(s.gstin?('  |  GSTIN '+s.gstin):'');}).join('\n')); }
+    out.textContent='Tally URL       : '+d.tallyUrl+'\nConnector       : v'+d.version+'\nRead path       : '+(d.readPath||'')+'\nDetected company: '+d.detectedCompany+'\nBooks start     : '+(d.detectedStart||'?')+'\nLast voucher    : '+(d.detectedLastVoucher||'?')+'\nOne month probed: '+(d.oneMonthProbed||'?')+'\n\n=== 0) Company period (fast master read) ===\n'+block(d.company0)+'\n\n=== A) Ledger masters — name+parent+opening (fast) ===\n'+block(d.A_ledgerMasters)+'\n\n=== A2) Group tree — how ledgers resolve ===\n'+grTxt+'\n\n=== B) One month of vouchers (the proven read) ===\n'+block(d.B_oneMonthVouchers)+'\n\n=== B) What that month contained ===\n'+vsTxt+'\n\n👉 If A and B both say ✅ OK, the financials read will work.';
   }).catch(function(){ btn.disabled=false; out.textContent='Connector not reachable on this computer.'; });
 };
 
@@ -477,58 +483,61 @@ var NOTE_ORDER=[1,2,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,
 
 /* ================= classification engine ================= */
 function has(s,arr){ s=(s||'').toLowerCase(); return arr.some(function(k){return s.indexOf(k)>=0;}); }
-/* returns {note, conf:'high'|'low', reason} */
+/* returns {note, conf:'high'|'low', reason} — classified from the FULL Tally
+   "booked under" chain (every ancestor group name), so a ledger parked under
+   "Sales Accounts" is Revenue even when the resolved primary is noisy. */
 var GSTIN_RX=/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/;
 function classifyFull(led){
-  var pg=(led.primary||'').toLowerCase(), g=(led.group||'').toLowerCase(), n=(led.name||'').toLowerCase(), gn=g+' '+n;
+  var chain=(led.groupPath&&led.groupPath.length)?led.groupPath.slice():[];
+  if(!chain.length){ if(led.group)chain.push(led.group); if(led.primary&&led.primary!==led.group)chain.push(led.primary); }
+  // drop Tally's "Primary" root so it never confuses a match
+  chain=chain.filter(function(x){ return x && !/^primary$/i.test(x); });
+  var path=chain.join(' ').toLowerCase();      // every group name in the chain
+  var n=(led.name||'').toLowerCase();
+  var gn=path+' '+n;                            // groups + ledger name
+  var top=(chain[chain.length-1]||'').toLowerCase(); // nearest-to-primary group
   var gstOK=!!(led.gstin && GSTIN_RX.test(String(led.gstin).toUpperCase()));
+  var cr=(led.current||0)<0;                    // credit balance?
   function R(note,conf,reason){ return {note:note,conf:conf,reason:reason}; }
-  if(led.isRevenue){
-    if(pg.indexOf('sales')>=0||pg.indexOf('direct income')>=0) return R(23,'high','Sales → Revenue from operations');
-    if(pg.indexOf('indirect income')>=0) return R(24,'high','Indirect income → Other income');
-    if(pg.indexOf('purchase')>=0) return R(25,'high','Purchases → Cost of materials');
+  // ---------- P&L nature (from the connector's ISREVENUE walk OR the chain) ----------
+  var isRev = led.isRevenue || has(path,['sales account','purchase account','direct income','indirect income','direct expense','indirect expense']);
+  if(isRev){
+    if(has(path,['sales account','direct income'])) return R(23,'high','under Sales/Direct Income → Revenue from operations');
+    if(has(path,['indirect income'])||has(n,['interest received','discount received','rental income','commission received'])) return R(24,'high','under Indirect Income → Other income');
+    if(has(path,['purchase account'])) return R(25,'high','under Purchase Accounts → Cost of materials');
     if(has(gn,['salar','wages','bonus','staff','employee','provident',' pf ','gratuity','esi','leave encash','remuneration','stipend','payroll','director sitting'])) return R(27,'high','Employee benefits');
     if(has(gn,['interest','finance cost','bank charge','processing fee','loan processing'])) return R(28,'high','Finance costs');
     if(has(gn,['depreciation','amortis','amortiz'])) return R(12,'high','Depreciation');
-    if(pg.indexOf('direct expense')>=0) return R(29,'high','Direct expense → Other expenses');
-    return R(29,'low','Revenue-nature, no specific match → Other expenses');
+    return R(29,'high','Expense → Other expenses');
   }
-  if(pg.indexOf('capital account')>=0){
-    if(has(gn,['reserve','surplus','p&l','profit & loss','profit and loss','retained'])) return R(2,'high','Reserves & surplus');
-    return R(1,'high','Capital account → Share capital');
+  // ---------- Balance-sheet nature — match reserved Tally groups in the chain ----------
+  if(has(path,['capital account'])){
+    if(has(gn,['reserve','surplus','p&l','profit & loss','profit and loss','retained','securities premium'])) return R(2,'high','under Capital → Reserves & surplus');
+    return R(1,'high','under Capital Account → Share capital');
   }
-  if(pg.indexOf('loans (liability)')>=0||pg.indexOf('loans(liability)')>=0){
-    if(has(gn,['bank od','overdraft','cash credit',' cc ','o/d','packing credit','working capital'])) return R(8,'high','Short-term borrowing');
-    return R(4,'high','Long-term borrowing');
-  }
-  if(pg.indexOf('current liabilit')>=0){
-    if(has(gn,['duties & taxes','duties and taxes','gst','tds','tcs','statutory','pf payable','esi payable','professional tax'])) return R(10,'high','Statutory dues → Other current liabilities');
-    if(has(gn,['sundry creditor','trade payable','creditors for goods','payable for goods','supplier'])) return R(9,'high','Trade payables');
-    if(has(gn,['provision'])) return R(11,'high','Short-term provisions');
-    if(gstOK) return R(9,'high','GSTIN '+led.gstin+' → registered supplier → Trade payables');
-    return R(10,'low','Current liability, no specific match → Other current liabilities');
-  }
-  if(pg.indexOf('provisions')>=0) return R(11,'high','Provisions');
-  if(pg.indexOf('fixed asset')>=0) return R(12,'high','Fixed asset → PPE');
-  if(pg.indexOf('investment')>=0) return has(gn,['current','short'])?R(17,'high','Current investments'):R(13,'high','Non-current investments');
-  if(pg.indexOf('current asset')>=0){
-    if(has(gn,['sundry debtor','trade receivable','receivable from customer','debtors','receivables'])) return R(19,'high','Trade receivables');
-    if(has(gn,['cash','bank','petty cash'])) return R(20,'high','Cash & equivalents');
-    if(has(gn,['stock','inventory','closing stock','raw material','finished goods','work-in-progress','wip'])) return R(18,'high','Inventories');
-    if(has(gn,['input gst','input tax','itc','gst receivable','input cgst','input sgst','input igst'])) return R(22,'high','Input tax → Other current assets');
-    if(has(gn,['loans & advance','loans and advance','advance','tds receivable','tcs receivable','prepaid','deposit','advance tax'])) return R(21,'high','Short-term loans & advances');
-    if(gstOK) return R(19,'high','GSTIN '+led.gstin+' → registered customer → Trade receivables');
-    return R(22,'low','Current asset, no specific match → Other current assets');
-  }
-  if(pg.indexOf('loans & advances')>=0||pg.indexOf('loans and advances')>=0) return R(21,'high','Loans & advances (asset)');
-  if(pg.indexOf('deposit')>=0) return R(15,'high','Deposits → Long-term loans & advances');
-  // A registered party (carries a GSTIN) parked under an odd/custom group: its
-  // Dr/Cr side settles it — a debit balance is a receivable, a credit a payable.
-  if(gstOK){
-    if((led.current||0) < 0) return R(9,'high','GSTIN '+led.gstin+' + credit balance → Trade payables');
-    return R(19,'high','GSTIN '+led.gstin+' + debit balance → Trade receivables');
-  }
-  if(pg.indexOf('misc')>=0||pg.indexOf('branch')>=0||pg.indexOf('suspense')>=0) return R(99,'low','Suspense / branch — needs a head');
+  if(has(path,['reserves & surplus','reserves and surplus'])) return R(2,'high','Reserves & surplus');
+  if(has(path,['bank od','bank occ','bank o/d','cash credit'])||has(gn,['overdraft','packing credit','working capital loan'])) return R(8,'high','Bank OD/CC → Short-term borrowings');
+  if(has(path,['secured loan','unsecured loan','loans (liability)','loans(liability)','loan (liability)'])) return R(4,'high','under Loans (Liability) → Long-term borrowings');
+  if(has(path,['duties & taxes','duties and taxes'])) return cr?R(10,'high','Duties & Taxes (credit) → Other current liabilities'):R(22,'high','Duties & Taxes (debit/input) → Other current assets');
+  if(has(path,['provision'])) return cr?R(11,'high','Provisions → Short-term provisions'):R(21,'high','Provision (debit) → Short-term loans & advances');
+  if(has(path,['sundry creditor'])||has(gn,['trade payable','creditors for goods','payable for goods'])) return R(9,'high','under Sundry Creditors → Trade payables');
+  if(has(path,['sundry debtor'])||has(gn,['trade receivable','receivable from customer'])) return R(19,'high','under Sundry Debtors → Trade receivables');
+  if(has(path,['bank account','bank accounts','cash-in-hand','cash in hand'])||has(gn,['petty cash'])) return R(20,'high','Bank/Cash → Cash & equivalents');
+  if(has(path,['stock-in-hand','stock in hand'])||has(gn,['closing stock','inventory','raw material','finished goods','work-in-progress','wip','stores & spares'])) return R(18,'high','Stock-in-Hand → Inventories');
+  if(has(path,['fixed asset'])) return R(12,'high','under Fixed Assets → PPE');
+  if(has(path,['investment'])) return has(gn,['current','short','mutual fund','liquid'])?R(17,'high','Current investments'):R(13,'high','Non-current investments');
+  if(has(path,['loans & advances (asset)','loans and advances (asset)','loans & advances(asset)'])) return R(21,'high','Loans & advances (asset) → Short-term loans & advances');
+  if(has(path,['deposit'])) return R(15,'high','Deposits → Long-term loans & advances');
+  if(has(path,['misc'])&&has(path,['asset'])) return R(16,'high','Misc. expenditure (asset)');
+  // input tax / advances sitting directly under Current Assets
+  if(has(gn,['input gst','input tax','input cgst','input sgst','input igst','itc','gst receivable'])) return R(22,'high','Input tax → Other current assets');
+  if(has(gn,['tds receivable','tcs receivable','advance tax','prepaid','advance to','advances'])) return R(21,'high','Advances → Short-term loans & advances');
+  // ---------- GSTIN-driven: a registered party settled by its Dr/Cr side ----------
+  if(gstOK) return cr?R(9,'high','GSTIN '+led.gstin+' + credit → Trade payables'):R(19,'high','GSTIN '+led.gstin+' + debit → Trade receivables');
+  // ---------- generic parent, no strong signal ----------
+  if(has(path,['current liabilit'])) return R(10,'low','under Current Liabilities → Other current liabilities (confirm)');
+  if(has(path,['current asset'])) return R(22,'low','under Current Assets → Other current assets (confirm)');
+  if(has(path,['suspense','branch'])) return R(99,'low','Suspense / branch — needs a head');
   return R(99,'low','No Schedule III head fits — assign manually');
 }
 function classify(led){ return classifyFull(led).note; }
@@ -723,8 +732,9 @@ function buildFinancials(){
 /* the "Booked under" chain from Tally: ledger's own group … up to the primary
    group. Falls back to group/primary on older connectors without groupPath. */
 function bookedUnder(l){
-  if(l.groupPath && l.groupPath.length) return l.groupPath;
-  var p=[]; if(l.group) p.push(l.group); if(l.primary && l.primary!==l.group) p.push(l.primary); return p;
+  var p=(l.groupPath && l.groupPath.length)?l.groupPath.slice():[];
+  if(!p.length){ if(l.group)p.push(l.group); if(l.primary && l.primary!==l.group)p.push(l.primary); }
+  return p.filter(function(x){ return x && !/^primary$/i.test(x); }); // hide Tally's root
 }
 function renderReview(){
   var rows=[];
