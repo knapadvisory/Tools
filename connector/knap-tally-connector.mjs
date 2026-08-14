@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.8';
+const VERSION = '4.9';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2235,74 +2235,28 @@ async function readDCForCompany(url, company, asOn, label, kind) {
 }
 
 // ===========================================================================
-// BILL-WISE OUTSTANDING & AGEING  (page reports)
+// AGEING & BILL-WISE (FIFO)  (page reports)
 // ---------------------------------------------------------------------------
-// For each party we build the open-bill ledger from: (a) the ledger master's
-// OPENING bill allocations (bills carried into the current FY, dated), plus
-// (b) the current-FY vouchers' bill allocations (new invoices via New Ref,
-// knock-offs via Agst Ref). A bill's running amount = Σ its allocations; a bill
-// is OPEN when that is non-zero. Everything is kept Dr-positive.
+// The client's ledgers are NOT maintained bill-by-bill — invoices are Sales
+// vouchers and receipts are booked on-account against the bank, never adjusted
+// to a specific bill. So bill allocations don't exist to age against. Instead
+// we do what Tally itself does for such ledgers: FIFO. Each debit (invoice) is
+// an outstanding item dated at its voucher date; each credit (receipt / credit
+// note) pays off the OLDEST outstanding item first. Whatever debits remain are
+// the aged outstanding (by their own dates); any credit left after clearing
+// everything is the advance / on-account (shown in its own bucket).
 //
-// The closing balance is the SAME figure the matrix uses (master FY-opening +
-// FY movement — which ties to Tally). The unallocated / on-account amount is
-// then DERIVED as the plug:  onAccount = closing − Σ(open bills).  So the
-// report can never drift from the validated balance: bills + on-account always
-// equals the closing balance, by construction. On-account has no invoice date,
-// so it ages into its own "Unallocated" bucket rather than being force-fit.
+// Everything is computed in the PARTY's natural sign (debtors Dr-positive,
+// creditors Cr-positive), so a normal balance is positive and the contrary side
+// negative. Anchored to the master FY-start opening (the figure that ties to
+// Tally): the opening is fed in as one item dated at FY start, and FY vouchers
+// on top. Σ(open items) + on-account == closing, by construction.
 
 const DAY_MS = 86400000;
-function parseCreditPeriodDays(s) {
-  const m = String(s || '').match(/(\d+)\s*(day|days|week|weeks|month|months|year|years)?/i);
-  if (!m) return 0;
-  let n = +m[1]; const u = (m[2] || 'day').toLowerCase();
-  if (u.startsWith('month')) n *= 30; else if (u.startsWith('week')) n *= 7; else if (u.startsWith('year')) n *= 365;
-  return n;
-}
-// Ledger masters WITH their opening bill allocations (one read serves both the
-// group/opening/GSTIN info and the opening bills).
-const LEDGER_BILLS_REQUEST = () => `<ENVELOPE>
- <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>KnapLedgerBills</ID></HEADER>
- <BODY><DESC>
-  <STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>${svCompany()}</STATICVARIABLES>
-  <TDL><TDLMESSAGE>
-   <COLLECTION NAME="KnapLedgerBills" ISMODIFY="No">
-    <TYPE>Ledger</TYPE>
-    <FETCH>NAME</FETCH><FETCH>PARENT</FETCH><FETCH>OPENINGBALANCE</FETCH>
-    <FETCH>PARTYGSTIN</FETCH><FETCH>GSTREGISTRATIONNUMBER</FETCH>
-    <FETCH>BILLALLOCATIONS.LIST</FETCH>
-   </COLLECTION>
-  </TDLMESSAGE></TDL>
- </DESC></BODY>
-</ENVELOPE>`;
-function parseLedgerBills(xml) {
-  const out = {};
-  for (const b of xml.match(/<LEDGER[\s>][\s\S]*?<\/LEDGER>/gi) || []) {
-    const name = decodeXml((b.match(/<LEDGER[^>]*\sNAME="([^"]*)"/i)?.[1] ?? tag(b, 'NAME'))).trim();
-    if (!name) continue;
-    const rec = {
-      parent: decodeXml(tag(b, 'PARENT')).trim(),
-      openingDr: openingDr(tag(b, 'OPENINGBALANCE')),
-      gstin: (b.match(GSTIN_RE) || [''])[0].toUpperCase(),
-      openingBills: [],
-    };
-    for (const bl of b.match(/<BILLALLOCATIONS\.LIST>[\s\S]*?<\/BILLALLOCATIONS\.LIST>/gi) || []) {
-      const ref = decodeXml(tag(bl, 'NAME')).trim();
-      if (!ref) continue;
-      rec.openingBills.push({
-        ref,
-        date: parseTallyFieldDate(tag(bl, 'BILLDATE')),
-        amountDr: openingDr(tag(bl, 'OPENINGBALANCE') || tag(bl, 'AMOUNT')),
-        creditDays: parseCreditPeriodDays(tag(bl, 'BILLCREDITPERIOD')),
-      });
-    }
-    out[name] = rec;
-  }
-  return out;
-}
-// One voucher pass (FY start → asOn): per ledger, the Dr-positive movement AND
-// the bill allocations (running amount + New-Ref date + credit period per ref).
-async function readBillData(url, fyStart, asOn) {
-  const movement = {}, bills = {}, seen = new Set();
+// One voucher pass (FY start → asOn): for the party ledgers in `partySet`,
+// collect each dated Dr-positive movement with a reference for display.
+async function readAgeMovements(url, fyStart, asOn, partySet) {
+  const moves = {}, seen = new Set();
   const cal = { vouchers: 0, noFlag: 0, afterTo: 0 };
   const toKey = asOn.getUTCFullYear() * 10000 + (asOn.getUTCMonth() + 1) * 100 + asOn.getUTCDate();
   let monthsTotal = 0;
@@ -2325,72 +2279,77 @@ async function readBillData(url, fyStart, asOn) {
       const dk = dateKey(tag(block, 'DATE'));
       if (toKey && dk > toKey) { cal.afterTo++; continue; }
       const vdate = parseTallyFieldDate(tag(block, 'DATE'));
+      const vno = tag(block, 'VOUCHERNUMBER'), vtype = tag(block, 'VOUCHERTYPENAME');
+      const ref = ((vtype ? vtype + ' ' : '') + (vno || '')).trim() || '(voucher)';
       for (const e of block.match(/<(?:ALL)?LEDGERENTRIES\.LIST>[\s\S]*?<\/(?:ALL)?LEDGERENTRIES\.LIST>/gi) || []) {
         const name = tag(e, 'LEDGERNAME');
-        if (!name) continue;
+        if (!name || !partySet.has(name)) continue;
         const rawAmt = toNum(tag(e, 'AMOUNT'));
         const dp = tag(e, 'ISDEEMEDPOSITIVE');
         if (!dp) cal.noFlag++;
         const sign = dp ? (/yes/i.test(dp) ? 1 : -1) : (rawAmt < 0 ? 1 : -1); // Dr-positive
-        movement[name] = r2((movement[name] || 0) + sign * Math.abs(rawAmt));
-        for (const bl of e.match(/<BILLALLOCATIONS\.LIST>[\s\S]*?<\/BILLALLOCATIONS\.LIST>/gi) || []) {
-          const ref = decodeXml(tag(bl, 'NAME')).trim();
-          if (!ref) continue; // on-account (no ref) → falls into the derived plug
-          const bdr = sign * Math.abs(toNum(tag(bl, 'AMOUNT')));
-          const m = bills[name] || (bills[name] = {});
-          const cur = m[ref] || (m[ref] = { dr: 0, date: null, creditDays: 0 });
-          cur.dr = r2(cur.dr + bdr);
-          const bt = tag(bl, 'BILLTYPE');
-          if (/new/i.test(bt) || !cur.date) { if (vdate) cur.date = vdate; const cp = parseCreditPeriodDays(tag(bl, 'BILLCREDITPERIOD')); if (cp) cur.creditDays = cp; }
-        }
+        (moves[name] || (moves[name] = [])).push({ date: vdate, dr: r2(sign * Math.abs(rawAmt)), ref });
       }
       cal.vouchers++;
     }
     done++; dcProgress.monthsDone = done;
   }
-  return { movement, bills, cal };
+  return { moves, cal };
 }
-// Bill-wise + ageing for one company (`kind`), as at `asOn`.
+// FIFO knock-off of dated items in the party's NATURAL sign. `natSign` maps the
+// Dr-positive amounts to natural (debtors +1, creditors −1). Returns the still-
+// open items (aged) and the leftover advance as on-account.
+function fifoAge(items, natSign, asOn) {
+  const list = items.map((m) => ({ date: m.date, ref: m.ref, amt: r2(natSign * m.dr) }))
+    .sort((a, b) => (a.date ? a.date.getTime() : 0) - (b.date ? b.date.getTime() : 0));
+  const inv = []; let credit = 0;
+  for (const it of list) {
+    let a = it.amt;
+    if (a > 0.005) {                 // an invoice on the party's own side
+      if (credit > 0.005) { const k = Math.min(credit, a); credit = r2(credit - k); a = r2(a - k); }
+      if (a > 0.005) inv.push({ date: it.date, ref: it.ref, amount: a });
+    } else if (a < -0.005) {         // a payment / contra — clears oldest first
+      let pay = -a;
+      while (pay > 0.005 && inv.length) { const k = Math.min(pay, inv[0].amount); inv[0].amount = r2(inv[0].amount - k); pay = r2(pay - k); if (inv[0].amount <= 0.005) inv.shift(); }
+      if (pay > 0.005) credit = r2(credit + pay);
+    }
+  }
+  const iso = (d) => d ? d.toISOString().slice(0, 10) : null;
+  const open = inv.filter((x) => Math.abs(x.amount) > 0.005).map((x) => ({
+    ref: x.ref, date: iso(x.date),
+    days: x.date ? Math.floor((asOn - x.date) / DAY_MS) : null,
+    amount: x.amount,               // natural sign
+  }));
+  return { open, onAccount: r2(-credit) }; // leftover credit is contra → negative in natural sign
+}
+// Ageing + open-item list for one company (`kind`), as at `asOn`.
 async function readBillwiseForCompany(url, company, asOn, label, kind) {
   const savedCompany = state.settings.company;
   state.settings.company = company || '';
+  const natSign = kind === 'creditors' ? -1 : 1;
   try {
-    dcProgress.phase = `Reading ${label} — ledgers & opening bills…`;
+    dcProgress.phase = `Reading ${label} — ledgers…`;
     dcProgress.monthsTotal = 0; dcProgress.monthsDone = 0;
     const groups = parseGroups(await askTallyFast(url, GROUPS_REQUEST()));
-    const masters = parseLedgerBills(await askTallyFast(url, LEDGER_BILLS_REQUEST()));
+    const masters = parseLedgerMasters(await askTallyFast(url, LEDGER_MASTERS_REQUEST()));
+    const partySet = new Set(Object.keys(masters).filter((n) => dcClassOf(groupPathOf(masters[n].parent, groups)) === kind));
     const fyStart = fyStartOf(asOn);
-    dcProgress.phase = `Reading ${label} — bills ${fyStart.toISOString().slice(0, 10)} → ${asOn.toISOString().slice(0, 10)}…`;
-    const { movement, bills, cal } = await readBillData(url, fyStart, asOn);
+    dcProgress.phase = `Reading ${label} — vouchers ${fyStart.toISOString().slice(0, 10)} → ${asOn.toISOString().slice(0, 10)}…`;
+    const { moves, cal } = await readAgeMovements(url, fyStart, asOn, partySet);
     dcProgress.sub = '';
 
-    const iso = (d) => d ? d.toISOString().slice(0, 10) : null;
     const ledgers = [];
-    for (const name of Object.keys(masters)) {
+    for (const name of partySet) {
       const m = masters[name];
-      if (dcClassOf(groupPathOf(m.parent, groups)) !== kind) continue;
-      const closing = r2((m.openingDr || 0) + (movement[name] || 0));
-      // merge opening bills + voucher bills by ref
-      const merged = {};
-      for (const ob of m.openingBills || []) merged[ob.ref] = { dr: ob.amountDr, date: ob.date, creditDays: ob.creditDays };
-      for (const [ref, e] of Object.entries(bills[name] || {})) {
-        const cur = merged[ref] || (merged[ref] = { dr: 0, date: null, creditDays: 0 });
-        cur.dr = r2(cur.dr + e.dr);
-        if (e.date) { cur.date = e.date; if (e.creditDays) cur.creditDays = e.creditDays; }
-      }
-      const open = [];
-      let sumBills = 0;
-      for (const [ref, e] of Object.entries(merged)) {
-        if (Math.abs(e.dr) < 0.005) continue;
-        const days = e.date ? Math.floor((asOn - e.date) / DAY_MS) : null;
-        const due = e.date && e.creditDays ? new Date(e.date.getTime() + e.creditDays * DAY_MS) : null;
-        open.push({ ref, date: iso(e.date), dueDate: iso(due), creditDays: e.creditDays || 0, days, amountDr: e.dr });
-        sumBills = r2(sumBills + e.dr);
-      }
-      if (Math.abs(closing) < 0.005 && !open.length) continue;
-      open.sort((a, b) => (b.days ?? -1) - (a.days ?? -1));
-      const onAccountDr = r2(closing - sumBills); // the plug — keeps bills+onAccount == closing
-      ledgers.push({ ledger: name, gstin: m.gstin || '', pan: panFromGstin(m.gstin || ''), closing, onAccountDr, bills: open });
+      const vMoves = moves[name] || [];
+      const items = vMoves.slice();
+      const openDr = m.openingDr || 0;
+      if (Math.abs(openDr) > 0.005) items.push({ date: fyStart, dr: openDr, ref: 'Opening balance' });
+      const closingDr = r2(openDr + vMoves.reduce((s, x) => r2(s + x.dr), 0));
+      const closing = r2(natSign * closingDr);
+      if (Math.abs(closing) < 0.005 && !items.length) continue;
+      const { open, onAccount } = fifoAge(items, natSign, asOn);
+      ledgers.push({ ledger: name, gstin: m.gstin || '', pan: panFromGstin(m.gstin || ''), closing, onAccount, bills: open });
     }
     return { ok: true, url, company: company || '', label, vouchers: cal.vouchers, ledgerCount: ledgers.length, ledgers };
   } finally {
@@ -2911,12 +2870,11 @@ const server = http.createServer(async (req, res) => {
           const label = String(t.company || '').trim() || `Tally ${t.url || ''}`;
           dcProgress.company = label; dcProgress.done = i;
           const one = await readBillwiseForCompany(String(t.url || state.settings.tallyUrl), String(t.company || ''), asOn, label, kind);
-          const flip = kind === 'creditors' ? -1 : 1; // present each side's natural sign
+          // values already in the party's natural sign (debtors +, creditors +)
           const ledgers = one.ledgers.map((L) => ({
             ledger: L.ledger, gstin: L.gstin, pan: L.pan,
-            closing: r2(flip * L.closing),
-            onAccount: r2(flip * L.onAccountDr),
-            bills: L.bills.map((b) => ({ ref: b.ref, date: b.date, dueDate: b.dueDate, days: b.days, amount: r2(flip * b.amountDr) })),
+            closing: L.closing, onAccount: L.onAccount,
+            bills: L.bills.map((b) => ({ ref: b.ref, date: b.date, dueDate: b.dueDate || null, days: b.days, amount: b.amount })),
           }));
           companies.push({ url: one.url, company: one.company, label, ledgerCount: ledgers.length, ledgers });
           dcProgress.done = i + 1;
