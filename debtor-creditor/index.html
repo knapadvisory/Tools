@@ -167,6 +167,20 @@
   .cta .btn.primary:hover{background:#54cd7d;color:#0f2a19}
   .hidden{display:none}
   .flow-note{text-align:center;color:var(--faint);font-size:12px;margin-top:16px}
+  /* ---------- first-time setup ---------- */
+  .setup{background:var(--green-soft);border:1px solid var(--green-line);border-radius:14px;box-shadow:0 1px 2px var(--shadow);padding:18px 20px;margin:18px 0 2px}
+  .setup-hd{display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap;justify-content:space-between}
+  .setup-t{font-weight:800;font-size:16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .setup-once{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;background:var(--green);color:#fff;padding:3px 9px;border-radius:999px}
+  .setup-s{color:var(--muted);font-size:12.5px;margin-top:5px;max-width:720px}
+  .setup .btn.lg{white-space:nowrap}
+  .setup-steps{margin:14px 0 0 20px;padding:0}
+  .setup-steps li{font-size:13px;margin:8px 0;padding-left:4px}
+  .setup-steps li b{color:var(--text)}
+  .setup-steps code,.setup-more code{font-family:var(--mono);background:var(--surface);border:1px solid var(--border-2);border-radius:5px;padding:1px 5px;font-size:12px}
+  .setup-more{margin-top:14px;padding-top:12px;border-top:1px solid var(--green-line);display:flex;flex-direction:column;gap:7px}
+  .setup-more span{font-size:12px;color:var(--muted)}
+  .setup-priv{color:var(--faint) !important}
   /* ---------- how-to ---------- */
   .howto{background:var(--surface);border:1px solid var(--border);border-radius:13px;box-shadow:0 1px 2px var(--shadow);padding:4px 20px;margin:18px 0 2px}
   .howto>summary{cursor:pointer;font-weight:700;font-size:14px;padding:12px 0;list-style:none;display:flex;align-items:center;gap:8px}
@@ -212,6 +226,26 @@
 <main>
   <h1>Debtor / Creditor Consolidation</h1>
   <p class="lede">Lists every debtor (or creditor) as at a date across all your group companies — many companies in one Tally, or several Tally instances open separately — matches the same party across their books (by PAN, GSTIN or name), and lays the balances side by side: <b>particulars · balance per company · total</b>. Debtors show credit balances as negatives; creditors show debit balances as negatives. Everything flows browser ↔ connector ↔ Tally on this computer.</p>
+
+  <div class="setup">
+    <div class="setup-hd">
+      <div>
+        <div class="setup-t">🖥️ First-time setup <span class="setup-once">one time per Tally PC</span></div>
+        <div class="setup-s">This tool reads Tally through a small connector that runs on the computer where Tally Prime is installed. Set it up once — it then starts with Windows and keeps itself updated.</div>
+      </div>
+      <a class="btn primary lg" id="dlConnector" href="/connector/Install-Tally-Connector.bat" download>⬇ Download connector</a>
+    </div>
+    <ol class="setup-steps">
+      <li><b>Install Node.js (LTS)</b> from <a href="https://nodejs.org" target="_blank" rel="noopener">nodejs.org</a> — the connector runs on it.</li>
+      <li><b>Turn on Tally's connectivity:</b> in Tally Prime press <b>F1 (Help) → Settings → Connectivity → Client/Server configuration</b> → set <i>TallyPrime acts as</i> = <b>Both</b> and <i>Port</i> = <b>9000</b>. Keep the company open on the <b>Gateway of Tally</b>.</li>
+      <li><b>Install the connector:</b> click <b>Download connector</b> above, put the file in its own folder, and double-click it. It installs and starts automatically (and auto-updates every few hours).</li>
+    </ol>
+    <div class="setup-more">
+      <span><b>Several companies?</b> Load them all in one Tally, or open separate Tally instances — give each a different port (9001, 9002…) in step 2 and add those ports in Step 1 below.</span>
+      <span><b>Already set up?</b> When the pill at the top-right shows <b>connected</b>, you're ready — jump to Step 1. To refresh the connector any time, use <b>⟳ Update connector</b> below.</span>
+      <span class="setup-priv">🔒 Nothing leaves this computer — books data flows browser ↔ connector ↔ Tally locally; only the sheet you export is saved by you.</span>
+    </div>
+  </div>
 
   <details class="howto" open>
     <summary>How to use this tool</summary>
