@@ -158,6 +158,36 @@
   .cta .btn.primary:hover{background:#54cd7d;color:#0f2a19}
   .hidden{display:none}
   .flow-note{text-align:center;color:var(--faint);font-size:12px;margin-top:16px}
+  /* ---------- how-to ---------- */
+  .howto{background:var(--surface);border:1px solid var(--border);border-radius:13px;box-shadow:0 1px 2px var(--shadow);padding:4px 20px;margin:18px 0 2px}
+  .howto>summary{cursor:pointer;font-weight:700;font-size:14px;padding:12px 0;list-style:none;display:flex;align-items:center;gap:8px}
+  .howto>summary::-webkit-details-marker{display:none}
+  .howto>summary::before{content:'▸';color:var(--green);font-size:12px;transition:.15s}
+  .howto[open]>summary::before{transform:rotate(90deg)}
+  .howto ol{margin:0 0 12px 20px;padding:0}
+  .howto li{font-size:13px;color:var(--muted);margin:7px 0;padding-left:4px}
+  .howto li b{color:var(--text)}
+  .howto-note{font-size:12px;color:var(--faint);border-top:1px solid var(--border);padding:10px 0 12px}
+  /* ---------- reports hub ---------- */
+  .reportbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:14px 0 4px}
+  .rbtn{font:inherit;font-size:13px;font-weight:600;padding:9px 15px;border-radius:10px;border:1px solid var(--border-2);background:var(--surface-2);color:var(--muted);cursor:pointer;display:inline-flex;align-items:center;gap:7px}
+  .rbtn:hover{border-color:var(--green);color:var(--green)}
+  .rbtn.on{background:var(--green);border-color:var(--green);color:#fff}
+  .rtag{font-size:9px;font-weight:800;letter-spacing:.04em;padding:2px 6px;border-radius:999px;text-transform:uppercase}
+  .rtag.ready{background:var(--ok-soft);color:var(--ok)}
+  .rtag.soon{background:var(--warn-soft);color:var(--warn)}
+  .rbtn.on .rtag{background:rgba(255,255,255,.22);color:#fff}
+  .rtoolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;margin:12px 0 4px}
+  .rtoolbar .grow{margin-right:auto;font-size:13px;color:var(--muted)}
+  .soonpanel{background:var(--surface-2);border:1px dashed var(--border-2);border-radius:12px;padding:20px 22px;margin-top:12px}
+  .soonpanel h3{font-size:15px;font-weight:700;margin-bottom:6px}
+  .soonpanel p{font-size:13px;color:var(--muted);margin:6px 0}
+  .soonpanel ul{margin:8px 0 0 18px}.soonpanel li{font-size:13px;color:var(--muted);margin:4px 0}
+  table.mtx tr.toprow td{font-weight:800;background:var(--surface-3);border-bottom:2px solid var(--border-2);position:sticky;top:32px;z-index:1}
+  table.mtx tr.toprow td.l{color:var(--faint);font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+  table.mtx td.cum{color:var(--muted);font-size:11.5px}
+  table.mtx tr.p80 td{background:var(--green-soft)}
+  table.mtx tr.p80line td{border-bottom:2px dashed var(--green)}
   footer{border-top:1px solid var(--border);margin-top:32px;padding:18px 22px;text-align:center;font-size:12.5px;color:var(--faint)}
   .empty{padding:22px;text-align:center;color:var(--muted);font-size:13px}
 </style>
@@ -173,6 +203,18 @@
 <main>
   <h1>Debtor / Creditor Consolidation</h1>
   <p class="lede">Lists every debtor (or creditor) as at a date across all your group companies — many companies in one Tally, or several Tally instances open separately — matches the same party across their books (by PAN, GSTIN or name), and lays the balances side by side: <b>particulars · balance per company · total</b>. Debtors show credit balances as negatives; creditors show debit balances as negatives. Everything flows browser ↔ connector ↔ Tally on this computer.</p>
+
+  <details class="howto" open>
+    <summary>How to use this tool</summary>
+    <ol>
+      <li><b>On the Tally PC</b>, keep each company on the <b>Gateway of Tally</b> (not inside a report). Several companies can be loaded in one Tally, or opened as separate Tally instances (each on its own port — 9000, 9001…).</li>
+      <li><b>Step 1 — Connect:</b> add a line for every Tally port, click <b>Scan for companies</b>, and tick the companies to include.</li>
+      <li><b>Step 2 — Extract:</b> choose <b>Debtors</b> or <b>Creditors</b>, set the <b>as-on date</b>, and click <b>Extract &amp; match</b>. Each company is read one at a time up to that date, so the closing figure is exact. Use <b>↺ Reset data</b> before running a different date.</li>
+      <li><b>Step 3 — Review:</b> parties are matched automatically (GSTIN → PAN → exact name → smart name), and any <b>look-alikes</b> are shown for you to confirm. Merge, split or rename rows by hand — your decisions are remembered.</li>
+      <li><b>Step 4 — Reports:</b> pick a report — <b>Consolidated matrix</b> or <b>80/20 (Pareto)</b> — view it on screen and <b>Download Excel</b>. <b>Master sheet</b> exports the full party master. (Ageing and Bill-wise are coming next.)</li>
+    </ol>
+    <div class="howto-note">Everything flows browser ↔ connector ↔ Tally on this computer. Nothing leaves the machine until you export.</div>
+  </details>
 
   <div class="stepper">
     <div class="step active" id="st1"><span class="num">1</span><span class="lbl">Connect &amp; pick companies</span></div>
@@ -244,18 +286,19 @@
     </div>
   </div>
 
-  <!-- STEP 4 -->
+  <!-- STEP 4 · reports hub -->
   <div class="card hidden" id="card4">
-    <div class="row" style="justify-content:space-between">
-      <div><h2 id="sheetTitle">4 · Consolidated sheet</h2><div class="sub" id="sheetSub"></div></div>
-      <div class="row">
-        <button class="btn ghost sm" id="btnCombine" onclick="combineSelected()" disabled>Combine selected</button>
-        <input type="text" id="filterBox" placeholder="Filter parties…" oninput="renderMatrix()" style="font-size:12.5px">
-        <button class="btn primary" onclick="exportXlsx()">⬇ Download Excel</button>
-      </div>
+    <div class="row" style="justify-content:space-between;align-items:flex-start">
+      <div><h2 id="sheetTitle">4 · Reports</h2><div class="sub" id="reportSub">Extract complete — pick a report. Each opens on screen and downloads to Excel.</div></div>
+      <button class="btn" onclick="downloadMaster()">⬇ Master sheet</button>
     </div>
-    <div class="tblwrap"><table class="mtx" id="mtx"></table></div>
-    <div class="flow-note">Tip: tick two or more rows and press “Combine selected” to merge parties the matcher kept apart; press “Split” on a merged row to break it back into its ledgers.</div>
+    <div class="reportbar" id="reportbar">
+      <button class="rbtn on" data-rep="consolidated" onclick="showReport('consolidated')">Consolidated matrix <span class="rtag ready">Ready</span></button>
+      <button class="rbtn" data-rep="pareto" onclick="showReport('pareto')">80 / 20 (Pareto) <span class="rtag ready">Ready</span></button>
+      <button class="rbtn" data-rep="ageing" onclick="showReport('ageing')">Ageing <span class="rtag soon">Next</span></button>
+      <button class="rbtn" data-rep="billwise" onclick="showReport('billwise')">Bill-wise summary <span class="rtag soon">Next</span></button>
+    </div>
+    <div id="reportArea"></div>
   </div>
 </main>
 
@@ -544,32 +587,74 @@ function reMatch(){
   if(!document.getElementById('card4').classList.contains('hidden')) renderMatrix();
 }
 
-/* ============================ step 4: matrix & export ============================ */
-var picked={};
+/* ============================ step 4: reports hub ============================ */
+var picked={}, curReport='consolidated';
 function buildSheet(){
   saveAliases();
   markStep(3,true); document.getElementById('card4').classList.remove('hidden');
-  document.getElementById('sheetTitle').textContent='4 · '+(KIND==='debtors'?'Debtors':'Creditors')+' — consolidated as on '+RESULT.asOn;
   var neg=KIND==='debtors'?'credit balances shown negative':'debit balances shown negative';
-  document.getElementById('sheetSub').textContent=GROUPS.length+' parties across '+RESULT.companies.length+' companies · '+neg+'.';
+  document.getElementById('sheetTitle').textContent='4 · '+(KIND==='debtors'?'Debtors':'Creditors')+' — as on '+RESULT.asOn;
+  document.getElementById('reportSub').textContent=GROUPS.length+' parties across '+RESULT.companies.length+' companies · '+neg+'. Pick a report below.';
   picked={};
-  renderMatrix();
+  showReport('consolidated');
   document.getElementById('card4').scrollIntoView({behavior:'smooth',block:'start'});
 }
+function showReport(rep){
+  curReport=rep;
+  Array.prototype.forEach.call(document.querySelectorAll('#reportbar .rbtn'),function(b){ b.classList.toggle('on', b.getAttribute('data-rep')===rep); });
+  var area=document.getElementById('reportArea');
+  if(rep==='consolidated'){
+    area.innerHTML='<div class="rtoolbar"><span class="grow">Balances as per each Tally as on '+RESULT.asOn+'. Per-company totals sit at the top; grand total at the bottom.</span>'
+      +'<button class="btn ghost sm" id="btnCombine" onclick="combineSelected()" disabled>Combine selected</button>'
+      +'<input type="text" id="filterBox" placeholder="Filter parties…" oninput="renderMatrix()" style="font-size:12.5px">'
+      +'<button class="btn primary" onclick="exportXlsx()">⬇ Download Excel</button></div>'
+      +'<div class="tblwrap"><table class="mtx" id="mtx"></table></div>'
+      +'<div class="flow-note">Tip: tick two or more rows and press “Combine selected” to merge parties the matcher kept apart; press “Split” on a merged row to break it back into its ledgers.</div>';
+    renderMatrix();
+  } else if(rep==='pareto'){
+    area.innerHTML='<div class="rtoolbar"><span class="grow" id="paretoSub"></span><button class="btn primary" onclick="exportPareto()">⬇ Download Excel</button></div>'
+      +'<div class="tblwrap"><table class="mtx" id="pmtx"></table></div>'
+      +'<div class="flow-note">80/20 rule — the fewest parties that make up 80% of the value are highlighted. Ranked by total across all companies.</div>';
+    renderPareto();
+  } else if(rep==='ageing'){
+    area.innerHTML=soonPanel('Debtor / Creditor ageing',
+      'Splits each party’s outstanding into buckets (0–30, 31–60, 61–90, 91–180, 180+ days), consolidated across companies and reconciled to the closing balance.',
+      ['Needs a bill-wise read from Tally — outstanding bills with their dates.',
+       'For ledgers kept bill-by-bill, we read Tally’s own bill allocations; for the rest, ageing is derived FIFO from the ledger’s dated movements.',
+       'On-account / unadjusted receipts (no bill reference) are shown in their own bucket, not force-fitted to an invoice.']);
+  } else if(rep==='billwise'){
+    area.innerHTML=soonPanel('Bill-wise summary',
+      'Every open invoice per party — bill number, date, due date, amount and pending balance — with the on-account (unadjusted) amount shown separately.',
+      ['Reads Tally’s bill allocations (New Ref / Agst Ref / Advance / On Account).',
+       'Control check per party: open bills + on-account must equal the ledger balance; any gap is flagged for review.',
+       'This is the same read that powers ageing, so both arrive together.']);
+  }
+}
+function soonPanel(title,desc,pts){
+  return '<div class="soonpanel"><h3>'+esc(title)+' <span class="rtag soon">Coming next</span></h3><p>'+esc(desc)+'</p><ul>'
+    +pts.map(function(p){return '<li>'+esc(p)+'</li>';}).join('')+'</ul></div>';
+}
 function currentRows(){
-  var f=(document.getElementById('filterBox').value||'').toLowerCase().trim();
+  var fb=document.getElementById('filterBox');
+  var f=(fb?fb.value:'').toLowerCase().trim();
   var rows=GROUPS;
   if(f) rows=rows.filter(function(g){ return g.label.toLowerCase().indexOf(f)>=0 || g.members.some(function(m){return m.ledger.toLowerCase().indexOf(f)>=0;}) || g.pans.join(' ').toLowerCase().indexOf(f)>=0 || g.gstins.join(' ').toLowerCase().indexOf(f)>=0; });
   return rows;
 }
+function colTotals(rows,cos){ var ct=cos.map(function(){return 0;}), grand=0; rows.forEach(function(g){ cos.forEach(function(c,ci){ if(g.perCo[ci]!==undefined) ct[ci]+=g.perCo[ci]; }); grand+=g.total; }); return {ct:ct,grand:grand}; }
 function renderMatrix(){
+  var el=document.getElementById('mtx'); if(!el) return;
   var cos=RESULT.companies;
   var rows=currentRows();
+  var t=colTotals(rows,cos);
   var h='<thead><tr><th class="l">Particulars</th>';
   cos.forEach(function(c){ h+='<th>'+esc(c.label)+'</th>'; });
-  h+='<th>Total</th></tr></thead><tbody>';
-  var colTot=cos.map(function(){return 0;}), grand=0;
-  rows.forEach(function(g,gi){
+  h+='<th>Total</th></tr>';
+  // per-company total row AT THE TOP, right under the company names
+  h+='<tr class="toprow"><td class="l">Total — '+rows.length+' parties</td>';
+  cos.forEach(function(c,ci){ h+='<td class="'+(t.ct[ci]<0?'neg':'')+'">'+fmt(t.ct[ci])+'</td>'; });
+  h+='<td class="'+(t.grand<0?'neg':'')+'">'+fmt(t.grand)+'</td></tr></thead><tbody>';
+  rows.forEach(function(g){
     var gidx=GROUPS.indexOf(g);
     var basisTag=g.basis==='pan'?'<span class="tag pan">PAN</span>':g.basis==='gstin'?'<span class="tag gst">GSTIN</span>':'<span class="tag nm">NAME</span>';
     var interTag=g.inter?'<span class="tag multi">INTER-CO</span>':'';
@@ -581,15 +666,45 @@ function renderMatrix(){
     cos.forEach(function(c,ci){
       var v=g.perCo[ci];
       if(v===undefined){ h+='<td class="miss">—</td>'; }
-      else { colTot[ci]+=v; h+='<td class="'+(v<0?'neg':'')+'">'+fmt(v)+'</td>'; }
+      else { h+='<td class="'+(v<0?'neg':'')+'">'+fmt(v)+'</td>'; }
     });
-    grand+=g.total;
     h+='<td class="'+(g.total<0?'neg':'')+'"><b>'+fmt(g.total)+'</b></td></tr>';
   });
   h+='</tbody><tfoot><tr class="tot"><td class="l">Total ('+rows.length+' parties)</td>';
-  cos.forEach(function(c,ci){ h+='<td class="'+(colTot[ci]<0?'neg':'')+'">'+fmt(colTot[ci])+'</td>'; });
-  h+='<td class="'+(grand<0?'neg':'')+'">'+fmt(grand)+'</td></tr></tfoot>';
-  document.getElementById('mtx').innerHTML=h;
+  cos.forEach(function(c,ci){ h+='<td class="'+(t.ct[ci]<0?'neg':'')+'">'+fmt(t.ct[ci])+'</td>'; });
+  h+='<td class="'+(t.grand<0?'neg':'')+'">'+fmt(t.grand)+'</td></tr></tfoot>';
+  el.innerHTML=h;
+  var bc=document.getElementById('btnCombine'); if(bc) bc.disabled=Object.keys(picked).filter(function(k){return picked[k];}).length<2;
+}
+/* ---- 80/20 Pareto ---- */
+function paretoRows(){
+  // rank by total desc; base the 80% on gross positive exposure
+  var rows=GROUPS.slice().sort(function(a,b){ return b.total-a.total; });
+  var base=rows.reduce(function(s,g){ return s+(g.total>0?g.total:0); },0) || 1;
+  var cum=0, out=[], hit80=false;
+  rows.forEach(function(g){
+    cum+=(g.total>0?g.total:0);
+    var cp=cum/base*100;
+    var in80=!hit80; if(cp>=80) hit80=true; // rows up to & incl. the one crossing 80%
+    out.push({g:g, pct:(g.total>0?g.total/base*100:0), cum:cp, in80:in80 && g.total>0});
+  });
+  return {rows:out, base:base};
+}
+function renderPareto(){
+  var el=document.getElementById('pmtx'); if(!el) return;
+  var pr=paretoRows();
+  var n80=pr.rows.filter(function(r){return r.in80;}).length;
+  var tot=GROUPS.length;
+  document.getElementById('paretoSub').innerHTML='<b>'+n80+'</b> of '+tot+' parties ('+(tot?Math.round(n80/tot*100):0)+'%) make up 80% of the '+(KIND==='debtors'?'receivable':'payable')+' value ('+fmt(pr.base)+').';
+  var h='<thead><tr><th class="l">Rank &amp; party</th><th>Balance</th><th>% of total</th><th>Cumulative %</th></tr></thead><tbody>';
+  pr.rows.forEach(function(r,i){
+    var cls=r.in80?'p80':''; var last80=r.in80 && (i+1>=pr.rows.length || !pr.rows[i+1].in80);
+    h+='<tr class="'+cls+(last80?' p80line':'')+'"><td class="l"><b>'+(i+1)+'.</b> '+esc(r.g.label)+(r.g.inter?' <span class="tag multi">INTER-CO</span>':'')+'</td>'
+      +'<td class="'+(r.g.total<0?'neg':'')+'">'+fmt(r.g.total)+'</td>'
+      +'<td>'+r.pct.toFixed(2)+'%</td><td class="cum">'+r.cum.toFixed(2)+'%</td></tr>';
+  });
+  h+='</tbody>';
+  el.innerHTML=h;
 }
 function togglePick(gi){ picked[gi]=!picked[gi]; document.getElementById('btnCombine').disabled=Object.keys(picked).filter(function(k){return picked[k];}).length<2; }
 function combineSelected(){
@@ -628,31 +743,95 @@ function exportXlsx(){
   var hdr=['Particulars']; cos.forEach(function(c){hdr.push(c.label);}); hdr.push('Total');
   var hr=ws.addRow(hdr); hr.font={bold:true,color:{argb:'FFFFFFFF'}}; hr.alignment={horizontal:'center'};
   hr.eachCell(function(cell,cn){ cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF173F28'}}; if(cn===1)cell.alignment={horizontal:'left'}; });
-  var colTot=cos.map(function(){return 0;}), grand=0;
+  var t=colTotals(rows,cos);
+  // per-company total row AT THE TOP (matches the on-screen sheet)
+  var top=['Total — '+rows.length+' parties']; cos.forEach(function(c,ci){ top.push(round2(t.ct[ci])); }); top.push(round2(t.grand));
+  var topRow=ws.addRow(top); topRow.font={bold:true};
+  topRow.eachCell(function(cell,cn){ cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFEFF3EE'}}; cell.border={bottom:{style:'medium'}}; if(cn>1)cell.numFmt='#,##0.00;[Red]-#,##0.00'; });
   rows.forEach(function(g){
     var r=['']; r[0]=g.label;
-    cos.forEach(function(c,ci){ var v=g.perCo[ci]; r.push(v===undefined?null:round2(v)); if(v!==undefined)colTot[ci]+=v; });
-    r.push(round2(g.total)); grand+=g.total;
+    cos.forEach(function(c,ci){ var v=g.perCo[ci]; r.push(v===undefined?null:round2(v)); });
+    r.push(round2(g.total));
     var row=ws.addRow(r);
     row.eachCell(function(cell,cn){ if(cn>1){ cell.numFmt='#,##0.00;[Red]-#,##0.00'; } });
     row.getCell(ncol).font={bold:true};
   });
-  var tr=['Total']; cos.forEach(function(c,ci){ tr.push(round2(colTot[ci])); }); tr.push(round2(grand));
+  var tr=['Total']; cos.forEach(function(c,ci){ tr.push(round2(t.ct[ci])); }); tr.push(round2(t.grand));
   var totRow=ws.addRow(tr); totRow.font={bold:true};
   totRow.eachCell(function(cell,cn){ cell.border={top:{style:'thin'}}; if(cn>1)cell.numFmt='#,##0.00;[Red]-#,##0.00'; });
   ws.getColumn(1).width=38; for(var i=2;i<=ncol;i++) ws.getColumn(i).width=16;
-  ws.views=[{state:'frozen',ySplit:2,xSplit:1}];
-  // Members sheet — audit trail: which ledgers folded into each party
+  ws.views=[{state:'frozen',ySplit:3,xSplit:1}];
+  addMembersSheet(wb, rows);
+  saveWb(wb, (KIND==='debtors'?'Debtors':'Creditors')+'-consolidated-'+RESULT.asOn+'.xlsx');
+}
+function addMembersSheet(wb, rows){
   var ms=wb.addWorksheet('Members');
   ms.addRow(['Party','Company','Ledger in Tally','GSTIN','PAN','Balance']).font={bold:true};
   rows.forEach(function(g){ g.members.forEach(function(m){ ms.addRow([g.label, RESULT.companies[m.ci].label, m.ledger, m.gstin||'', m.pan||'', round2(m.balance)]).getCell(6).numFmt='#,##0.00;[Red]-#,##0.00'; }); });
   ms.getColumn(1).width=32; ms.getColumn(2).width=22; ms.getColumn(3).width=34; ms.getColumn(4).width=18; ms.getColumn(5).width=13; ms.getColumn(6).width=15;
+}
+function saveWb(wb, name){
   wb.xlsx.writeBuffer().then(function(buf){
     var a=document.createElement('a');
     a.href=URL.createObjectURL(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
-    a.download=(KIND==='debtors'?'Debtors':'Creditors')+'-consolidated-'+RESULT.asOn+'.xlsx'; a.style.display='none';
+    a.download=name; a.style.display='none';
     document.body.appendChild(a); a.click(); setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); },1500);
   });
+}
+/* ---- 80/20 Pareto export ---- */
+function exportPareto(){
+  if(typeof ExcelJS==='undefined'){ alert('Excel library still loading — try again in a moment.'); return; }
+  var pr=paretoRows();
+  var wb=new ExcelJS.Workbook(); wb.creator='KNAP Tools';
+  var ws=wb.addWorksheet('80-20 '+RESULT.asOn);
+  ws.mergeCells(1,1,1,4);
+  var n80=pr.rows.filter(function(r){return r.in80;}).length, tot=GROUPS.length;
+  ws.getCell(1,1).value=(KIND==='debtors'?'DEBTORS':'CREDITORS')+' — 80/20 as on '+RESULT.asOn+'  ·  '+n80+' of '+tot+' parties ('+(tot?Math.round(n80/tot*100):0)+'%) = 80% of value';
+  ws.getCell(1,1).font={bold:true,size:12};
+  var hr=ws.addRow(['Rank','Party','Balance','% of total','Cumulative %','Top 80%?']);
+  hr.font={bold:true,color:{argb:'FFFFFFFF'}}; hr.eachCell(function(cell){ cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF173F28'}}; });
+  pr.rows.forEach(function(r,i){
+    var row=ws.addRow([i+1, r.g.label, round2(r.g.total), round2(r.pct)/100, round2(r.cum)/100, r.in80?'Yes':'']);
+    row.getCell(3).numFmt='#,##0.00;[Red]-#,##0.00'; row.getCell(4).numFmt='0.00%'; row.getCell(5).numFmt='0.00%';
+    if(r.in80) row.eachCell(function(cell){ cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFE7F2EA'}}; });
+  });
+  ws.getColumn(1).width=6; ws.getColumn(2).width=40; ws.getColumn(3).width=16; ws.getColumn(4).width=11; ws.getColumn(5).width=13; ws.getColumn(6).width=9;
+  ws.views=[{state:'frozen',ySplit:2}];
+  saveWb(wb, (KIND==='debtors'?'Debtors':'Creditors')+'-80-20-'+RESULT.asOn+'.xlsx');
+}
+/* ---- Master sheet: party master + full ledger detail ---- */
+function downloadMaster(){
+  if(!RESULT){ return; }
+  if(typeof ExcelJS==='undefined'){ alert('Excel library still loading — try again in a moment.'); return; }
+  var cos=RESULT.companies, rows=GROUPS;
+  var wb=new ExcelJS.Workbook(); wb.creator='KNAP Tools';
+  // Sheet 1 — party master: identity + per-company balances + total
+  var ws=wb.addWorksheet('Party master');
+  var ncol=6+cos.length;
+  ws.mergeCells(1,1,1,ncol);
+  ws.getCell(1,1).value=(KIND==='debtors'?'DEBTORS':'CREDITORS')+' — party master as on '+RESULT.asOn;
+  ws.getCell(1,1).font={bold:true,size:12};
+  var hdr=['Party','PAN','GSTIN(s)','Match by','Ledgers','Inter-co']; cos.forEach(function(c){hdr.push(c.label);}); hdr.push('Total');
+  var hr=ws.addRow(hdr); hr.font={bold:true,color:{argb:'FFFFFFFF'}};
+  hr.eachCell(function(cell){ cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FF173F28'}}; });
+  var t=colTotals(rows,cos);
+  rows.forEach(function(g){
+    var r=[g.label, g.pans.join(', '), g.gstins.join(', '), g.basis.toUpperCase(), g.members.length, g.inter?'Yes':''];
+    cos.forEach(function(c,ci){ var v=g.perCo[ci]; r.push(v===undefined?null:round2(v)); });
+    r.push(round2(g.total));
+    var row=ws.addRow(r);
+    for(var cc=7;cc<=ncol;cc++) row.getCell(cc).numFmt='#,##0.00;[Red]-#,##0.00';
+    row.getCell(ncol).font={bold:true};
+  });
+  var tr=['Total','','','','',''];  cos.forEach(function(c,ci){ tr.push(round2(t.ct[ci])); }); tr.push(round2(t.grand));
+  var totRow=ws.addRow(tr); totRow.font={bold:true};
+  totRow.eachCell(function(cell,cn){ cell.border={top:{style:'thin'}}; if(cn>6)cell.numFmt='#,##0.00;[Red]-#,##0.00'; });
+  ws.getColumn(1).width=36; ws.getColumn(2).width=13; ws.getColumn(3).width=20; ws.getColumn(4).width=9; ws.getColumn(5).width=8; ws.getColumn(6).width=8;
+  for(var i=7;i<=ncol;i++) ws.getColumn(i).width=16;
+  ws.views=[{state:'frozen',ySplit:2,xSplit:1}];
+  // Sheet 2 — every underlying ledger
+  addMembersSheet(wb, rows);
+  saveWb(wb, (KIND==='debtors'?'Debtors':'Creditors')+'-master-'+RESULT.asOn+'.xlsx');
 }
 
 /* ============================ helpers ============================ */

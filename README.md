@@ -17,7 +17,7 @@ Sibling sites: [teamhub.knapadvisory.com](https://teamhub.knapadvisory.com) ·
 | Tally Statutory Audit Assistant | **Hosted here** at `/audit/` + local connector | This repo — page `audit/`, engine `connector/knap-tally-audit-engine.mjs` (ported from `Dashboard` branch `claude/tally-audit-tool-24lawp` v1.2) |
 | GSTR-2B ⇄ Tally Poster | **Hosted here** at `/gstr2b/` + local connector | This repo — page `gstr2b/`, engine `connector/knap-tally-connector.mjs` (ported from `Dashboard` branch `claude/gstr2b-tally-posting-mqt7zn` v1.7) |
 | GSTR-1 Excel Summary | **Hosted here** at `/gstr1/` | This repo — page `gstr1/`, engine `gstr1-engine/` run unmodified as an internal child process, proxied at `/gstr1-api` (from `Dashboard` branch `claude/pdf-excel-extraction-tool-izu1zp`) |
-| Debtor / Creditor Consolidation | **Hosted here** at `/debtor-creditor/` + local connector | This repo — page `debtor-creditor/`, engine in `connector/knap-tally-connector.mjs` (`/api/dc/*`, v4.1) |
+| Debtor / Creditor Consolidation | **Hosted here** at `/debtor-creditor/` + local connector | This repo — page `debtor-creditor/`, engine in `connector/knap-tally-connector.mjs` (`/api/dc/*`, v4.2). Reports: consolidated matrix, 80/20 Pareto, party master (ageing + bill-wise are next). |
 
 The desktop tools in `downloads/` are **copies** of the branch files above —
 they are what the page serves. When a tool gets a new version, copy the new
