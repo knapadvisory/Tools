@@ -63,14 +63,31 @@ docker run -d --name teamhub-tools --restart unless-stopped \
 
 echo "==> Registering the $TOOLS_DOMAIN route with Caddy..."
 mkdir -p /etc/teamhub/conf.d
-cat > /etc/teamhub/conf.d/tools.caddy <<EOF
-$TOOLS_DOMAIN {
-    reverse_proxy teamhub-tools:80
-}
-EOF
-# Reload Caddy in place (no downtime for TeamHub). Falls back to a restart.
-docker exec caddy caddy reload --config /etc/caddy/Caddyfile 2>/dev/null \
-  || docker restart caddy
+ROUTE_FILE=/etc/teamhub/conf.d/tools.caddy
+NEW_ROUTE="$(printf '%s {\n    reverse_proxy teamhub-tools:80\n}' "$TOOLS_DOMAIN")"
+# Caddy resolves the "teamhub-tools" upstream via Docker's embedded DNS at dial
+# time, so a freshly-recreated container is picked up on its own. We therefore
+# only need to touch Caddy when the ROUTE ITSELF changes (first deploy, or a
+# domain change) — a routine redeploy skips it entirely.
+#
+# This matters: reloading the shared front Caddy used to fall back to
+# `docker restart caddy`, which drops EVERY connection it proxies — TeamHub, HR,
+# and (on this box) the very web console you deploy from. That was the
+# "connection lost on every deploy". So: never restart Caddy automatically;
+# reload gracefully when the route changed, otherwise leave it untouched.
+if [ -f "$ROUTE_FILE" ] && [ "$(cat "$ROUTE_FILE" 2>/dev/null)" = "$NEW_ROUTE" ]; then
+  echo "    Route already registered and unchanged — leaving Caddy alone (no reload, no restart)."
+else
+  printf '%s\n' "$NEW_ROUTE" > "$ROUTE_FILE"
+  if docker exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile 2>/dev/null; then
+    echo "    Caddy reloaded gracefully (zero downtime)."
+  else
+    echo "    ⚠ Caddy reload failed — the new route may not be live yet."
+    echo "      Reload it by hand (this does NOT drop connections):"
+    echo "          docker exec caddy caddy reload --config /etc/caddy/Caddyfile"
+    echo "      Deliberately NOT restarting Caddy — that would drop every live connection."
+  fi
+fi
 
 cat <<EOF
 
