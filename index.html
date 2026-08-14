@@ -124,6 +124,8 @@
   .note ol { margin: 6px 0 0 20px; font-size: 13.5px; color: var(--muted); }
   .note li { margin: 4px 0; }
   .note b { color: var(--text); }
+  .note-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
+  .note-priv { font-size: 12px; color: var(--muted); }
 
   /* ---------- footer ---------- */
   footer {
@@ -324,13 +326,20 @@
   </div>
 
   <div class="note">
-    <h3>First-time setup for the desktop tools (one time only)</h3>
+    <h3>First-time setup for the Tally tools (one time per Tally PC)</h3>
     <ol>
       <li>Install <b>Node.js (LTS)</b> from <a href="https://nodejs.org">nodejs.org</a>.</li>
       <li>In <b>Tally Prime</b>: F1 (Help) → Settings → Connectivity → Client/Server configuration →
           <i>TallyPrime acts as</i> = <b>Both</b>, <i>Port</i> = <b>9000</b>. Keep the company open.</li>
-      <li>Download a tool above, put it in its own folder, and double-click the <code>.bat</code>.</li>
+      <li>Install the <b>KNAP Tally Connector</b> (below): put it in its own folder and double-click.
+          It starts with Windows and updates itself. One connector powers the GSTR-2B, Audit, TDS,
+          Financials and Debtor/Creditor tools.</li>
     </ol>
+    <div class="note-actions">
+      <a class="btn primary" href="/connector/Install-Tally-Connector.bat" download>⬇ Download connector</a>
+      <a class="btn ghost" href="/connector/Uninstall-Tally-Connector.bat" download>Uninstaller</a>
+      <span class="note-priv">🔒 Runs entirely on your PC — books data flows browser ↔ connector ↔ Tally locally and never leaves the machine.</span>
+    </div>
   </div>
 </main>
 
