@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.12';
+const VERSION = '4.13';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2227,7 +2227,8 @@ async function readDCForCompany(url, company, asOn, label, kind) {
     const readStart = fyStartOf(asOn);
 
     dcProgress.phase = `Reading ${label} — vouchers ${readStart.toISOString().slice(0, 10)} → ${asOn.toISOString().slice(0, 10)}…`;
-    const { sums } = await readDCMovements(url, readStart, asOn); // toKey enforces the asOn cut-off
+    const { sums, cal } = await readDCMovements(url, readStart, asOn); // toKey enforces the asOn cut-off
+    const voucherCount = cal.vouchers;
 
     const parties = [];
     const method = 'vouchers';
@@ -2240,7 +2241,7 @@ async function readDCForCompany(url, company, asOn, label, kind) {
       parties.push({ ledger: name, gstin, pan: panFromGstin(gstin), group: m.parent, balanceDr });
     }
     dcProgress.sub = '';
-    return { ok: true, url, company: company || '', label, method, ledgerCount: parties.length, parties };
+    return { ok: true, url, company: company || '', label, method, voucherCount, ledgerCount: parties.length, parties };
   } finally {
     state.settings.company = savedCompany;
   }
@@ -2889,7 +2890,7 @@ const server = http.createServer(async (req, res) => {
           }));
           companies.push({
             url: one.url, company: one.company, label, method: one.method,
-            partyCount: parties.length, parties,
+            voucherCount: one.voucherCount, partyCount: parties.length, parties,
           });
           dcProgress.done = i + 1;
         }

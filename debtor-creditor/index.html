@@ -354,7 +354,7 @@ var connVer = '';
 function setPill(cls,txt){ var p=document.getElementById('connPill'); p.className='conn-pill '+cls; document.getElementById('connPillText').textContent=txt; }
 function banner(cls,title,sub){ var b=document.getElementById('connBanner'); b.className='conn-banner '+cls; document.getElementById('connTitle').textContent=title; document.getElementById('connSub').innerHTML=sub; }
 function verGE(v,min){ var a=String(v).split('.').map(Number),b=String(min).split('.').map(Number); for(var i=0;i<Math.max(a.length,b.length);i++){var x=a[i]||0,y=b[i]||0; if(x!==y) return x>y;} return true; }
-var REQVER='4.11';
+var REQVER='4.13';
 function checkConn(){
   fetch(API+'/health',{signal:AbortSignal.timeout(3000)}).then(function(r){return r.json();}).then(function(h){
     connVer=h.version||''; setPill('on','connector v'+connVer+' · connected');
@@ -488,7 +488,14 @@ function extract(){
       RESULT=j; document.getElementById('progBar').style.width='100%';
       document.getElementById('progLine').textContent='100% · read complete';
       var tot=0; j.companies.forEach(function(c){ tot+=c.partyCount; });
-      setMsg('msgExtract','Read '+j.companies.length+' company(ies), '+tot+' party rows as on '+j.asOn+'. Matching…','');
+      // GUARD: a company that returned ZERO vouchers gives opening-only (wrong)
+      // balances — almost always Tally busy / on a report / needs a restart.
+      var empty=(j.companies||[]).filter(function(c){return (c.voucherCount||0)===0;}).map(function(c){return c.label;});
+      if(empty.length){
+        setMsg('msgExtract','⚠ NO TRANSACTIONS were read for: '+esc(empty.join(', '))+'. Balances for these are OPENING ONLY (not the closing balance). This means Tally returned no vouchers — put Tally on the Gateway with the company open, press “Release Tally”, and if it persists restart Tally (its XML export degrades after heavy use), then Reset data and re-run.','bad');
+      } else {
+        setMsg('msgExtract','Read '+j.companies.length+' company(ies), '+tot+' party rows as on '+j.asOn+'. Matching…','');
+      }
       loadAliasesThen(runMatch);
     }).catch(function(e){ if(POLL){ clearInterval(POLL); POLL=null; } document.getElementById('btnExtract').disabled=false; document.getElementById('progLine').classList.add('hidden'); setMsg('msgExtract','Could not reach the connector: '+e.message,'bad'); });
 }
@@ -650,7 +657,10 @@ function buildSheet(){
   var neg=KIND==='debtors'?'credit balances shown negative':'debit balances shown negative';
   document.getElementById('sheetTitle').textContent='4 · '+(KIND==='debtors'?'Debtors':'Creditors')+' — as on '+RESULT.asOn;
   var note=GROUPS.length+' parties across '+RESULT.companies.length+' companies · '+neg+'. Balances are built from Tally vouchers up to the as-on date (opening + movement).';
-  document.getElementById('reportSub').textContent=note+' Pick a report below.';
+  var empty=(RESULT.companies||[]).filter(function(c){return (c.voucherCount||0)===0;}).map(function(c){return c.label;});
+  var sub=document.getElementById('reportSub');
+  if(empty.length){ sub.className='sub'; sub.style.color='var(--bad)'; sub.textContent='⚠ NO TRANSACTIONS read for '+empty.join(', ')+' — these balances are OPENING ONLY. Fix Tally (Gateway + company open, restart if needed), Reset data and re-run before trusting this.'; }
+  else { sub.style.color=''; sub.textContent=note+' Pick a report below.'; }
   picked={};
   showReport('consolidated');
   document.getElementById('card4').scrollIntoView({behavior:'smooth',block:'start'});
