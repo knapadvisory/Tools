@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.5';
+const VERSION = '4.6';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -495,6 +495,7 @@ function parseLedgerMasters(xml) {
     // ledger block for the GSTIN shape catches whichever one is populated.
     out[name] = {
       parent: decodeXml(tag(b, 'PARENT')).trim(),
+      openingRaw: tag(b, 'OPENINGBALANCE'), // kept raw for the diagnostic
       openingDr: openingDr(tag(b, 'OPENINGBALANCE')),
       gstin: (b.match(GSTIN_RE) || [''])[0],
     };
@@ -2591,6 +2592,46 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ---------- Multi-company debtor/creditor consolidation ----------
+    // DIAGNOSTIC: per-ledger breakdown for one company so a mismatch against
+    // Tally's Group Summary can be pinned down exactly. Open in a browser on
+    // the Tally PC, e.g.
+    //   /api/dc/diag?company=N%20K%20MEHTA%20AND%20ASSOCIATES&kind=debtors&asOn=2026-06-20
+    // Returns raw opening string, parsed opening (Dr+), voucher movement and the
+    // computed closing for every ledger under Sundry Debtors/Creditors.
+    if (req.method === 'GET' && url.pathname === '/api/dc/diag') {
+      const company = url.searchParams.get('company') || '';
+      const kind = url.searchParams.get('kind') === 'creditors' ? 'creditors' : 'debtors';
+      const u = url.searchParams.get('url') || state.settings.tallyUrl;
+      const asOn = tallyDateOf(String(url.searchParams.get('asOn') || '').replace(/-/g, ''));
+      if (!asOn) { json(res, 400, { ok: false, error: 'Add &asOn=YYYY-MM-DD' }); return; }
+      const saved = state.settings.company;
+      state.settings.company = company;
+      try {
+        const groups = parseGroups(await askTallyFast(u, GROUPS_REQUEST()));
+        const masters = parseLedgerMasters(await askTallyFast(u, LEDGER_MASTERS_REQUEST()));
+        let booksStart = null;
+        try { const c = parseCompany(await askTallyFast(u, FIN_COMPANY_REQUEST(), 15000)); booksStart = c.booksFrom || c.start || null; } catch { /* */ }
+        const readStart = booksStart || new Date(Date.UTC(asOn.getUTCFullYear() - 5, 3, 1));
+        const { sums, cal } = await readDCMovements(u, readStart, asOn);
+        const rows = [];
+        let total = 0;
+        for (const name of new Set([...Object.keys(masters), ...Object.keys(sums)])) {
+          const m = masters[name] || { parent: '', openingRaw: '', openingDr: 0 };
+          if (dcClassOf(groupPathOf(m.parent, groups)) !== kind) continue;
+          const mv = (sums[name] && sums[name].dr) || 0;
+          const closingDr = r2((m.openingDr || 0) + mv);
+          total = r2(total + closingDr);
+          rows.push({ ledger: name, group: m.parent, openingRaw: m.openingRaw || '', openingDr: m.openingDr || 0, movementDr: r2(mv), closingDr });
+        }
+        rows.sort((a, b) => Math.abs(b.closingDr) - Math.abs(a.closingDr));
+        state.settings.company = saved;
+        json(res, 200, { ok: true, company, kind, asOn: asOn.toISOString().slice(0, 10), booksStart: booksStart ? booksStart.toISOString().slice(0, 10) : null, vouchers: cal.vouchers, noFlag: cal.noFlag, afterTo: cal.afterTo || 0, ledgerCount: rows.length, total, rows });
+      } catch (e) {
+        state.settings.company = saved;
+        json(res, 502, { ok: false, error: String((e && e.message) || e) });
+      }
+      return;
+    }
     // Live progress for the (long) side-by-side read, polled by the page.
     if (req.method === 'GET' && url.pathname === '/api/dc/progress') {
       // Overall fraction = companies fully done + fraction of the current one.
