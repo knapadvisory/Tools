@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.14';
+const VERSION = '4.15';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2333,7 +2333,7 @@ async function readAgeMovements(url, fyStart, asOn, partySet) {
         const dp = tag(e, 'ISDEEMEDPOSITIVE');
         if (!dp) cal.noFlag++;
         const sign = dp ? (/yes/i.test(dp) ? 1 : -1) : (rawAmt < 0 ? 1 : -1); // Dr-positive
-        (moves[name] || (moves[name] = [])).push({ date: vdate, dr: r2(sign * Math.abs(rawAmt)), ref });
+        (moves[name] || (moves[name] = [])).push({ date: vdate, dr: r2(sign * Math.abs(rawAmt)), ref, vtype });
       }
       cal.vouchers++;
     }
@@ -2341,11 +2341,44 @@ async function readAgeMovements(url, fyStart, asOn, partySet) {
   }
   return { moves, cal };
 }
+// Pass-through pre-pass. At KNAP a client also pays the firm the tax it will
+// remit on the client's behalf; the firm raises a *Reimbursement* invoice
+// (a debit) for it, which is squared by a receipt of the SAME amount. Those
+// two legs are not a genuine sales receivable, and — because the receipt is
+// often booked a few days BEFORE the reimbursement invoice — plain FIFO would
+// wrongly apply the receipt to old sales and leave the reimbursement showing
+// as outstanding. So pair each reimbursement debit with an equal-value credit
+// (nearest by date, in Dr-positive space) and drop both before ageing. Their
+// values are equal and opposite, so the closing balance is untouched; only the
+// bucket mix changes. A reimbursement with no matching receipt stays and ages
+// normally. Works in Dr space so it is sign-agnostic (debtors & creditors).
+const isReimbType = (v) => /reimburs/i.test(v || '');
+function passThroughPair(items) {
+  const credits = [];
+  for (let i = 0; i < items.length; i++) if (items[i].dr < -0.005) credits.push(i);
+  if (!credits.length) return items;
+  const usedCredit = new Set(), drop = new Set();
+  for (let i = 0; i < items.length; i++) {
+    const m = items[i];
+    if (!(m.dr > 0.005) || !isReimbType(m.vtype)) continue;   // a reimbursement invoice
+    let best = -1, bestGap = Infinity;
+    for (const ci of credits) {
+      if (usedCredit.has(ci)) continue;
+      if (Math.abs(-items[ci].dr - m.dr) > 0.02) continue;    // equal value (≤2 paise)
+      const cd = items[ci].date ? items[ci].date.getTime() : 0;
+      const md = m.date ? m.date.getTime() : 0;
+      const gap = Math.abs(cd - md);
+      if (gap < bestGap) { bestGap = gap; best = ci; }
+    }
+    if (best >= 0) { usedCredit.add(best); drop.add(i); drop.add(best); }
+  }
+  return drop.size ? items.filter((_, i) => !drop.has(i)) : items;
+}
 // FIFO knock-off of dated items in the party's NATURAL sign. `natSign` maps the
 // Dr-positive amounts to natural (debtors +1, creditors −1). Returns the still-
 // open items (aged) and the leftover advance as on-account.
 function fifoAge(items, natSign, asOn) {
-  const list = items.map((m) => ({ date: m.date, ref: m.ref, amt: r2(natSign * m.dr) }))
+  const list = passThroughPair(items).map((m) => ({ date: m.date, ref: m.ref, amt: r2(natSign * m.dr) }))
     .sort((a, b) => (a.date ? a.date.getTime() : 0) - (b.date ? b.date.getTime() : 0));
   const inv = []; let credit = 0;
   for (const it of list) {
