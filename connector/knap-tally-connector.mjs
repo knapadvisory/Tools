@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.16';
+const VERSION = '4.17';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2121,6 +2121,30 @@ const dcProgress = { active: false, phase: '', sub: '', done: 0, total: 0, compa
 // month by month (discarding each chunk's XML after summing it), enforcing the
 // `asOn` cut-off in code so a Tally that ignores SVTODATE can't leak later
 // vouchers into an earlier-dated balance. Updates dcProgress month counters.
+// Read the vouchers in [from,to], adapting to what this Tally can serve within
+// the timeout: on a timeout the window is HALVED and each half retried, down to
+// a single day. A lighter export genuinely completes where the same heavy one
+// re-sent would just time out again — so a big company (many months / a full
+// year of data) reads in bites Tally can manage instead of dying on one giant
+// chunk. `onXml` consumes each chunk immediately (raw XML is never accumulated).
+// Only a genuine timeout splits; a user "Release Tally" (abort/released) stops.
+async function readVouchersAdaptive(url, from, to, onXml, attemptMs = 120000) {
+  async function go(a, b) {
+    try {
+      onXml(await tallyFetch(url, voucherCollectionRequest(a, b), attemptMs));
+    } catch (e) {
+      const msg = String((e && e.message) || e);
+      const spanDays = Math.round((b.getTime() - a.getTime()) / DAY_MS);
+      // split only on a plain timeout, and only while there is still room to split
+      if (/timed out|timeout/i.test(msg) && !/released/i.test(msg) && spanDays >= 2) {
+        const midMs = a.getTime() + Math.floor(spanDays / 2) * DAY_MS;
+        await go(a, new Date(midMs));
+        await go(new Date(midMs + DAY_MS), b);
+      } else throw e;
+    }
+  }
+  await go(from, to);
+}
 async function readDCMovements(url, readStart, asOn) {
   const sums = {}, seen = new Set(), seenSig = new Set();
   const cal = { vouchers: 0, dupes: 0, noFlag: 0, afterTo: 0 };
@@ -2136,8 +2160,8 @@ async function readDCMovements(url, readStart, asOn) {
     const mEnd = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
     const mTo = mEnd > asOn ? asOn : mEnd;
     dcProgress.sub = `${MONTH_NAMES[mFrom.getUTCMonth()]} ${mFrom.getUTCFullYear()} (${done + 1}/${monthsTotal})`;
-    const xml = await askTally(url, voucherCollectionRequest(mFrom, mTo)); // svCompany() is set by the caller
-    accumulateTB(xml, sums, seen, cal, 0, toKey, seenSig);
+    // svCompany() is set by the caller; heavy months split themselves on timeout
+    await readVouchersAdaptive(url, mFrom, mTo, (xml) => accumulateTB(xml, sums, seen, cal, 0, toKey, seenSig));
     done++; dcProgress.monthsDone = done;
   }
   return { sums, cal, monthsTotal };
@@ -2240,8 +2264,8 @@ async function readDCForCompany(url, company, asOn, label, kind) {
   try {
     dcProgress.phase = `Reading ${label} — group tree & ledgers…`;
     dcProgress.monthsTotal = 0; dcProgress.monthsDone = 0;
-    const groups = parseGroups(await askTallyFast(url, GROUPS_REQUEST()));
-    const masters = parseLedgerMasters(await askTallyFast(url, LEDGER_MASTERS_REQUEST()));
+    const groups = parseGroups(await askTallyFast(url, GROUPS_REQUEST(), 180000));
+    const masters = parseLedgerMasters(await askTallyFast(url, LEDGER_MASTERS_REQUEST(), 180000));
 
     // Tally's ledger OPENINGBALANCE is the opening at the CURRENT financial-year
     // start (not books-start), so movements must be summed from that SAME FY
@@ -2306,7 +2330,7 @@ async function readAgeMovements(url, fyStart, asOn, partySet) {
     const mEnd = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
     const mTo = mEnd > asOn ? asOn : mEnd;
     dcProgress.sub = `${MONTH_NAMES[mFrom.getUTCMonth()]} ${mFrom.getUTCFullYear()} (${done + 1}/${monthsTotal})`;
-    const xml = await askTally(url, voucherCollectionRequest(mFrom, mTo));
+    await readVouchersAdaptive(url, mFrom, mTo, (xml) => {
     for (const block of xml.match(/<VOUCHER[\s>][\s\S]*?<\/VOUCHER>/gi) || []) {
       if (/(^|>)\s*Yes\s*<\/ISCANCELLED>/i.test(block.match(/<ISCANCELLED>[\s\S]*?<\/ISCANCELLED>/i)?.[0] ?? '')) continue;
       if (/<ISOPTIONAL>\s*Yes/i.test(block)) continue;
@@ -2337,6 +2361,7 @@ async function readAgeMovements(url, fyStart, asOn, partySet) {
       }
       cal.vouchers++;
     }
+    });
     done++; dcProgress.monthsDone = done;
   }
   return { moves, cal };
@@ -2440,8 +2465,8 @@ async function readBillwiseForCompany(url, company, asOn, label, kind) {
   try {
     dcProgress.phase = `Reading ${label} — ledgers…`;
     dcProgress.monthsTotal = 0; dcProgress.monthsDone = 0;
-    const groups = parseGroups(await askTallyFast(url, GROUPS_REQUEST()));
-    const masters = parseLedgerMasters(await askTallyFast(url, LEDGER_MASTERS_REQUEST()));
+    const groups = parseGroups(await askTallyFast(url, GROUPS_REQUEST(), 180000));
+    const masters = parseLedgerMasters(await askTallyFast(url, LEDGER_MASTERS_REQUEST(), 180000));
     const partySet = new Set(Object.keys(masters).filter((n) => dcClassOf(groupPathOf(masters[n].parent, groups)) === kind));
     const fyStart = fyStartOf(asOn);
     dcProgress.phase = `Reading ${label} — vouchers ${fyStart.toISOString().slice(0, 10)} → ${asOn.toISOString().slice(0, 10)}…`;
@@ -2827,7 +2852,7 @@ const server = http.createServer(async (req, res) => {
         });
       } catch (e) {
         finProgress.active = false;
-        const msg = /timeout|abort|released/i.test(String((e && e.message) || e))
+        const msg = /timed out|timeout|abort|released/i.test(String((e && e.message) || e))
           ? 'Tally stopped responding while reading vouchers. Keep Tally on the Gateway (not inside a report) and try again. If it keeps failing, use “Release Tally”, then retry a shorter period.'
           : 'Could not read Tally: ' + String((e && e.message) || e);
         json(res, 502, { ok: false, error: msg });
@@ -2995,7 +3020,7 @@ const server = http.createServer(async (req, res) => {
         json(res, 200, { ok: true, version: VERSION, kind, asOn: asOn.toISOString().slice(0, 10), companies, aliases: state.dcAliases || {} });
       } catch (e) {
         dcProgress.active = false;
-        const msg = /timeout|abort|released/i.test(String((e && e.message) || e))
+        const msg = /timed out|timeout|abort|released/i.test(String((e && e.message) || e))
           ? 'Tally stopped responding while reading. Keep Tally on the Gateway (not inside a report), make sure the company is open, then try again. “Release Tally” frees a stuck read.'
           : 'Could not read Tally: ' + String((e && e.message) || e);
         json(res, 502, { ok: false, error: msg, company: dcProgress.company });
@@ -3034,7 +3059,7 @@ const server = http.createServer(async (req, res) => {
         json(res, 200, { ok: true, version: VERSION, kind, asOn: asOn.toISOString().slice(0, 10), companies });
       } catch (e) {
         dcProgress.active = false;
-        const msg = /timeout|abort|released/i.test(String((e && e.message) || e))
+        const msg = /timed out|timeout|abort|released/i.test(String((e && e.message) || e))
           ? 'Tally stopped responding while reading bills. Keep Tally on the Gateway, make sure the company is open, then try again. “Release Tally” frees a stuck read.'
           : 'Could not read Tally: ' + String((e && e.message) || e);
         json(res, 502, { ok: false, error: msg, company: dcProgress.company });
