@@ -333,13 +333,13 @@
   <div class="card hidden" id="card4">
     <div class="row" style="justify-content:space-between;align-items:flex-start">
       <div><h2 id="sheetTitle">4 · Reports</h2><div class="sub" id="reportSub">Extract complete — pick a report. Each opens on screen and downloads to Excel.</div></div>
-      <button class="btn" onclick="downloadMaster()">⬇ Master sheet</button>
+      <button class="btn" id="masterBtn" onclick="downloadMaster()">⬇ Master sheet</button>
     </div>
     <div class="reportbar" id="reportbar">
       <button class="rbtn on" data-rep="consolidated" onclick="showReport('consolidated')">Consolidated matrix <span class="rtag ready">Ready</span></button>
       <button class="rbtn" data-rep="pareto" onclick="showReport('pareto')">80 / 20 (Pareto) <span class="rtag ready">Ready</span></button>
-      <button class="rbtn" data-rep="ageing" onclick="showReport('ageing')">Ageing <span class="rtag soon">Next</span></button>
-      <button class="rbtn" data-rep="billwise" onclick="showReport('billwise')">Bill-wise summary <span class="rtag soon">Next</span></button>
+      <button class="rbtn" data-rep="ageing" onclick="showReport('ageing')">Ageing <span class="rtag ready">Ready</span></button>
+      <button class="rbtn" data-rep="billwise" onclick="showReport('billwise')">Bill-wise summary <span class="rtag ready">Ready</span></button>
     </div>
     <div id="reportArea"></div>
   </div>
@@ -354,7 +354,7 @@ var connVer = '';
 function setPill(cls,txt){ var p=document.getElementById('connPill'); p.className='conn-pill '+cls; document.getElementById('connPillText').textContent=txt; }
 function banner(cls,title,sub){ var b=document.getElementById('connBanner'); b.className='conn-banner '+cls; document.getElementById('connTitle').textContent=title; document.getElementById('connSub').innerHTML=sub; }
 function verGE(v,min){ var a=String(v).split('.').map(Number),b=String(min).split('.').map(Number); for(var i=0;i<Math.max(a.length,b.length);i++){var x=a[i]||0,y=b[i]||0; if(x!==y) return x>y;} return true; }
-var REQVER='4.7';
+var REQVER='4.8';
 function checkConn(){
   fetch(API+'/health',{signal:AbortSignal.timeout(3000)}).then(function(r){return r.json();}).then(function(h){
     connVer=h.version||''; setPill('on','connector v'+connVer+' · connected');
@@ -444,7 +444,7 @@ function setKind(k){ KIND=k; Array.prototype.forEach.call(document.querySelector
 function fmtEta(s){ if(s==null)return ''; if(s<60)return '~'+s+'s left'; var m=Math.floor(s/60),ss=s%60; return '~'+m+'m '+(ss<10?'0':'')+ss+'s left'; }
 function resetData(){
   if(POLL){ clearInterval(POLL); POLL=null; }
-  RESULT=null; PARTIES=[]; GROUPS=[]; SUGGEST=[]; picked={};
+  RESULT=null; PARTIES=[]; GROUPS=[]; SUGGEST=[]; picked={}; BILLWISE=null; BW_INDEX=null;
   document.getElementById('card3').classList.add('hidden');
   document.getElementById('card4').classList.add('hidden');
   document.getElementById('progWrap').classList.add('hidden');
@@ -673,22 +673,27 @@ function showReport(rep){
       +'<div class="flow-note">80/20 rule — the fewest parties that make up 80% of the value are highlighted. Ranked by total across all companies.</div>';
     renderPareto();
   } else if(rep==='ageing'){
-    area.innerHTML=soonPanel('Debtor / Creditor ageing',
-      'Splits each party’s outstanding into buckets (0–30, 31–60, 61–90, 91–180, 180+ days), consolidated across companies and reconciled to the closing balance.',
-      ['Needs a bill-wise read from Tally — outstanding bills with their dates.',
-       'For ledgers kept bill-by-bill, we read Tally’s own bill allocations; for the rest, ageing is derived FIFO from the ledger’s dated movements.',
-       'On-account / unadjusted receipts (no bill reference) are shown in their own bucket, not force-fitted to an invoice.']);
+    if(!BILLWISE) area.innerHTML=billBuildPanel('ageing');
+    else { area.innerHTML='<div class="rtoolbar"><span class="grow" id="ageSub"></span><button class="btn primary" onclick="exportAgeing()">⬇ Download Excel</button></div>'
+      +'<div class="tblwrap"><table class="mtx" id="agetbl"></table></div>'
+      +'<div class="flow-note">Ageing by invoice date, consolidated across companies. “Unallocated” = on-account / unadjusted amounts with no bill date. Buckets tie to the balance.</div>'; renderAgeing(); }
   } else if(rep==='billwise'){
-    area.innerHTML=soonPanel('Bill-wise summary',
-      'Every open invoice per party — bill number, date, due date, amount and pending balance — with the on-account (unadjusted) amount shown separately.',
-      ['Reads Tally’s bill allocations (New Ref / Agst Ref / Advance / On Account).',
-       'Control check per party: open bills + on-account must equal the ledger balance; any gap is flagged for review.',
-       'This is the same read that powers ageing, so both arrive together.']);
+    if(!BILLWISE) area.innerHTML=billBuildPanel('billwise');
+    else { area.innerHTML='<div class="rtoolbar"><span class="grow" id="bwSub"></span>'
+      +'<input type="search" id="bwFilter" name="dc-bw-filter" autocomplete="off" data-lpignore="true" placeholder="Filter parties…" oninput="renderBillwise()" style="font-size:12.5px">'
+      +'<button class="btn primary" onclick="exportBillwise()">⬇ Download Excel</button></div>'
+      +'<div class="tblwrap"><table class="mtx" id="bwtbl"></table></div>'
+      +'<div class="flow-note">Open bills per party with dates and days outstanding. “On account” is the unadjusted remainder (bills + on-account = the balance).</div>'; renderBillwise(); }
   }
 }
-function soonPanel(title,desc,pts){
-  return '<div class="soonpanel"><h3>'+esc(title)+' <span class="rtag soon">Coming next</span></h3><p>'+esc(desc)+'</p><ul>'
-    +pts.map(function(p){return '<li>'+esc(p)+'</li>';}).join('')+'</ul></div>';
+function billBuildPanel(which){
+  var name=which==='ageing'?'Ageing':'Bill-wise summary';
+  return '<div class="soonpanel"><h3>'+esc(name)+'</h3>'
+    +'<p>This reads each party’s open bills from Tally (opening bills + this year’s New Ref / Agst Ref allocations) and derives on-account as the remainder, so bills + on-account always equal the balance. One read powers both Ageing and Bill-wise.</p>'
+    +'<div class="prog hidden" id="bwProgWrap" style="max-width:520px"><i id="bwProgBar"></i></div>'
+    +'<div class="prog-line hidden" id="bwProgLine"></div>'
+    +'<div class="msg" id="bwMsg"></div>'
+    +'<button class="btn primary lg" id="bwBuildBtn" style="margin-top:12px" onclick="loadBillwise(\''+which+'\')">Read bills from Tally →</button></div>';
 }
 function currentRows(){
   var fb=document.getElementById('filterBox');
@@ -767,6 +772,102 @@ function renderPareto(){
   });
   h+='</tbody>';
   el.innerHTML=h;
+}
+/* ============================ bill-wise & ageing ============================ */
+var BILLWISE=null, BW_INDEX=null;
+var AGE_BUCKETS=[['b0','0–30'],['b1','31–60'],['b2','61–90'],['b3','91–180'],['b4','180+'],['un','Unallocated']];
+function bucketKey(days){ if(days==null) return 'un'; if(days<=30) return 'b0'; if(days<=60) return 'b1'; if(days<=90) return 'b2'; if(days<=180) return 'b3'; return 'b4'; }
+function loadBillwise(which){
+  var btn=document.getElementById('bwBuildBtn'); if(btn) btn.disabled=true;
+  var targets=selectedTargets();
+  document.getElementById('bwProgWrap').classList.remove('hidden');
+  document.getElementById('bwProgLine').classList.remove('hidden');
+  setMsg('bwMsg','Reading bills from Tally, one company at a time…','');
+  var poll=setInterval(function(){
+    fetch(API+'/api/dc/progress').then(function(r){return r.json();}).then(function(p){
+      var pct=p.pct||0; var bar=document.getElementById('bwProgBar'); if(bar) bar.style.width=pct+'%';
+      var line=pct+'%'+(p.company?(' · '+p.company):'')+(p.sub?(' · '+p.sub):'')+(p.etaSec!=null?(' · '+fmtEta(p.etaSec)):'');
+      var pl=document.getElementById('bwProgLine'); if(pl) pl.textContent=line;
+    }).catch(function(){});
+  },1200);
+  fetchBillwise().then(function(){ clearInterval(poll); showReport(which); })
+    .catch(function(e){ clearInterval(poll); setMsg('bwMsg','Could not read bills — '+e.message,'bad'); if(btn)btn.disabled=false; });
+}
+// index BILLWISE company→ledger by matching labels to RESULT.companies order
+function buildBwIndex(){
+  BW_INDEX=RESULT.companies.map(function(c){
+    var bw=(BILLWISE.companies||[]).filter(function(b){return b.label===c.label;})[0];
+    var m={}; if(bw) (bw.ledgers||[]).forEach(function(L){ m[L.ledger.trim().toLowerCase()]=L; });
+    return m;
+  });
+}
+function bwForMember(m){ var idx=BW_INDEX[m.ci]; return idx?idx[m.ledger.trim().toLowerCase()]:null; }
+// per matched party: bucket sums (bills by age) + unallocated (on-account)
+function ageingRows(){
+  return GROUPS.map(function(g){
+    var b={b0:0,b1:0,b2:0,b3:0,b4:0,un:0};
+    g.members.forEach(function(m){
+      var L=bwForMember(m); if(!L) return;
+      (L.bills||[]).forEach(function(bill){ b[bucketKey(bill.days)]=round2(b[bucketKey(bill.days)]+bill.amount); });
+      b.un=round2(b.un+(L.onAccount||0));
+    });
+    var total=round2(b.b0+b.b1+b.b2+b.b3+b.b4+b.un);
+    return {g:g,b:b,total:total};
+  }).sort(function(x,y){ return Math.abs(y.total)-Math.abs(x.total); });
+}
+function renderAgeing(){
+  var el=document.getElementById('agetbl'); if(!el) return;
+  var rows=ageingRows();
+  var tot={b0:0,b1:0,b2:0,b3:0,b4:0,un:0,total:0};
+  rows.forEach(function(r){ AGE_BUCKETS.forEach(function(x){tot[x[0]]+=r.b[x[0]];}); tot.total+=r.total; });
+  document.getElementById('ageSub').innerHTML='Ageing by invoice date as on '+RESULT.asOn+' · '+rows.length+' parties · total '+fmt(tot.total)+'.';
+  var h='<thead><tr><th class="l">Particulars</th>';
+  AGE_BUCKETS.forEach(function(x){ h+='<th>'+x[1]+'</th>'; });
+  h+='<th class="tot-col">Total</th></tr>';
+  h+='<tr class="toprow"><td class="l">Total — '+rows.length+' parties</td>';
+  AGE_BUCKETS.forEach(function(x){ h+='<td class="'+(tot[x[0]]<0?'neg':'')+'">'+fmt(tot[x[0]])+'</td>'; });
+  h+='<td class="tot-col '+(tot.total<0?'neg':'')+'">'+fmt(tot.total)+'</td></tr></thead><tbody>';
+  rows.forEach(function(r){
+    h+='<tr><td class="l"><b>'+esc(r.g.label)+'</b>'+(r.g.inter?' <span class="tag multi">INTER-CO</span>':'')+'</td>';
+    AGE_BUCKETS.forEach(function(x){ var v=r.b[x[0]]; h+='<td class="'+(v<0?'neg':'')+(x[0]==='un'&&Math.abs(v)>0.005?' cum':'')+'">'+(Math.abs(v)<0.005?'—':fmt(v))+'</td>'; });
+    h+='<td class="tot-col '+(r.total<0?'neg':'')+'"><b>'+fmt(r.total)+'</b></td></tr>';
+  });
+  h+='</tbody><tfoot><tr class="tot"><td class="l">Total</td>';
+  AGE_BUCKETS.forEach(function(x){ h+='<td class="'+(tot[x[0]]<0?'neg':'')+'">'+fmt(tot[x[0]])+'</td>'; });
+  h+='<td class="tot-col '+(tot.total<0?'neg':'')+'">'+fmt(tot.total)+'</td></tr></tfoot>';
+  el.innerHTML=h;
+}
+function bwFilteredGroups(){
+  var fb=document.getElementById('bwFilter'); var f=(fb?fb.value:'').toLowerCase().trim();
+  var rows=GROUPS.slice().sort(function(a,b){return Math.abs(b.total)-Math.abs(a.total);});
+  if(f) rows=rows.filter(function(g){ return g.label.toLowerCase().indexOf(f)>=0; });
+  return rows;
+}
+function renderBillwise(){
+  var el=document.getElementById('bwtbl'); if(!el) return;
+  var rows=bwFilteredGroups();
+  var nbills=0, gtot=0;
+  var h='<thead><tr><th class="l">Particulars / bill</th><th class="l">Company</th><th>Bill date</th><th>Due date</th><th>Days</th><th class="tot-col">Amount</th></tr></thead><tbody>';
+  rows.forEach(function(g){
+    var lines=[], onAcc=0, ptot=0;
+    g.members.forEach(function(m){
+      var L=bwForMember(m); if(!L) return;
+      onAcc=round2(onAcc+(L.onAccount||0));
+      (L.bills||[]).forEach(function(bill){ lines.push({co:RESULT.companies[m.ci].label, bill:bill}); ptot=round2(ptot+bill.amount); });
+    });
+    onAcc=round2(onAcc); ptot=round2(ptot+onAcc); gtot=round2(gtot+ptot); nbills+=lines.length;
+    if(Math.abs(ptot)<0.005 && !lines.length) return;
+    lines.sort(function(a,b){ return (b.bill.days==null?-1:b.bill.days)-(a.bill.days==null?-1:a.bill.days); });
+    h+='<tr class="toprow"><td class="l" colspan="5"><b>'+esc(g.label)+'</b>'+(g.inter?' <span class="tag multi">INTER-CO</span>':'')+'</td><td class="tot-col"><b>'+fmt(ptot)+'</b></td></tr>';
+    lines.forEach(function(ln){
+      var b=ln.bill;
+      h+='<tr><td class="l">'+esc(b.ref)+'</td><td class="l">'+esc(ln.co)+'</td><td>'+(b.date||'—')+'</td><td>'+(b.dueDate||'—')+'</td><td>'+(b.days==null?'—':b.days)+'</td><td class="tot-col '+(b.amount<0?'neg':'')+'">'+fmt(b.amount)+'</td></tr>';
+    });
+    if(Math.abs(onAcc)>0.005) h+='<tr><td class="l cum">On account / unadjusted</td><td class="l">—</td><td>—</td><td>—</td><td>—</td><td class="tot-col '+(onAcc<0?'neg':'')+'">'+fmt(onAcc)+'</td></tr>';
+  });
+  h+='</tbody>';
+  el.innerHTML=h;
+  var sub=document.getElementById('bwSub'); if(sub) sub.innerHTML=rows.length+' parties · '+nbills+' open bills · total '+fmt(gtot)+' as on '+RESULT.asOn+'.';
 }
 function togglePick(gi){ picked[gi]=!picked[gi]; document.getElementById('btnCombine').disabled=Object.keys(picked).filter(function(k){return picked[k];}).length<2; }
 function combineSelected(){
@@ -878,19 +979,77 @@ function saveWb(wb, name){
     document.body.appendChild(a); a.click(); setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); },1500);
   });
 }
+function addAgeingSheet(wb){
+  var rows=ageingRows();
+  var ws=wb.addWorksheet('Ageing');
+  var ncol=2+AGE_BUCKETS.length; // particulars + buckets + total
+  ws.mergeCells(1,1,1,ncol);
+  ws.getCell(1,1).value=(KIND==='debtors'?'DEBTORS':'CREDITORS')+' — ageing (by invoice date) as on '+RESULT.asOn;
+  ws.getCell(1,1).font={bold:true,size:12};
+  var hdr=['Particulars']; AGE_BUCKETS.forEach(function(x){hdr.push(x[1]);}); hdr.push('Total');
+  var hr=ws.addRow(hdr); hr.font={bold:true,color:{argb:'FFFFFFFF'}}; hr.alignment={horizontal:'center'};
+  hr.eachCell(function(cell,cn){ cell.fill=HEADFILL; if(cn===1)cell.alignment={horizontal:'left'}; });
+  var tot={b0:0,b1:0,b2:0,b3:0,b4:0,un:0,total:0};
+  rows.forEach(function(r){ AGE_BUCKETS.forEach(function(x){tot[x[0]]+=r.b[x[0]];}); tot.total+=r.total; });
+  var top=['Total — '+rows.length+' parties']; AGE_BUCKETS.forEach(function(x){top.push(round2(tot[x[0]]));}); top.push(round2(tot.total));
+  var topRow=ws.addRow(top); topRow.font={bold:true};
+  topRow.eachCell(function(cell,cn){ cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFEFF3EE'}}; cell.border={bottom:{style:'medium'}}; if(cn>1){cell.numFmt=NUMFMT;cell.alignment={horizontal:'center'};} });
+  rows.forEach(function(r){
+    var row=[r.g.label]; AGE_BUCKETS.forEach(function(x){row.push(round2(r.b[x[0]]));}); row.push(round2(r.total));
+    var rr=ws.addRow(row); rr.eachCell(function(cell,cn){ if(cn>1){cell.numFmt=NUMFMT;cell.alignment={horizontal:'center'};} }); rr.getCell(ncol).font={bold:true};
+  });
+  var tr=['Total']; AGE_BUCKETS.forEach(function(x){tr.push(round2(tot[x[0]]));}); tr.push(round2(tot.total));
+  var totRow=ws.addRow(tr); totRow.font={bold:true};
+  totRow.eachCell(function(cell,cn){ cell.border={top:{style:'thin'}}; if(cn>1){cell.numFmt=NUMFMT;cell.alignment={horizontal:'center'};} });
+  ws.getColumn(1).width=38; for(var i=2;i<=ncol;i++) ws.getColumn(i).width=15;
+  ws.views=[{state:'frozen',ySplit:3,xSplit:1}];
+}
+function addBillwiseSheet(wb){
+  var ws=wb.addWorksheet('Bill-wise');
+  ws.addRow(['Party','Company','Bill ref','Bill date','Due date','Days','Amount']).font={bold:true};
+  GROUPS.slice().sort(function(a,b){return Math.abs(b.total)-Math.abs(a.total);}).forEach(function(g){
+    var onAcc=0, lines=[];
+    g.members.forEach(function(m){ var L=bwForMember(m); if(!L) return; onAcc=round2(onAcc+(L.onAccount||0)); (L.bills||[]).forEach(function(b){ lines.push({co:RESULT.companies[m.ci].label,b:b}); }); });
+    lines.sort(function(a,b){ return (b.b.days==null?-1:b.b.days)-(a.b.days==null?-1:a.b.days); });
+    lines.forEach(function(ln){ var b=ln.b; ws.addRow([g.label, ln.co, b.ref, b.date||'', b.dueDate||'', b.days==null?'':b.days, round2(b.amount)]).getCell(7).numFmt=NUMFMT; });
+    if(Math.abs(onAcc)>0.005) ws.addRow([g.label,'','On account / unadjusted','','','',round2(onAcc)]).getCell(7).numFmt=NUMFMT;
+  });
+  ws.getColumn(1).width=34; ws.getColumn(2).width=22; ws.getColumn(3).width=24; ws.getColumn(4).width=13; ws.getColumn(5).width=13; ws.getColumn(6).width=7; ws.getColumn(7).width=16;
+  ws.views=[{state:'frozen',ySplit:1}];
+}
 function newWb(){ if(typeof ExcelJS==='undefined'){ alert('Excel library still loading — try again in a moment.'); return null; } var wb=new ExcelJS.Workbook(); wb.creator='KNAP Tools'; return wb; }
 function exportXlsx(){ var wb=newWb(); if(!wb)return; addConsolidatedSheet(wb); addMembersSheet(wb); saveWb(wb, kindWord()+'-consolidated-'+RESULT.asOn+'.xlsx'); }
 function exportPareto(){ var wb=newWb(); if(!wb)return; addParetoSheet(wb); saveWb(wb, kindWord()+'-80-20-'+RESULT.asOn+'.xlsx'); }
-/* Master = every ready report in one workbook. Ageing & Bill-wise sheets join
-   here once those reads are built. */
+function exportAgeing(){ var wb=newWb(); if(!wb)return; addAgeingSheet(wb); saveWb(wb, kindWord()+'-ageing-'+RESULT.asOn+'.xlsx'); }
+function exportBillwise(){ var wb=newWb(); if(!wb)return; addBillwiseSheet(wb); saveWb(wb, kindWord()+'-billwise-'+RESULT.asOn+'.xlsx'); }
+/* Master = every report in one workbook. Includes Ageing + Bill-wise, reading
+   the bills first if they haven't been loaded yet. */
 function downloadMaster(){
   if(!RESULT){ return; }
-  var wb=newWb(); if(!wb)return;
-  addConsolidatedSheet(wb);
-  addParetoSheet(wb);
-  addPartyMasterSheet(wb);
-  addMembersSheet(wb);
-  saveWb(wb, kindWord()+'-master-'+RESULT.asOn+'.xlsx');
+  if(typeof ExcelJS==='undefined'){ alert('Excel library still loading — try again in a moment.'); return; }
+  ensureBillwise(function(withBills){
+    var wb=newWb(); if(!wb)return;
+    addConsolidatedSheet(wb);
+    addParetoSheet(wb);
+    if(withBills){ addAgeingSheet(wb); addBillwiseSheet(wb); }
+    addPartyMasterSheet(wb);
+    addMembersSheet(wb);
+    saveWb(wb, kindWord()+'-master-'+RESULT.asOn+'.xlsx');
+  });
+}
+function ensureBillwise(cb){
+  if(BILLWISE){ cb(true); return; }
+  var btn=document.getElementById('masterBtn');
+  var old=btn?btn.textContent:''; if(btn){ btn.disabled=true; btn.textContent='⏳ Reading bills…'; }
+  fetchBillwise().then(function(){ if(btn){btn.disabled=false;btn.textContent=old;} cb(true); })
+    .catch(function(e){ if(btn){btn.disabled=false;btn.textContent=old;} if(confirm('Could not read bills ('+e.message+').\nDownload the master WITHOUT the Ageing and Bill-wise sheets?')) cb(false); });
+}
+function fetchBillwise(){
+  return fetch(API+'/api/dc/billwise',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kind:KIND,asOn:RESULT.asOn,targets:selectedTargets()})})
+    .then(function(r){return r.json();}).then(function(j){
+      if(!j.ok) throw new Error((j.company?('while reading '+j.company+': '):'')+(j.error||'failed'));
+      BILLWISE=j; buildBwIndex(); return j;
+    });
 }
 
 /* ============================ helpers ============================ */
