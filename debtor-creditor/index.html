@@ -115,6 +115,33 @@
   .statc .v{font-size:23px;font-weight:800;font-family:var(--mono);letter-spacing:-.01em}
   .statc .k{font-size:12px;color:var(--muted);margin-top:3px}
   .statc.good .v{color:var(--green)} .statc.warnv .v{color:var(--warn)}
+  /* clickable stat cards */
+  button.statc{font:inherit;text-align:left;cursor:pointer;width:100%;transition:border-color .12s,box-shadow .12s,transform .05s;position:relative}
+  button.statc:hover{border-color:var(--green);box-shadow:0 2px 10px var(--shadow)}
+  button.statc:active{transform:translateY(1px)}
+  button.statc:disabled{cursor:default;opacity:.75}
+  button.statc:disabled:hover{border-color:var(--border);box-shadow:0 1px 2px var(--shadow)}
+  button.statc.open{border-color:var(--green);box-shadow:0 0 0 2px var(--green-soft)}
+  .statc .hint{font-size:10px;color:var(--faint);margin-top:6px;display:flex;align-items:center;gap:4px}
+  .statc .hint .caret{transition:transform .15s}
+  button.statc.open .hint .caret{transform:rotate(180deg)}
+  .mdetail{border:1px solid var(--border);border-radius:13px;background:var(--surface);margin:-4px 0 16px;overflow:hidden}
+  .mdetail .mdhead{display:flex;align-items:center;gap:10px;padding:11px 16px;background:var(--surface-2);border-bottom:1px solid var(--border);font-size:12.5px}
+  .mdetail .mdhead b{font-size:13px}
+  .mdetail .mdhead .grow{flex:1}
+  .mdetail .mdbody{max-height:340px;overflow:auto;padding:0}
+  .mdchips{display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px}
+  .mdchip{font-size:11.5px;background:var(--surface-3);border:1px solid var(--border);border-radius:999px;padding:4px 11px;color:var(--muted)}
+  .mdchip b{color:var(--ink);font-family:var(--mono)}
+  table.mini{width:100%;border-collapse:collapse;font-size:12px}
+  table.mini th{position:sticky;top:0;background:var(--surface-2);text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--faint);padding:7px 16px;border-bottom:1px solid var(--border);white-space:nowrap;z-index:1}
+  table.mini th.r,table.mini td.r{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+  table.mini td{padding:6px 16px;border-bottom:1px solid var(--surface-2);vertical-align:top}
+  table.mini tr:hover td{background:var(--surface-2)}
+  table.mini td.neg{color:var(--bad)}
+  table.mini .cgrp td{background:var(--surface-3);font-weight:700}
+  table.mini .cgrp td:hover{background:var(--surface-3)}
+  .mdempty{padding:22px 16px;color:var(--muted);font-size:12.5px;text-align:center}
   .prog{height:10px;background:var(--surface-3);border-radius:999px;overflow:hidden;margin-top:12px}
   .prog>i{display:block;height:100%;background:var(--green);width:0;transition:width .4s}
   .prog-line{font-size:12px;color:var(--muted);margin-top:6px;font-family:var(--mono)}
@@ -133,6 +160,11 @@
   table.mtx{width:100%;border-collapse:collapse;font-size:12.8px;min-width:640px}
   table.mtx th{position:sticky;top:0;background:var(--surface-2);text-align:center;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--faint);border-bottom:1px solid var(--border);padding:9px 12px;font-weight:700;white-space:nowrap;z-index:3}
   table.mtx th.l{text-align:left}
+  table.mtx th.sortable{cursor:pointer;user-select:none}
+  table.mtx th.sortable:hover{color:var(--ink)}
+  table.mtx th .arw{display:inline-block;margin-left:4px;font-size:9px;opacity:.35;vertical-align:middle}
+  table.mtx th.sorted{color:var(--green)}
+  table.mtx th.sorted .arw{opacity:1;color:var(--green)}
   table.mtx td{padding:7px 12px;border-bottom:1px solid var(--surface-2);text-align:center;font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
   table.mtx td.l{text-align:left;font-family:var(--sans);max-width:340px;white-space:normal}
   /* keep Particulars (left) and Total (right) columns always visible */
@@ -317,6 +349,7 @@
     <h2>3 · Match &amp; review</h2>
     <div class="sub">Confident matches (same PAN / GSTIN / name) are merged automatically. Confirm the look-alikes below, then merge or split any row in the sheet by hand. Your decisions are remembered for next time.</div>
     <div class="statgrid" id="matchStats" style="margin-top:14px"></div>
+    <div id="matchDetail"></div>
     <div id="sugWrap"></div>
     <div class="cta" style="margin-top:16px">
       <div>
@@ -469,7 +502,7 @@ function extract(){
   document.getElementById('progWrap').classList.remove('hidden');
   document.getElementById('progLine').classList.remove('hidden');
   document.getElementById('progLine').textContent='0% · starting…';
-  setMsg('msgExtract','Reading '+targets.length+' company(ies) as on '+asOn+', one by one — full books, so this can take a while…','');
+  setMsg('msgExtract','Reading '+targets.length+' company(ies) as on '+fmtDate(asOn)+', one by one — full books, so this can take a while…','');
   POLL=setInterval(function(){
     fetch(API+'/api/dc/progress').then(function(r){return r.json();}).then(function(p){
       var pct=p.pct||0;
@@ -494,7 +527,7 @@ function extract(){
       if(empty.length){
         setMsg('msgExtract','⚠ NO TRANSACTIONS were read for: '+esc(empty.join(', '))+'. Balances for these are OPENING ONLY (not the closing balance). This means Tally returned no vouchers — put Tally on the Gateway with the company open, press “Release Tally”, and if it persists restart Tally (its XML export degrades after heavy use), then Reset data and re-run.','bad');
       } else {
-        setMsg('msgExtract','Read '+j.companies.length+' company(ies), '+tot+' party rows as on '+j.asOn+'. Matching…','');
+        setMsg('msgExtract','Read '+j.companies.length+' company(ies), '+tot+' party rows as on '+fmtDate(j.asOn)+'. Matching…','');
       }
       loadAliasesThen(runMatch);
     }).catch(function(e){ if(POLL){ clearInterval(POLL); POLL=null; } document.getElementById('btnExtract').disabled=false; document.getElementById('progLine').classList.add('hidden'); setMsg('msgExtract','Could not reach the connector: '+e.message,'bad'); });
@@ -557,7 +590,7 @@ function runMatch(){
   renderMatchReview();
   markStep(2,true); document.getElementById('card3').classList.remove('hidden');
   var extra=SUGGEST.length?(' — '+SUGGEST.length+' look-alike(s) to confirm below'):'';
-  setMsg('msgExtract','✓ Matching done as on '+RESULT.asOn+' — '+GROUPS.length+' parties from '+PARTIES.length+' ledger rows'+extra+'.','ok');
+  setMsg('msgExtract','✓ Matching done as on '+fmtDate(RESULT.asOn)+' — '+GROUPS.length+' parties from '+PARTIES.length+' ledger rows'+extra+'.','ok');
   document.getElementById('card3').scrollIntoView({behavior:'smooth',block:'start'});
 }
 function buildGroups(uf){
@@ -620,32 +653,106 @@ function computeSuggestions(){
 
 /* ============================ step 3: review ============================ */
 function renderMatchReview(){
-  var parties=PARTIES.length, groups=GROUPS.length, merged=parties-groups, inter=GROUPS.filter(function(g){return g.inter;}).length;
-  var s=document.getElementById('matchStats');
-  s.innerHTML=stat(parties,'party rows read')+stat(groups,'matched parties')+stat(merged,'rows merged','good')+stat(SUGGEST.length,'look-alikes to review',SUGGEST.length?'warnv':'');
+  // render the look-alike pairs first, then the cards (so the card count is live)
   var w=document.getElementById('sugWrap');
-  if(!SUGGEST.length){ w.innerHTML=''; return; }
-  var html='<div class="sug"><div class="sh">⚠ '+SUGGEST.length+' possible same-party pair(s) — confirm each</div>';
-  SUGGEST.forEach(function(sg,idx){
-    html+='<div class="pair" id="sg'+idx+'">'
-      +'<div class="side"><div class="n">'+esc(sg.a.rep.ledger)+'</div><div class="m">'+coList(sg.a)+'</div></div>'
-      +'<div class="side"><div class="n">'+esc(sg.b.rep.ledger)+'</div><div class="m">'+coList(sg.b)+'</div></div>'
-      +'<div class="score">'+Math.round(sg.score*100)+'% match</div>'
-      +'<div class="act"><button class="btn sm primary" onclick="acceptSug('+idx+')">Same</button><button class="btn sm" onclick="rejectSug('+idx+')">Different</button></div></div>';
-  });
-  html+='</div>';
-  w.innerHTML=html;
+  if(!SUGGEST.length){ w.innerHTML=''; }
+  else{
+    var html='<div class="sug"><div class="sh">⚠ '+SUGGEST.length+' possible same-party pair(s) — confirm each</div>';
+    SUGGEST.forEach(function(sg,idx){
+      html+='<div class="pair" id="sg'+idx+'">'
+        +'<div class="side"><div class="n">'+esc(sg.a.rep.ledger)+'</div><div class="m">'+coList(sg.a)+'</div></div>'
+        +'<div class="side"><div class="n">'+esc(sg.b.rep.ledger)+'</div><div class="m">'+coList(sg.b)+'</div></div>'
+        +'<div class="score">'+Math.round(sg.score*100)+'% match</div>'
+        +'<div class="act"><button class="btn sm primary" onclick="acceptSug('+idx+')">Same</button><button class="btn sm" onclick="rejectSug('+idx+')">Different</button></div></div>';
+    });
+    html+='</div>';
+    w.innerHTML=html;
+  }
+  matchDetailOpen=null; document.getElementById('matchDetail').innerHTML='';
+  refreshMatchCards();
 }
 function coList(g){ return Object.keys(g.perCo).map(function(ci){ return esc(RESULT.companies[ci].label)+': '+fmt(g.perCo[ci]); }).join(' · '); }
-function stat(v,k,cls){ return '<div class="statc '+(cls||'')+'"><div class="v">'+(typeof v==='number'?v.toLocaleString('en-IN'):v)+'</div><div class="k">'+k+'</div></div>'; }
+/* ---- the four review cards are clickable ---- */
+var matchDetailOpen=null;
+function refreshMatchCards(){
+  var parties=PARTIES.length, groups=GROUPS.length, merged=parties-groups;
+  var sw=document.getElementById('sugWrap');
+  var sugN=(sw&&sw.children.length)?document.querySelectorAll('#sugWrap .pair:not([style*="none"])').length:SUGGEST.length;
+  var s=document.getElementById('matchStats');
+  s.innerHTML=stat(parties,'party rows read','','read')
+    +stat(groups,'matched parties','','matched')
+    +stat(merged,'rows merged','good','merged')
+    +stat(sugN,'look-alikes to review',sugN?'warnv':'','review');
+}
+function detailHint(which){ return which==='read'?'see every ledger read':which==='matched'?'see the consolidated list':which==='merged'?'see what got combined':'jump to look-alikes'; }
+function stat(v,k,cls,which){
+  var num=(typeof v==='number'?v.toLocaleString('en-IN'):v);
+  if(!which) return '<div class="statc '+(cls||'')+'"><div class="v">'+num+'</div><div class="k">'+k+'</div></div>';
+  var dis=(typeof v==='number'&&v===0);
+  var open=(matchDetailOpen===which);
+  var hint=dis?'<div class="hint">nothing to show</div>':'<div class="hint">'+detailHint(which)+' <span class="caret">▾</span></div>';
+  return '<button type="button" class="statc '+(cls||'')+(open?' open':'')+'" '+(dis?'disabled':'')+' onclick="showMatchDetail(\''+which+'\')"><div class="v">'+num+'</div><div class="k">'+k+'</div>'+hint+'</button>';
+}
+function showMatchDetail(which){
+  // "look-alikes" just scrolls to the confirm panel below (already on screen)
+  if(which==='review'){ var sw=document.getElementById('sugWrap'); if(sw&&sw.firstChild) sw.scrollIntoView({behavior:'smooth',block:'start'}); return; }
+  var d=document.getElementById('matchDetail');
+  if(matchDetailOpen===which){ matchDetailOpen=null; d.innerHTML=''; refreshMatchCards(); return; }
+  matchDetailOpen=which; d.innerHTML=matchDetailHTML(which); refreshMatchCards();
+  d.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+function matchDetailHTML(which){ return which==='read'?detailRead():which==='matched'?detailMatched():which==='merged'?detailMerged():''; }
+function detailRead(){
+  var cos=RESULT.companies, byCo=cos.map(function(){return {n:0,sum:0};});
+  PARTIES.forEach(function(p){ byCo[p.ci].n++; byCo[p.ci].sum+=p.balance; });
+  var chips=cos.map(function(c,ci){ return '<span class="mdchip">'+esc(c.label)+' · <b>'+byCo[ci].n+'</b> ledgers · <b>'+fmt(byCo[ci].sum)+'</b></span>'; }).join('');
+  var body='';
+  cos.forEach(function(c,ci){
+    var ps=PARTIES.filter(function(p){return p.ci===ci;}).slice().sort(function(a,b){return Math.abs(b.balance)-Math.abs(a.balance);});
+    body+='<tr class="cgrp"><td colspan="3">'+esc(c.label)+' — '+ps.length+' ledgers · '+fmt(byCo[ci].sum)+'</td></tr>';
+    ps.forEach(function(p){
+      var id=p.gstin?esc(p.gstin):(p.pan?esc(p.pan):'<span style="color:var(--faint)">—</span>');
+      body+='<tr><td>'+esc(p.ledger)+'</td><td style="font-family:var(--mono);font-size:11px">'+id+'</td><td class="r '+(p.balance<0?'neg':'')+'">'+fmt(p.balance)+'</td></tr>';
+    });
+  });
+  return '<div class="mdetail"><div class="mdhead"><b>Every ledger read from Tally</b><span class="grow"></span><span style="color:var(--muted)">'+PARTIES.length+' rows · '+cos.length+' companies</span></div>'
+    +'<div class="mdchips">'+chips+'</div>'
+    +'<div class="mdbody"><table class="mini"><thead><tr><th>Ledger</th><th>GSTIN / PAN</th><th class="r">Balance</th></tr></thead><tbody>'+body+'</tbody></table></div></div>';
+}
+function detailMatched(){
+  var rows=GROUPS.slice().sort(function(a,b){return Math.abs(b.total)-Math.abs(a.total);});
+  var body=rows.map(function(g){
+    var basis=g.basis==='pan'?'<span class="tag pan">PAN</span>':g.basis==='gstin'?'<span class="tag gst">GSTIN</span>':'<span class="tag nm">NAME</span>';
+    var uniq=uniqLedgers(g), id=g.gstins[0]||g.pans[0]||'';
+    return '<tr><td>'+esc(g.label)+' '+basis+(g.inter?' <span class="tag multi">INTER-CO</span>':'')+(id?'<div style="font-size:10.5px;color:var(--faint);font-family:var(--mono)">'+esc(id)+'</div>':'')+'</td>'
+      +'<td class="r">'+uniq.length+'</td><td class="r">'+Object.keys(g.perCo).length+'</td><td class="r '+(g.total<0?'neg':'')+'">'+fmt(g.total)+'</td></tr>';
+  }).join('');
+  return '<div class="mdetail"><div class="mdhead"><b>Matched parties — the consolidated list</b><span class="grow"></span><span style="color:var(--muted)">'+GROUPS.length+' distinct parties</span></div>'
+    +'<div class="mdbody"><table class="mini"><thead><tr><th>Party</th><th class="r">Ledgers</th><th class="r">Cos</th><th class="r">Total</th></tr></thead><tbody>'+body+'</tbody></table></div></div>';
+}
+function detailMerged(){
+  var cos=RESULT.companies;
+  var groups=GROUPS.filter(function(g){return g.members.length>1;}).sort(function(a,b){return (b.members.length-a.members.length)||(Math.abs(b.total)-Math.abs(a.total));});
+  if(!groups.length) return '<div class="mdetail"><div class="mdhead"><b>Merged rows</b></div><div class="mdempty">Nothing was merged — every ledger stands on its own.</div></div>';
+  var body='';
+  groups.forEach(function(g){
+    var basis=g.basis==='pan'?'<span class="tag pan">PAN</span>':g.basis==='gstin'?'<span class="tag gst">GSTIN</span>':'<span class="tag nm">NAME</span>';
+    body+='<tr class="cgrp"><td colspan="3">'+esc(g.label)+' '+basis+' — '+g.members.length+' ledgers → 1 · '+fmt(g.total)+'</td></tr>';
+    g.members.forEach(function(m){
+      body+='<tr><td style="padding-left:28px">'+esc(m.ledger)+'</td><td>'+esc(cos[m.ci].label)+'</td><td class="r '+(m.balance<0?'neg':'')+'">'+fmt(m.balance)+'</td></tr>';
+    });
+  });
+  return '<div class="mdetail"><div class="mdhead"><b>What got merged &amp; why</b><span class="grow"></span><span style="color:var(--muted)">'+groups.length+' groups · '+(PARTIES.length-GROUPS.length)+' rows folded in</span></div>'
+    +'<div style="padding:9px 16px;font-size:11.5px;color:var(--muted);border-bottom:1px solid var(--border)">Tag = the identifier the ledgers were matched on: <span class="tag gst">GSTIN</span> same GST no. · <span class="tag pan">PAN</span> same PAN · <span class="tag nm">NAME</span> same name (after pvt=private, ltd=limited…).</div>'
+    +'<div class="mdbody"><table class="mini"><thead><tr><th>Ledger</th><th>Company</th><th class="r">Balance</th></tr></thead><tbody>'+body+'</tbody></table></div></div>';
+}
 function acceptSug(idx){ var sg=SUGGEST[idx]; savedAliases.merges.push([sg.ka,sg.kb]); document.getElementById('sg'+idx).style.display='none'; reMatch(); }
-function rejectSug(idx){ var sg=SUGGEST[idx]; savedAliases.splits.push([sg.ka,sg.kb]); document.getElementById('sg'+idx).style.display='none'; }
+function rejectSug(idx){ var sg=SUGGEST[idx]; savedAliases.splits.push([sg.ka,sg.kb]); document.getElementById('sg'+idx).style.display='none'; refreshMatchCards(); }
 function reMatch(){
   // rebuild groups honouring updated merges (same ordered cascade)
   var uf=makeUF(); unionCascade(uf); buildGroups(uf);
-  var parties=PARTIES.length, groups=GROUPS.length, merged=parties-groups;
-  var s=document.getElementById('matchStats');
-  s.innerHTML=stat(parties,'party rows read')+stat(groups,'matched parties')+stat(merged,'rows merged','good')+stat(document.querySelectorAll('.sug .pair:not([style*="none"])').length,'look-alikes to review','warnv');
+  refreshMatchCards();
+  if(matchDetailOpen){ document.getElementById('matchDetail').innerHTML=matchDetailHTML(matchDetailOpen); }
   if(!document.getElementById('card4').classList.contains('hidden')) renderMatrix();
 }
 
@@ -655,13 +762,13 @@ function buildSheet(){
   saveAliases();
   markStep(3,true); document.getElementById('card4').classList.remove('hidden');
   var neg=KIND==='debtors'?'credit balances shown negative':'debit balances shown negative';
-  document.getElementById('sheetTitle').textContent='4 · '+(KIND==='debtors'?'Debtors':'Creditors')+' — as on '+RESULT.asOn;
+  document.getElementById('sheetTitle').textContent='4 · '+(KIND==='debtors'?'Debtors':'Creditors')+' — as on '+fmtDate(RESULT.asOn);
   var note=GROUPS.length+' parties across '+RESULT.companies.length+' companies · '+neg+'. Balances are built from Tally vouchers up to the as-on date (opening + movement).';
   var empty=(RESULT.companies||[]).filter(function(c){return (c.voucherCount||0)===0;}).map(function(c){return c.label;});
   var sub=document.getElementById('reportSub');
   if(empty.length){ sub.className='sub'; sub.style.color='var(--bad)'; sub.textContent='⚠ NO TRANSACTIONS read for '+empty.join(', ')+' — these balances are OPENING ONLY. Fix Tally (Gateway + company open, restart if needed), Reset data and re-run before trusting this.'; }
   else { sub.style.color=''; sub.textContent=note+' Pick a report below.'; }
-  picked={};
+  picked={}; matrixSort=null;
   showReport('consolidated');
   document.getElementById('card4').scrollIntoView({behavior:'smooth',block:'start'});
 }
@@ -670,7 +777,7 @@ function showReport(rep){
   Array.prototype.forEach.call(document.querySelectorAll('#reportbar .rbtn'),function(b){ b.classList.toggle('on', b.getAttribute('data-rep')===rep); });
   var area=document.getElementById('reportArea');
   if(rep==='consolidated'){
-    area.innerHTML='<div class="rtoolbar"><span class="grow">Balances as per each Tally as on '+RESULT.asOn+'. Per-company totals sit at the top; grand total at the bottom.</span>'
+    area.innerHTML='<div class="rtoolbar"><span class="grow">Balances as per each Tally as on '+fmtDate(RESULT.asOn)+'. Per-company totals sit at the top; grand total at the bottom.</span>'
       +'<button class="btn ghost sm" id="btnCombine" onclick="combineSelected()" disabled>Combine selected</button>'
       +'<input type="search" id="filterBox" name="dc-party-filter" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore placeholder="Filter parties…" oninput="renderMatrix()" style="font-size:12.5px">'
       +'<button class="btn primary" onclick="exportXlsx()">⬇ Download Excel</button></div>'
@@ -713,14 +820,40 @@ function currentRows(){
   return rows;
 }
 function colTotals(rows,cos){ var ct=cos.map(function(){return 0;}), grand=0; rows.forEach(function(g){ cos.forEach(function(c,ci){ if(g.perCo[ci]!==undefined) ct[ci]+=g.perCo[ci]; }); grand+=g.total; }); return {ct:ct,grand:grand}; }
+var matrixSort=null; // null = default order (largest exposure first)
+function sortMatrix(key){
+  if(matrixSort&&matrixSort.key===key){ matrixSort.dir*=-1; }
+  else { matrixSort={key:key, dir:(key==='name'?1:-1)}; }
+  renderMatrix();
+}
+function applyMatrixSort(rows){
+  if(!matrixSort) return rows;
+  var k=matrixSort.key, dir=matrixSort.dir, arr=rows.slice();
+  arr.sort(function(a,b){
+    if(k==='name') return dir*a.label.localeCompare(b.label,undefined,{sensitivity:'base',numeric:true});
+    var va,vb;
+    if(k==='total'){ va=a.total; vb=b.total; }
+    else { var ci=parseInt(k.slice(2),10); va=a.perCo[ci]; vb=b.perCo[ci]; }
+    var na=(va===undefined||va===null), nb=(vb===undefined||vb===null);
+    if(na&&nb) return 0; if(na) return 1; if(nb) return -1;   // missing (—) always last
+    if(va===vb) return 0;
+    return dir*(va<vb?-1:1);
+  });
+  return arr;
+}
+function mth(cls,key,label){
+  var active=matrixSort&&matrixSort.key===key;
+  var arw=active?(matrixSort.dir<0?'▼':'▲'):'▲';
+  return '<th class="'+cls+' sortable'+(active?' sorted':'')+'" onclick="sortMatrix(\''+key+'\')">'+label+'<span class="arw">'+arw+'</span></th>';
+}
 function renderMatrix(){
   var el=document.getElementById('mtx'); if(!el) return;
   var cos=RESULT.companies;
-  var rows=currentRows();
+  var rows=applyMatrixSort(currentRows());
   var t=colTotals(rows,cos);
-  var h='<thead><tr><th class="l">Particulars</th>';
-  cos.forEach(function(c){ h+='<th>'+esc(c.label)+'</th>'; });
-  h+='<th class="tot-col">Total</th></tr>';
+  var h='<thead><tr>'+mth('l','name','Particulars');
+  cos.forEach(function(c,ci){ h+=mth('','co'+ci,esc(c.label)); });
+  h+=mth('tot-col','total','Total')+'</tr>';
   // per-company total row AT THE TOP, right under the company names
   h+='<tr class="toprow"><td class="l">Total — '+rows.length+' parties</td>';
   cos.forEach(function(c,ci){ h+='<td class="'+(t.ct[ci]<0?'neg':'')+'">'+fmt(t.ct[ci])+'</td>'; });
@@ -830,7 +963,7 @@ function renderAgeing(){
   var rows=ageingRows();
   var tot={b0:0,b1:0,b2:0,b3:0,b4:0,un:0,total:0};
   rows.forEach(function(r){ AGE_BUCKETS.forEach(function(x){tot[x[0]]+=r.b[x[0]];}); tot.total+=r.total; });
-  document.getElementById('ageSub').innerHTML='Ageing by invoice date as on '+RESULT.asOn+' · '+rows.length+' parties · total '+fmt(tot.total)+'.';
+  document.getElementById('ageSub').innerHTML='Ageing by invoice date as on '+fmtDate(RESULT.asOn)+' · '+rows.length+' parties · total '+fmt(tot.total)+'.';
   var h='<thead><tr><th class="l">Particulars</th>';
   AGE_BUCKETS.forEach(function(x){ h+='<th>'+x[1]+'</th>'; });
   h+='<th class="tot-col">Total</th></tr>';
@@ -877,7 +1010,7 @@ function renderBillwise(){
   });
   h+='</tbody>';
   el.innerHTML=h;
-  var sub=document.getElementById('bwSub'); if(sub) sub.innerHTML=rows.length+' parties · '+nbills+' open bills · total '+fmt(gtot)+' as on '+RESULT.asOn+'.';
+  var sub=document.getElementById('bwSub'); if(sub) sub.innerHTML=rows.length+' parties · '+nbills+' open bills · total '+fmt(gtot)+' as on '+fmtDate(RESULT.asOn)+'.';
 }
 function togglePick(gi){ picked[gi]=!picked[gi]; document.getElementById('btnCombine').disabled=Object.keys(picked).filter(function(k){return picked[k];}).length<2; }
 function combineSelected(){
@@ -912,7 +1045,7 @@ function kindWord(){ return KIND==='debtors'?'Debtors':'Creditors'; }
 function addConsolidatedSheet(wb){
   var cos=RESULT.companies, rows=GROUPS;
   var ws=wb.addWorksheet('Consolidated');
-  var title=(KIND==='debtors'?'DEBTORS':'CREDITORS')+' — consolidated as on '+RESULT.asOn+'  ('+(KIND==='debtors'?'credit balances negative':'debit balances negative')+')';
+  var title=(KIND==='debtors'?'DEBTORS':'CREDITORS')+' — consolidated as on '+fmtDate(RESULT.asOn)+'  ('+(KIND==='debtors'?'credit balances negative':'debit balances negative')+')';
   var ncol=2+cos.length;
   ws.mergeCells(1,1,1,ncol); var tc=ws.getCell(1,1); tc.value=title; tc.font={bold:true,size:13};
   var hdr=['Particulars']; cos.forEach(function(c){hdr.push(c.label);}); hdr.push('Total');
@@ -939,7 +1072,7 @@ function addParetoSheet(wb){
   var ws=wb.addWorksheet('80-20');
   ws.mergeCells(1,1,1,6);
   var n80=pr.rows.filter(function(r){return r.in80;}).length, tot=GROUPS.length;
-  ws.getCell(1,1).value=(KIND==='debtors'?'DEBTORS':'CREDITORS')+' — 80/20 as on '+RESULT.asOn+'  ·  '+n80+' of '+tot+' parties ('+(tot?Math.round(n80/tot*100):0)+'%) = 80% of value';
+  ws.getCell(1,1).value=(KIND==='debtors'?'DEBTORS':'CREDITORS')+' — 80/20 as on '+fmtDate(RESULT.asOn)+'  ·  '+n80+' of '+tot+' parties ('+(tot?Math.round(n80/tot*100):0)+'%) = 80% of value';
   ws.getCell(1,1).font={bold:true,size:12};
   var hr=ws.addRow(['Rank','Party','Balance','% of total','Cumulative %','Top 80%?']);
   hr.font={bold:true,color:{argb:'FFFFFFFF'}}; hr.eachCell(function(cell){ cell.fill=HEADFILL; });
@@ -956,7 +1089,7 @@ function addPartyMasterSheet(wb){
   var ws=wb.addWorksheet('Party master');
   var ncol=6+cos.length;
   ws.mergeCells(1,1,1,ncol);
-  ws.getCell(1,1).value=(KIND==='debtors'?'DEBTORS':'CREDITORS')+' — party master as on '+RESULT.asOn;
+  ws.getCell(1,1).value=(KIND==='debtors'?'DEBTORS':'CREDITORS')+' — party master as on '+fmtDate(RESULT.asOn);
   ws.getCell(1,1).font={bold:true,size:12};
   var hdr=['Party','PAN','GSTIN(s)','Match by','Ledgers','Inter-co']; cos.forEach(function(c){hdr.push(c.label);}); hdr.push('Total');
   var hr=ws.addRow(hdr); hr.font={bold:true,color:{argb:'FFFFFFFF'}}; hr.eachCell(function(cell){ cell.fill=HEADFILL; });
@@ -994,7 +1127,7 @@ function addAgeingSheet(wb){
   var ws=wb.addWorksheet('Ageing');
   var ncol=2+AGE_BUCKETS.length; // particulars + buckets + total
   ws.mergeCells(1,1,1,ncol);
-  ws.getCell(1,1).value=(KIND==='debtors'?'DEBTORS':'CREDITORS')+' — ageing (by invoice date) as on '+RESULT.asOn;
+  ws.getCell(1,1).value=(KIND==='debtors'?'DEBTORS':'CREDITORS')+' — ageing (by invoice date) as on '+fmtDate(RESULT.asOn);
   ws.getCell(1,1).font={bold:true,size:12};
   var hdr=['Particulars']; AGE_BUCKETS.forEach(function(x){hdr.push(x[1]);}); hdr.push('Total');
   var hr=ws.addRow(hdr); hr.font={bold:true,color:{argb:'FFFFFFFF'}}; hr.alignment={horizontal:'center'};
@@ -1065,6 +1198,8 @@ function fetchBillwise(){
 /* ============================ helpers ============================ */
 function round2(n){ return Math.round(n*100)/100; }
 function fmt(n){ if(n===undefined||n===null)return '—'; var v=round2(n); return (v<0?'-':'')+'₹'+Math.abs(v).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+// ISO yyyy-mm-dd -> "04 June 2026" for display (logic/filenames keep the ISO form)
+function fmtDate(iso){ if(!iso)return ''; var p=String(iso).split('-'); if(p.length!==3)return iso; var M=['January','February','March','April','May','June','July','August','September','October','November','December']; var mi=parseInt(p[1],10)-1; if(mi<0||mi>11)return iso; var d=parseInt(p[2],10); return (d<10?'0'+d:''+d)+' '+M[mi]+' '+p[0]; }
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function markStep(n,done){ var s=document.getElementById('st'+n); if(s){ s.classList.remove('active'); s.classList.add('done'); } var nx=document.getElementById('st'+(n+1)); if(nx)nx.classList.add('active'); }
 
