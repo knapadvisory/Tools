@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.11';
+const VERSION = '4.12';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2770,9 +2770,14 @@ const server = http.createServer(async (req, res) => {
               const gk = tag(block, 'GUID') || `${tag(block, 'DATE')}|${tag(block, 'VOUCHERNUMBER')}|${tag(block, 'VOUCHERTYPENAME')}`;
               if (seen.has(gk)) continue; seen.add(gk);
               if (toKey && dateKey(tag(block, 'DATE')) > toKey) continue;
+              const guid = tag(block, 'GUID');
+              const allBlocks = block.match(/<ALLLEDGERENTRIES\.LIST>[\s\S]*?<\/ALLLEDGERENTRIES\.LIST>/gi) || [];
+              const plainBlocks = block.match(/<LEDGERENTRIES\.LIST>[\s\S]*?<\/LEDGERENTRIES\.LIST>/gi) || [];
+              const matchInVoucher = (block.match(/<(?:ALL)?LEDGERENTRIES\.LIST>[\s\S]*?<\/(?:ALL)?LEDGERENTRIES\.LIST>/gi) || []).filter((e) => norm(tag(e, 'LEDGERNAME')) === wln).length;
               for (const e of block.match(/<(?:ALL)?LEDGERENTRIES\.LIST>[\s\S]*?<\/(?:ALL)?LEDGERENTRIES\.LIST>/gi) || []) {
                 if (norm(tag(e, 'LEDGERNAME')) !== wln) continue;
                 entries.push({
+                  guid, allBlocks: allBlocks.length, plainBlocks: plainBlocks.length, matchInVoucher,
                   date: tag(block, 'DATE'), vtype: tag(block, 'VOUCHERTYPENAME'), vno: tag(block, 'VOUCHERNUMBER'),
                   amountRaw: tag(e, 'AMOUNT'), isDeemedPositive: tag(e, 'ISDEEMEDPOSITIVE'),
                   forexAmount: tag(e, 'FOREXAMOUNT'), rateOfExchange: tag(e, 'RATEOFEXCHANGE'),
