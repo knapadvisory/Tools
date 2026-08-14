@@ -387,7 +387,7 @@ var connVer = '';
 function setPill(cls,txt){ var p=document.getElementById('connPill'); p.className='conn-pill '+cls; document.getElementById('connPillText').textContent=txt; }
 function banner(cls,title,sub){ var b=document.getElementById('connBanner'); b.className='conn-banner '+cls; document.getElementById('connTitle').textContent=title; document.getElementById('connSub').innerHTML=sub; }
 function verGE(v,min){ var a=String(v).split('.').map(Number),b=String(min).split('.').map(Number); for(var i=0;i<Math.max(a.length,b.length);i++){var x=a[i]||0,y=b[i]||0; if(x!==y) return x>y;} return true; }
-var REQVER='4.17';
+var REQVER='4.18';
 function checkConn(){
   fetch(API+'/health',{signal:AbortSignal.timeout(3000)}).then(function(r){return r.json();}).then(function(h){
     connVer=h.version||''; setPill('on','connector v'+connVer+' · connected');
@@ -443,8 +443,10 @@ function scanCompanies(){
       if(!j.ok){ setMsg('msgScan',j.error||'Scan failed.','bad'); return; }
       endpoints=j.endpoints||[];
       renderCompanies();
-      var n=0; endpoints.forEach(function(e){ n+=(e.companies||[]).length; });
-      setMsg('msgScan',n?('Found '+n+' company(ies).'):'No companies found — is a company open in Tally?', n?'ok':'warn');
+      var n=0,errs=0; endpoints.forEach(function(e){ n+=(e.companies||[]).length; if(!e.ok) errs++; });
+      if(n) setMsg('msgScan','Found '+n+' company(ies).','ok');
+      else if(errs) setMsg('msgScan','Tally didn’t respond on '+errs+' port(s) — it’s likely busy or stuck after a big read. Restart Tally (see below), then Scan again.','bad');
+      else setMsg('msgScan','No companies found — is a company open in Tally?','warn');
     }).catch(function(e){ document.getElementById('btnScan').disabled=false; setMsg('msgScan','Could not reach the connector: '+e.message,'bad'); });
 }
 function renderCompanies(){
@@ -460,7 +462,16 @@ function renderCompanies(){
       rows+='<label class="cmp"><input type="checkbox" class="cmpChk" data-ep="'+ei+'" data-name="'+esc(c.name)+'" data-url="'+esc(ep.url)+'" checked>'
         +'<span><span class="nm">'+esc(c.name)+'</span>'+(gst?' <span class="gs">'+esc(gst)+'</span>':'')+'</span></label>';
     });
-    box.innerHTML=head+(rows||'<div class="empty">No company open on this port.</div>');
+    var body;
+    if(rows) body=rows;
+    else if(!ep.ok){
+      var isTO=/tim(e|ed)\s?out|timeout|abort/i.test(ep.error||'');
+      body='<div class="empty">'+(isTO
+        ? 'Tally didn’t respond in time. It’s usually busy or stuck after a big export — put Tally on the <b>Gateway</b> screen (not inside a report), or <b>close &amp; reopen Tally</b> and the company, then <b>Scan</b> again. “Release Tally” frees a stuck read.'
+        : 'Could not reach Tally on this port: '+esc(ep.error||'unreachable')+'. Check Tally is open and the port is right.')+'</div>';
+    }
+    else body='<div class="empty">No company open on this port.</div>';
+    box.innerHTML=head+body;
     wrap.appendChild(box);
   });
   if(any){ document.getElementById('card2').classList.remove('hidden'); markStep(1,true); }

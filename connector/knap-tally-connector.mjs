@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.17';
+const VERSION = '4.18';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2973,12 +2973,20 @@ const server = http.createServer(async (req, res) => {
       urls = [...new Set(urls)];
       const endpoints = [];
       for (const u of urls) {
-        try {
-          const companies = parseCompanies(await askTallyFast(u, COMPANY_REQUEST(), 15000));
-          endpoints.push({ url: u, ok: true, companies });
-        } catch (e) {
-          endpoints.push({ url: u, ok: false, error: String((e && e.message) || e), companies: [] });
+        // The company list is a light request, but a Tally left busy/degraded by
+        // a big export can be slow to answer it — so allow 30s and one retry
+        // (a user "Release Tally" stops immediately).
+        let companies = null, lastErr = null;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try { companies = parseCompanies(await tallyFetch(u, COMPANY_REQUEST(), 30000)); lastErr = null; break; }
+          catch (e) {
+            lastErr = e;
+            if (/released/i.test(String((e && e.message) || e))) break;
+            if (attempt === 0) await new Promise((r) => setTimeout(r, 1500));
+          }
         }
+        if (companies) endpoints.push({ url: u, ok: true, companies });
+        else endpoints.push({ url: u, ok: false, error: String((lastErr && lastErr.message) || lastErr || 'no response'), companies: [] });
       }
       json(res, 200, { ok: true, version: VERSION, defaultUrl: state.settings.tallyUrl, endpoints });
       return;
