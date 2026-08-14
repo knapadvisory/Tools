@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.10';
+const VERSION = '4.11';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -188,7 +188,16 @@ const normDoc = (s) => {
   return t.replace(/(^|[^0-9])0+(?=[0-9])/g, '$1');
 };
 const toNum = (v) => {
-  const n = Number(String(v ?? '').replace(/[₹,\s]/g, ''));
+  const s = String(v ?? '');
+  // Forex amount like "SGD34.50 @ ₹380.55/SGD = -₹13129.05" — the BASE (INR)
+  // value is after the last '='. Take that (stripping any currency symbol),
+  // never the foreign figure. Non-forex amounts have no '=', so behaviour there
+  // is unchanged.
+  if (s.indexOf('=') >= 0) {
+    const n = Number(s.slice(s.lastIndexOf('=') + 1).replace(/[^0-9.\-]/g, ''));
+    return Number.isFinite(n) ? n : 0;
+  }
+  const n = Number(s.replace(/[₹,\s]/g, ''));
   return Number.isFinite(n) ? n : 0;
 };
 const inr = (n) => '₹' + r2(n).toLocaleString('en-IN', { maximumFractionDigits: 2 });
@@ -474,8 +483,11 @@ const LEDGER_MASTERS_REQUEST = () => `<ENVELOPE>
 // opening balance either as a plain signed number (debit negative, credit
 // positive) OR with a Dr/Cr suffix — handle both so the sign is always right.
 function openingDr(raw) {
-  const s = String(raw || '').trim();
+  let s = String(raw || '').trim();
   if (!s) return 0;
+  // Forex opening like "-SGD34.50 @ ₹380.55/SGD = -₹13129.05" — keep the BASE
+  // (INR) value after the last '=', never the foreign figure.
+  if (s.indexOf('=') >= 0) s = s.slice(s.lastIndexOf('=') + 1).trim();
   if (/(cr|dr)\.?\s*$/i.test(s)) {
     const cr = /cr\.?\s*$/i.test(s);
     const n = Math.abs(parseFloat(s.replace(/[^0-9.]/g, ''))) || 0;
