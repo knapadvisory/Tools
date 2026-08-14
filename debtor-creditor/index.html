@@ -320,7 +320,7 @@ var connVer = '';
 function setPill(cls,txt){ var p=document.getElementById('connPill'); p.className='conn-pill '+cls; document.getElementById('connPillText').textContent=txt; }
 function banner(cls,title,sub){ var b=document.getElementById('connBanner'); b.className='conn-banner '+cls; document.getElementById('connTitle').textContent=title; document.getElementById('connSub').innerHTML=sub; }
 function verGE(v,min){ var a=String(v).split('.').map(Number),b=String(min).split('.').map(Number); for(var i=0;i<Math.max(a.length,b.length);i++){var x=a[i]||0,y=b[i]||0; if(x!==y) return x>y;} return true; }
-var REQVER='4.5';
+var REQVER='4.7';
 function checkConn(){
   fetch(API+'/health',{signal:AbortSignal.timeout(3000)}).then(function(r){return r.json();}).then(function(h){
     connVer=h.version||''; setPill('on','connector v'+connVer+' · connected');

@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.6';
+const VERSION = '4.7';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2109,6 +2109,13 @@ async function readDCMovements(url, readStart, asOn) {
 // PAN sits inside every GSTIN as characters 3–12 (0-based 2..12). Deriving it
 // lets one party that holds several state GSTINs collapse under a single PAN —
 // the single most reliable cross-company key for Indian entities.
+// Financial-year start (1 April) for a date — the period Tally's ledger
+// OPENINGBALANCE is anchored to, so debtor/creditor movement is summed from here.
+function fyStartOf(d) {
+  return d.getUTCMonth() >= 3
+    ? new Date(Date.UTC(d.getUTCFullYear(), 3, 1))
+    : new Date(Date.UTC(d.getUTCFullYear() - 1, 3, 1));
+}
 const PAN_RE = /[A-Z]{5}\d{4}[A-Z]/;
 function panFromGstin(g) {
   const s = String(g || '').toUpperCase();
@@ -2199,11 +2206,15 @@ async function readDCForCompany(url, company, asOn, label, kind) {
     const groups = parseGroups(await askTallyFast(url, GROUPS_REQUEST()));
     const masters = parseLedgerMasters(await askTallyFast(url, LEDGER_MASTERS_REQUEST()));
 
-    let booksStart = null;
-    try { const c = parseCompany(await askTallyFast(url, FIN_COMPANY_REQUEST(), 15000)); booksStart = c.booksFrom || c.start || null; } catch { /* not essential */ }
-    const readStart = booksStart || new Date(Date.UTC(asOn.getUTCFullYear() - 5, 3, 1));
+    // Tally's ledger OPENINGBALANCE is the opening at the CURRENT financial-year
+    // start (not books-start), so movements must be summed from that SAME FY
+    // start — otherwise prior-year vouchers get double-counted on top of an
+    // opening that already includes them. (Verified against Group Summary: the
+    // opening total ties to the paisa; only the movement window was wrong —
+    // reading from books-start added ~4 years of stale movement.)
+    const readStart = fyStartOf(asOn);
 
-    dcProgress.phase = `Reading ${label} — vouchers to ${asOn.toISOString().slice(0, 10)}…`;
+    dcProgress.phase = `Reading ${label} — vouchers ${readStart.toISOString().slice(0, 10)} → ${asOn.toISOString().slice(0, 10)}…`;
     const { sums } = await readDCMovements(url, readStart, asOn); // toKey enforces the asOn cut-off
 
     const parties = [];
@@ -2609,9 +2620,7 @@ const server = http.createServer(async (req, res) => {
       try {
         const groups = parseGroups(await askTallyFast(u, GROUPS_REQUEST()));
         const masters = parseLedgerMasters(await askTallyFast(u, LEDGER_MASTERS_REQUEST()));
-        let booksStart = null;
-        try { const c = parseCompany(await askTallyFast(u, FIN_COMPANY_REQUEST(), 15000)); booksStart = c.booksFrom || c.start || null; } catch { /* */ }
-        const readStart = booksStart || new Date(Date.UTC(asOn.getUTCFullYear() - 5, 3, 1));
+        const readStart = fyStartOf(asOn); // movement from the FY start (see readDCForCompany)
         const { sums, cal } = await readDCMovements(u, readStart, asOn);
         const rows = [];
         let total = 0;
