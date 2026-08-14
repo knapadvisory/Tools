@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.2';
+const VERSION = '4.3';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2128,63 +2128,103 @@ function dcClassOf(groupPath) {
   return null;
 }
 
-// Read one company's debtors AND creditors as at `asOn`. `company` scopes the
-// Tally requests via SVCURRENTCOMPANY (all the request builders read the
-// global settings.company, so we set it for the duration and restore it). One
-// full read serves both sides — the page keeps whichever it asked for.
-async function readDCForCompany(url, company, asOn, label) {
+// AUTHORITATIVE closing balances. Ask Tally for the ledgers under Sundry
+// Debtors / Sundry Creditors (the whole sub-tree, via CHILDOF + BELONGSTO)
+// with their CLOSINGBALANCE as at the date — the exact figure Tally's own
+// Group Summary shows, so the tool ties to Tally by construction. Scoped to
+// one group it is light and does not hang like a whole-company balance read.
+function GROUP_LEDGERS_REQUEST(group, asOn) {
+  const fyStart = asOn.getUTCMonth() >= 3
+    ? new Date(Date.UTC(asOn.getUTCFullYear(), 3, 1))
+    : new Date(Date.UTC(asOn.getUTCFullYear() - 1, 3, 1));
+  return `<ENVELOPE>
+ <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>DcLedgers</ID></HEADER>
+ <BODY><DESC>
+  <STATICVARIABLES>
+   <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+   <SVFROMDATE>${toTallyDate(fyStart)}</SVFROMDATE>
+   <SVTODATE>${toTallyDate(asOn)}</SVTODATE>${svCompany()}
+  </STATICVARIABLES>
+  <TDL><TDLMESSAGE>
+   <COLLECTION NAME="DcLedgers" ISMODIFY="No">
+    <TYPE>Ledger</TYPE>
+    <CHILDOF>${escXml(group)}</CHILDOF>
+    <BELONGSTO>Yes</BELONGSTO>
+    <FETCH>NAME</FETCH><FETCH>PARENT</FETCH><FETCH>CLOSINGBALANCE</FETCH>
+    <FETCH>PARTYGSTIN</FETCH><FETCH>GSTREGISTRATIONNUMBER</FETCH><FETCH>VATTINNUMBER</FETCH>
+   </COLLECTION>
+  </TDLMESSAGE></TDL>
+ </DESC></BODY>
+</ENVELOPE>`;
+}
+function parseDcLedgers(xml) {
+  const out = [];
+  for (const b of xml.match(/<LEDGER[\s>][\s\S]*?<\/LEDGER>/gi) || []) {
+    const name = decodeXml((b.match(/<LEDGER[^>]*\sNAME="([^"]*)"/i)?.[1] ?? tag(b, 'NAME'))).trim();
+    if (!name) continue;
+    const gstin = (b.match(GSTIN_RE) || [''])[0].toUpperCase();
+    out.push({
+      ledger: name,
+      group: decodeXml(tag(b, 'PARENT')).trim(),
+      gstin,
+      pan: panFromGstin(gstin),
+      balanceDr: tallyAmt(tag(b, 'CLOSINGBALANCE')), // Dr +, Cr −
+    });
+  }
+  return out;
+}
+
+// Read one company's debtors OR creditors (`kind`) as at `asOn`. `company`
+// scopes the Tally requests via SVCURRENTCOMPANY. Primary source is Tally's
+// own closing balance for the group (matches Group Summary); if that read
+// returns nothing on a given Tally, we fall back to deriving the balance from
+// vouchers (master opening + movement to date).
+async function readDCForCompany(url, company, asOn, label, kind) {
   const savedCompany = state.settings.company;
   state.settings.company = company || '';
+  const group = kind === 'creditors' ? 'Sundry Creditors' : 'Sundry Debtors';
   try {
-    dcProgress.phase = `Reading ${label} — group tree & ledgers…`;
-    const groups = parseGroups(await askTallyFast(url, GROUPS_REQUEST()));
-    const masters = parseLedgerMasters(await askTallyFast(url, LEDGER_MASTERS_REQUEST()));
+    // Ledger group + GSTIN masters (fast, stored-only) — for GSTIN enrichment
+    // and the voucher fallback's membership test.
+    dcProgress.phase = `Reading ${label} — ledgers…`;
+    dcProgress.monthsTotal = 0; dcProgress.monthsDone = 0;
+    let masters = {};
+    try { masters = parseLedgerMasters(await askTallyFast(url, LEDGER_MASTERS_REQUEST())); } catch { /* non-fatal */ }
 
-    // Books start — closing at asOn = master opening (as at books-start) + all
-    // movement up to asOn, so we MUST read from books-start (a debtor's unpaid
-    // invoices carry across years). Fall back to five FYs back if unknown.
-    let booksStart = null;
-    try {
-      const c = parseCompany(await askTallyFast(url, FIN_COMPANY_REQUEST(), 15000));
-      booksStart = c.booksFrom || c.start || null;
-    } catch { /* not essential */ }
-    const readStart = booksStart || new Date(Date.UTC(asOn.getUTCFullYear() - 5, 3, 1));
+    // Primary: Tally's own closing balances for the group, as at the date.
+    dcProgress.phase = `Reading ${label} — ${kind} closing as on ${asOn.toISOString().slice(0, 10)}…`;
+    let closings = [];
+    try { closings = parseDcLedgers(await askTallyFast(url, GROUP_LEDGERS_REQUEST(group, asOn), 120000)); }
+    catch { closings = []; }
 
-    dcProgress.phase = `Reading ${label} — vouchers to ${asOn.toISOString().slice(0, 10)}…`;
-    // dr = movement readStart→asOn, with the asOn cut-off enforced in code.
-    const { sums, cal } = await readDCMovements(url, readStart, asOn);
-    dcProgress.sub = '';
-
-    const names = new Set([...Object.keys(masters), ...Object.keys(sums)]);
-    const debtors = [], creditors = [];
-    for (const name of names) {
-      const m = masters[name] || { parent: '', openingDr: 0, gstin: '' };
-      const mv = sums[name] || { dr: 0 };
-      const path = groupPathOf(m.parent, groups);
-      const cls = dcClassOf(path);
-      if (!cls) continue;
-      const balanceDr = r2((m.openingDr || 0) + (mv.dr || 0));
-      const moved = !!sums[name] && Math.abs(mv.dr) > 0.005;
-      // Keep parties with a live balance OR any activity in the window; drop
-      // dormant never-used ledgers so the matrix stays about real relationships.
-      if (Math.abs(balanceDr) < 0.005 && !moved && Math.abs(m.openingDr || 0) < 0.005) continue;
-      const gstin = (m.gstin || '').toUpperCase();
-      const row = {
-        ledger: name,
-        gstin,
-        pan: panFromGstin(gstin),
-        group: m.parent,
-        // Dr-positive for debtors; the page negates for creditors so each
-        // side's natural balance reads positive and the contrary reads minus.
-        balanceDr,
-      };
-      (cls === 'debtors' ? debtors : creditors).push(row);
+    let parties = [], method = 'closing';
+    if (closings.length) {
+      for (const r of closings) {
+        if (Math.abs(r.balanceDr) < 0.005) continue; // skip fully-settled ledgers
+        const gstin = r.gstin || (masters[r.ledger] && masters[r.ledger].gstin || '').toUpperCase();
+        parties.push({ ledger: r.ledger, gstin, pan: r.pan || panFromGstin(gstin), group: r.group, balanceDr: r2(r.balanceDr) });
+      }
+    } else {
+      // Fallback: derive from vouchers (older method) when the closing read is
+      // unsupported/empty on this Tally.
+      method = 'vouchers';
+      const groups = parseGroups(await askTallyFast(url, GROUPS_REQUEST()));
+      let booksStart = null;
+      try { const c = parseCompany(await askTallyFast(url, FIN_COMPANY_REQUEST(), 15000)); booksStart = c.booksFrom || c.start || null; } catch { /* */ }
+      const readStart = booksStart || new Date(Date.UTC(asOn.getUTCFullYear() - 5, 3, 1));
+      dcProgress.phase = `Reading ${label} — vouchers to ${asOn.toISOString().slice(0, 10)}…`;
+      const { sums } = await readDCMovements(url, readStart, asOn);
+      for (const name of new Set([...Object.keys(masters), ...Object.keys(sums)])) {
+        const m = masters[name] || { parent: '', openingDr: 0, gstin: '' };
+        if (dcClassOf(groupPathOf(m.parent, groups)) !== kind) continue;
+        const balanceDr = r2((m.openingDr || 0) + ((sums[name] && sums[name].dr) || 0));
+        if (Math.abs(balanceDr) < 0.005) continue;
+        const gstin = (m.gstin || '').toUpperCase();
+        parties.push({ ledger: name, gstin, pan: panFromGstin(gstin), group: m.parent, balanceDr });
+      }
     }
-    return {
-      ok: true, url, company: company || '', label,
-      booksStart: booksStart ? booksStart.toISOString().slice(0, 10) : null,
-      voucherCount: cal.vouchers, debtors, creditors,
-    };
+    dcProgress.sub = '';
+    return { ok: true, url, company: company || '', label, method, ledgerCount: parties.length, parties };
   } finally {
     state.settings.company = savedCompany;
   }
@@ -2621,15 +2661,16 @@ const server = http.createServer(async (req, res) => {
           const t = targets[i] || {};
           const label = String(t.company || '').trim() || `Tally ${t.url || ''}`;
           dcProgress.company = label; dcProgress.done = i;
-          const one = await readDCForCompany(String(t.url || state.settings.tallyUrl), String(t.company || ''), asOn, label);
-          const parties = (kind === 'creditors' ? one.creditors : one.debtors).map((p) => ({
+          const one = await readDCForCompany(String(t.url || state.settings.tallyUrl), String(t.company || ''), asOn, label, kind);
+          const parties = one.parties.map((p) => ({
             ledger: p.ledger, gstin: p.gstin, pan: p.pan, group: p.group,
-            // Present in the natural sign of the side being viewed.
+            // Present in the natural sign of the side being viewed: debtors
+            // Dr-positive (credit balances negative); creditors Cr-positive
+            // (debit balances negative).
             balance: kind === 'creditors' ? r2(-p.balanceDr) : p.balanceDr,
           }));
           companies.push({
-            url: one.url, company: one.company, label,
-            booksStart: one.booksStart, voucherCount: one.voucherCount,
+            url: one.url, company: one.company, label, method: one.method,
             partyCount: parties.length, parties,
           });
           dcProgress.done = i + 1;
