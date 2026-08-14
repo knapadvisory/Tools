@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.15';
+const VERSION = '4.16';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2343,36 +2343,68 @@ async function readAgeMovements(url, fyStart, asOn, partySet) {
 }
 // Pass-through pre-pass. At KNAP a client also pays the firm the tax it will
 // remit on the client's behalf; the firm raises a *Reimbursement* invoice
-// (a debit) for it, which is squared by a receipt of the SAME amount. Those
-// two legs are not a genuine sales receivable, and — because the receipt is
-// often booked a few days BEFORE the reimbursement invoice — plain FIFO would
-// wrongly apply the receipt to old sales and leave the reimbursement showing
-// as outstanding. So pair each reimbursement debit with an equal-value credit
-// (nearest by date, in Dr-positive space) and drop both before ageing. Their
-// values are equal and opposite, so the closing balance is untouched; only the
-// bucket mix changes. A reimbursement with no matching receipt stays and ages
-// normally. Works in Dr space so it is sign-agnostic (debtors & creditors).
+// (a debit) squared by the client's *Receipt*. Those two legs are not a genuine
+// sales receivable, and — because the receipt is often booked a few days BEFORE
+// the reimbursement invoice — plain FIFO would wrongly apply the receipt to old
+// sales and leave the reimbursement showing as outstanding. So we net each
+// reimbursement debit against the receipt(s) that fund it BEFORE ageing.
+//
+// Matching is two-phase and value-partial, because the real world isn't 1:1:
+//   Phase 1 — a reimbursement squared by ONE receipt of the same value
+//             (nearest by date). Handles the clean case.
+//   Phase 2 — whatever reimbursement is still open pulls from the nearest
+//             receipts within a 15-day window, splitting a receipt if it also
+//             covers a little fee (e.g. a ₹5,92,967 receipt funding a
+//             ₹5,92,797.91 reimbursement leaves ₹169.09 of genuine trade), and
+//             combining several receipts for one reimbursement (₹8,00,000 +
+//             ₹4,67,278 → one ₹12,67,278 reimbursement).
+// Only *Receipt*-type credits fund reimbursements (never credit notes or
+// journals). Matched value is removed from both legs — equal and opposite, so
+// the closing balance is untouched; only the bucket mix corrects. A leftover
+// reimbursement (client hasn't paid) stays and ages normally. Runs in Dr space,
+// so it is sign-agnostic (debtors & creditors), and a party with no
+// reimbursements — or whose reimbursements all pair cleanly — is unchanged.
 const isReimbType = (v) => /reimburs/i.test(v || '');
+const isReceiptType = (v) => /receipt/i.test(v || '');
+const PT_WINDOW_MS = 15 * DAY_MS;
 function passThroughPair(items) {
-  const credits = [];
-  for (let i = 0; i < items.length; i++) if (items[i].dr < -0.005) credits.push(i);
-  if (!credits.length) return items;
-  const usedCredit = new Set(), drop = new Set();
+  const tOf = (i) => (items[i].date ? items[i].date.getTime() : 0);
+  // remaining reimbursement debit / receipt credit per item (positive magnitudes)
+  const reimR = items.map((m) => (m.dr > 0.005 && isReimbType(m.vtype) ? m.dr : 0));
+  const credR = items.map((m) => (m.dr < -0.005 && isReceiptType(m.vtype) ? -m.dr : 0));
+  if (!reimR.some((x) => x > 0.005) || !credR.some((x) => x > 0.005)) return items;
+  // Phase 1 — exact-value 1:1, nearest date.
+  for (let i = 0; i < items.length; i++) {
+    if (reimR[i] <= 0.005) continue;
+    let best = -1, gap = Infinity;
+    for (let j = 0; j < items.length; j++) {
+      if (credR[j] <= 0.005 || Math.abs(credR[j] - reimR[i]) > 0.02) continue;
+      const g = Math.abs(tOf(j) - tOf(i));
+      if (g < gap) { gap = g; best = j; }
+    }
+    if (best >= 0) { credR[best] = r2(credR[best] - reimR[i]); reimR[i] = 0; }
+  }
+  // Phase 2 — leftover reimbursement pulls nearest receipts within the window.
+  for (let i = 0; i < items.length; i++) {
+    if (reimR[i] <= 0.005) continue;
+    const cands = [];
+    for (let j = 0; j < items.length; j++) if (credR[j] > 0.005 && Math.abs(tOf(j) - tOf(i)) <= PT_WINDOW_MS) cands.push(j);
+    cands.sort((a, b) => Math.abs(tOf(a) - tOf(i)) - Math.abs(tOf(b) - tOf(i)));
+    for (const j of cands) {
+      if (reimR[i] <= 0.005) break;
+      const k = Math.min(reimR[i], credR[j]);
+      reimR[i] = r2(reimR[i] - k); credR[j] = r2(credR[j] - k);
+    }
+  }
+  // Rebuild: shrink each matched leg to its remainder; drop fully-consumed legs.
+  const out = [];
   for (let i = 0; i < items.length; i++) {
     const m = items[i];
-    if (!(m.dr > 0.005) || !isReimbType(m.vtype)) continue;   // a reimbursement invoice
-    let best = -1, bestGap = Infinity;
-    for (const ci of credits) {
-      if (usedCredit.has(ci)) continue;
-      if (Math.abs(-items[ci].dr - m.dr) > 0.02) continue;    // equal value (≤2 paise)
-      const cd = items[ci].date ? items[ci].date.getTime() : 0;
-      const md = m.date ? m.date.getTime() : 0;
-      const gap = Math.abs(cd - md);
-      if (gap < bestGap) { bestGap = gap; best = ci; }
-    }
-    if (best >= 0) { usedCredit.add(best); drop.add(i); drop.add(best); }
+    if (m.dr > 0.005 && isReimbType(m.vtype)) { if (reimR[i] > 0.005) out.push(reimR[i] === m.dr ? m : { ...m, dr: reimR[i] }); }
+    else if (m.dr < -0.005 && isReceiptType(m.vtype)) { const rem = r2(-credR[i]); if (Math.abs(rem) > 0.005) out.push(rem === m.dr ? m : { ...m, dr: rem }); }
+    else out.push(m);
   }
-  return drop.size ? items.filter((_, i) => !drop.has(i)) : items;
+  return out;
 }
 // FIFO knock-off of dated items in the party's NATURAL sign. `natSign` maps the
 // Dr-positive amounts to natural (debtors +1, creditors −1). Returns the still-
