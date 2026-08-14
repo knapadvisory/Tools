@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.13';
+const VERSION = '4.14';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -527,7 +527,7 @@ function dateKey(v) {
 // (so closing = opening+dr and period-opening = opening+priorDr). Deduped by
 // voucher GUID across chunks, so a Tally that repeats vouchers for every
 // monthly window can't multiply the books.
-function accumulateTB(xml, sums, seen, cal, fromKey, toKey) {
+function accumulateTB(xml, sums, seen, cal, fromKey, toKey, seenSig) {
   const sig = new Map(); // per-chunk signature counter for GUID-less vouchers
   for (const block of xml.match(/<VOUCHER[\s>][\s\S]*?<\/VOUCHER>/gi) || []) {
     if (/(^|>)\s*Yes\s*<\/ISCANCELLED>/i.test(block.match(/<ISCANCELLED>[\s\S]*?<\/ISCANCELLED>/i)?.[0] ?? '')) continue;
@@ -546,10 +546,35 @@ function accumulateTB(xml, sums, seen, cal, fromKey, toKey) {
     // an earlier date silently includes later vouchers (i.e. the latest
     // balance). `toKey` (YYYYMMDD) drops anything dated after the "as on" date.
     if (toKey && dk > toKey) { cal.afterTo = (cal.afterTo || 0) + 1; continue; }
+    // Duplicate-voucher guard (DC path only). Tally can export the SAME voucher
+    // twice with DIFFERENT GUIDs (so the GUID dedup above misses it), doubling a
+    // ledger's movement. A voucher's type|date|number is a unique identity, so
+    // skip a repeat of one already counted. Only when a real number exists, so
+    // unnumbered vouchers are never wrongly merged.
+    if (seenSig) {
+      const vno = tag(block, 'VOUCHERNUMBER');
+      if (vno) {
+        const vs = `${tag(block, 'VOUCHERTYPENAME')}|${tag(block, 'DATE')}|${vno}`;
+        if (seenSig.has(vs)) { cal.dupes++; continue; }
+        seenSig.add(vs);
+      }
+    }
     const isPrior = fromKey ? (dk < fromKey) : false;
-    for (const e of block.match(/<(?:ALL)?LEDGERENTRIES\.LIST>[\s\S]*?<\/(?:ALL)?LEDGERENTRIES\.LIST>/gi) || []) {
+    // Prefer ALLLEDGERENTRIES (the complete set); fall back to LEDGERENTRIES so a
+    // voucher carrying both never double-counts. Within a voucher, drop a byte-
+    // identical repeated entry block (another export artefact). DC path only.
+    let entryBlocks;
+    if (seenSig) {
+      const allE = block.match(/<ALLLEDGERENTRIES\.LIST>[\s\S]*?<\/ALLLEDGERENTRIES\.LIST>/gi);
+      entryBlocks = (allE && allE.length) ? allE : (block.match(/<LEDGERENTRIES\.LIST>[\s\S]*?<\/LEDGERENTRIES\.LIST>/gi) || []);
+    } else {
+      entryBlocks = block.match(/<(?:ALL)?LEDGERENTRIES\.LIST>[\s\S]*?<\/(?:ALL)?LEDGERENTRIES\.LIST>/gi) || [];
+    }
+    const seenEntry = seenSig ? new Set() : null;
+    for (const e of entryBlocks) {
       const name = tag(e, 'LEDGERNAME');
       if (!name) continue;
+      if (seenEntry) { if (seenEntry.has(e)) { continue; } seenEntry.add(e); }
       const rawAmt = toNum(tag(e, 'AMOUNT'));
       const amt = Math.abs(rawAmt);
       const dpStr = tag(e, 'ISDEEMEDPOSITIVE');
@@ -2097,7 +2122,7 @@ const dcProgress = { active: false, phase: '', sub: '', done: 0, total: 0, compa
 // `asOn` cut-off in code so a Tally that ignores SVTODATE can't leak later
 // vouchers into an earlier-dated balance. Updates dcProgress month counters.
 async function readDCMovements(url, readStart, asOn) {
-  const sums = {}, seen = new Set();
+  const sums = {}, seen = new Set(), seenSig = new Set();
   const cal = { vouchers: 0, dupes: 0, noFlag: 0, afterTo: 0 };
   const toKey = asOn.getUTCFullYear() * 10000 + (asOn.getUTCMonth() + 1) * 100 + asOn.getUTCDate();
   let monthsTotal = 0;
@@ -2112,7 +2137,7 @@ async function readDCMovements(url, readStart, asOn) {
     const mTo = mEnd > asOn ? asOn : mEnd;
     dcProgress.sub = `${MONTH_NAMES[mFrom.getUTCMonth()]} ${mFrom.getUTCFullYear()} (${done + 1}/${monthsTotal})`;
     const xml = await askTally(url, voucherCollectionRequest(mFrom, mTo)); // svCompany() is set by the caller
-    accumulateTB(xml, sums, seen, cal, 0, toKey);
+    accumulateTB(xml, sums, seen, cal, 0, toKey, seenSig);
     done++; dcProgress.monthsDone = done;
   }
   return { sums, cal, monthsTotal };
@@ -2269,7 +2294,7 @@ const DAY_MS = 86400000;
 // One voucher pass (FY start → asOn): for the party ledgers in `partySet`,
 // collect each dated Dr-positive movement with a reference for display.
 async function readAgeMovements(url, fyStart, asOn, partySet) {
-  const moves = {}, seen = new Set();
+  const moves = {}, seen = new Set(), seenSig = new Set();
   const cal = { vouchers: 0, noFlag: 0, afterTo: 0 };
   const toKey = asOn.getUTCFullYear() * 10000 + (asOn.getUTCMonth() + 1) * 100 + asOn.getUTCDate();
   let monthsTotal = 0;
@@ -2293,10 +2318,17 @@ async function readAgeMovements(url, fyStart, asOn, partySet) {
       if (toKey && dk > toKey) { cal.afterTo++; continue; }
       const vdate = parseTallyFieldDate(tag(block, 'DATE'));
       const vno = tag(block, 'VOUCHERNUMBER'), vtype = tag(block, 'VOUCHERTYPENAME');
+      // Duplicate-voucher guard (see accumulateTB): a repeat of a numbered
+      // voucher already counted (Tally re-exports with a different GUID).
+      if (vno) { const vs = `${vtype}|${tag(block, 'DATE')}|${vno}`; if (seenSig.has(vs)) continue; seenSig.add(vs); }
       const ref = ((vtype ? vtype + ' ' : '') + (vno || '')).trim() || '(voucher)';
-      for (const e of block.match(/<(?:ALL)?LEDGERENTRIES\.LIST>[\s\S]*?<\/(?:ALL)?LEDGERENTRIES\.LIST>/gi) || []) {
+      const allE = block.match(/<ALLLEDGERENTRIES\.LIST>[\s\S]*?<\/ALLLEDGERENTRIES\.LIST>/gi);
+      const entryBlocks = (allE && allE.length) ? allE : (block.match(/<LEDGERENTRIES\.LIST>[\s\S]*?<\/LEDGERENTRIES\.LIST>/gi) || []);
+      const seenEntry = new Set();
+      for (const e of entryBlocks) {
         const name = tag(e, 'LEDGERNAME');
         if (!name || !partySet.has(name)) continue;
+        if (seenEntry.has(e)) continue; seenEntry.add(e);
         const rawAmt = toNum(tag(e, 'AMOUNT'));
         const dp = tag(e, 'ISDEEMEDPOSITIVE');
         if (!dp) cal.noFlag++;
