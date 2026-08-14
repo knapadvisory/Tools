@@ -320,7 +320,7 @@ var connVer = '';
 function setPill(cls,txt){ var p=document.getElementById('connPill'); p.className='conn-pill '+cls; document.getElementById('connPillText').textContent=txt; }
 function banner(cls,title,sub){ var b=document.getElementById('connBanner'); b.className='conn-banner '+cls; document.getElementById('connTitle').textContent=title; document.getElementById('connSub').innerHTML=sub; }
 function verGE(v,min){ var a=String(v).split('.').map(Number),b=String(min).split('.').map(Number); for(var i=0;i<Math.max(a.length,b.length);i++){var x=a[i]||0,y=b[i]||0; if(x!==y) return x>y;} return true; }
-var REQVER='4.3';
+var REQVER='4.4';
 function checkConn(){
   fetch(API+'/health',{signal:AbortSignal.timeout(3000)}).then(function(r){return r.json();}).then(function(h){
     connVer=h.version||''; setPill('on','connector v'+connVer+' · connected');
@@ -359,7 +359,7 @@ var endpoints=[]; // [{url, ok, companies:[{name,gstins}]}]
 function addEndpoint(v){
   var wrap=document.getElementById('epList');
   var div=document.createElement('div'); div.className='ep';
-  div.innerHTML='<input type="text" placeholder="http://localhost:9000" value="'+(v||'')+'"><button class="btn ghost sm" onclick="this.parentNode.remove()">✕</button>';
+  div.innerHTML='<input type="text" autocomplete="off" data-lpignore="true" placeholder="http://localhost:9000" value="'+(v||'')+'"><button class="btn ghost sm" onclick="this.parentNode.remove()">✕</button>';
   wrap.appendChild(div);
 }
 function endpointUrls(){
@@ -630,7 +630,7 @@ function showReport(rep){
   if(rep==='consolidated'){
     area.innerHTML='<div class="rtoolbar"><span class="grow">Balances as per each Tally as on '+RESULT.asOn+'. Per-company totals sit at the top; grand total at the bottom.</span>'
       +'<button class="btn ghost sm" id="btnCombine" onclick="combineSelected()" disabled>Combine selected</button>'
-      +'<input type="text" id="filterBox" placeholder="Filter parties…" oninput="renderMatrix()" style="font-size:12.5px">'
+      +'<input type="search" id="filterBox" name="dc-party-filter" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore placeholder="Filter parties…" oninput="renderMatrix()" style="font-size:12.5px">'
       +'<button class="btn primary" onclick="exportXlsx()">⬇ Download Excel</button></div>'
       +'<div class="tblwrap"><table class="mtx" id="mtx"></table></div>'
       +'<div class="flow-note">Tip: tick two or more rows and press “Combine selected” to merge parties the matcher kept apart; press “Split” on a merged row to break it back into its ledgers.</div>';

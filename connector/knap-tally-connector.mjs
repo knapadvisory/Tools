@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.3';
+const VERSION = '4.4';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2168,7 +2168,11 @@ function parseDcLedgers(xml) {
       group: decodeXml(tag(b, 'PARENT')).trim(),
       gstin,
       pan: panFromGstin(gstin),
-      balanceDr: tallyAmt(tag(b, 'CLOSINGBALANCE')), // Dr +, Cr −
+      // openingDr() (not tallyAmt) — Tally exports a ledger CLOSINGBALANCE
+      // either with a Dr/Cr suffix OR as a plain signed number where a DEBIT is
+      // negative. openingDr handles both and returns the Dr-positive convention
+      // (Dr +, Cr −); tallyAmt would leave a plain debit-negative value inverted.
+      balanceDr: openingDr(tag(b, 'CLOSINGBALANCE')),
     });
   }
   return out;
