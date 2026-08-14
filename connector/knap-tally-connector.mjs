@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.9';
+const VERSION = '4.10';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2740,6 +2740,42 @@ const server = http.createServer(async (req, res) => {
       if (!asOn) { json(res, 400, { ok: false, error: 'Add &asOn=YYYY-MM-DD' }); return; }
       const saved = state.settings.company;
       state.settings.company = company;
+      // Raw voucher-entry dump for ONE ledger (add &ledger=<name>) — shows the
+      // exact <AMOUNT>/forex fields so a specific mismatch can be pinned down.
+      const wantLedger = url.searchParams.get('ledger');
+      if (wantLedger) {
+        const wln = norm(wantLedger);
+        const fyStart = fyStartOf(asOn);
+        const toKey = asOn.getUTCFullYear() * 10000 + (asOn.getUTCMonth() + 1) * 100 + asOn.getUTCDate();
+        const entries = []; const seen = new Set();
+        try {
+          for (let d = new Date(Date.UTC(fyStart.getUTCFullYear(), fyStart.getUTCMonth(), 1)); d <= asOn; d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1))) {
+            const mFrom = d < fyStart ? fyStart : d;
+            const mEnd = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
+            const mTo = mEnd > asOn ? asOn : mEnd;
+            const xml = await askTally(u, voucherCollectionRequest(mFrom, mTo));
+            for (const block of xml.match(/<VOUCHER[\s>][\s\S]*?<\/VOUCHER>/gi) || []) {
+              const gk = tag(block, 'GUID') || `${tag(block, 'DATE')}|${tag(block, 'VOUCHERNUMBER')}|${tag(block, 'VOUCHERTYPENAME')}`;
+              if (seen.has(gk)) continue; seen.add(gk);
+              if (toKey && dateKey(tag(block, 'DATE')) > toKey) continue;
+              for (const e of block.match(/<(?:ALL)?LEDGERENTRIES\.LIST>[\s\S]*?<\/(?:ALL)?LEDGERENTRIES\.LIST>/gi) || []) {
+                if (norm(tag(e, 'LEDGERNAME')) !== wln) continue;
+                entries.push({
+                  date: tag(block, 'DATE'), vtype: tag(block, 'VOUCHERTYPENAME'), vno: tag(block, 'VOUCHERNUMBER'),
+                  amountRaw: tag(e, 'AMOUNT'), isDeemedPositive: tag(e, 'ISDEEMEDPOSITIVE'),
+                  forexAmount: tag(e, 'FOREXAMOUNT'), rateOfExchange: tag(e, 'RATEOFEXCHANGE'),
+                  // trimmed raw entry block so any other amount fields are visible
+                  rawEntry: e.replace(/\s+/g, ' ').slice(0, 900),
+                });
+              }
+            }
+          }
+          const master = parseLedgerMasters(await askTallyFast(u, LEDGER_MASTERS_REQUEST()))[wantLedger] || null;
+          state.settings.company = saved;
+          json(res, 200, { ok: true, company, ledger: wantLedger, asOn: asOn.toISOString().slice(0, 10), openingRaw: master ? master.openingRaw : null, openingDr: master ? master.openingDr : null, count: entries.length, entries });
+        } catch (e) { state.settings.company = saved; json(res, 502, { ok: false, error: String((e && e.message) || e) }); }
+        return;
+      }
       try {
         const groups = parseGroups(await askTallyFast(u, GROUPS_REQUEST()));
         const masters = parseLedgerMasters(await askTallyFast(u, LEDGER_MASTERS_REQUEST()));
