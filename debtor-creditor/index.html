@@ -240,7 +240,7 @@
       <div class="csub" id="connSub">The KNAP connector runs on the computer where Tally Prime is installed.</div>
     </div>
     <div class="cact">
-      <button class="btn ghost" id="btnUpdate" style="display:none" onclick="doUpdate()">⟳ Update connector</button>
+      <button class="btn ghost" id="btnUpdate" onclick="doUpdate()">⟳ Update connector</button>
       <button class="btn ghost" onclick="releaseTally()">Release Tally</button>
     </div>
   </div>
@@ -320,24 +320,36 @@ var connVer = '';
 function setPill(cls,txt){ var p=document.getElementById('connPill'); p.className='conn-pill '+cls; document.getElementById('connPillText').textContent=txt; }
 function banner(cls,title,sub){ var b=document.getElementById('connBanner'); b.className='conn-banner '+cls; document.getElementById('connTitle').textContent=title; document.getElementById('connSub').innerHTML=sub; }
 function verGE(v,min){ var a=String(v).split('.').map(Number),b=String(min).split('.').map(Number); for(var i=0;i<Math.max(a.length,b.length);i++){var x=a[i]||0,y=b[i]||0; if(x!==y) return x>y;} return true; }
+var REQVER='4.3';
 function checkConn(){
   fetch(API+'/health',{signal:AbortSignal.timeout(3000)}).then(function(r){return r.json();}).then(function(h){
     connVer=h.version||''; setPill('on','connector v'+connVer+' · connected');
-    if(!verGE(connVer,'4.3')){
-      banner('off','Connector needs updating','This tool needs connector v4.3+. Press ⟳ Update connector, then reload.');
-      document.getElementById('btnUpdate').style.display='';
+    var bu=document.getElementById('btnUpdate'); bu.style.display=''; // always available
+    if(!verGE(connVer,REQVER)){
+      banner('off','Connector needs updating','This tool needs connector v'+REQVER+'+ (you have v'+connVer+'). Press ⟳ Update connector — it updates in a few seconds, then the page reloads itself.');
+      bu.textContent='⟳ Update connector to v'+REQVER;
     } else {
-      banner('wait','Connector ready','Add your Tally ports below, then scan for companies. Keep each Tally on the Gateway screen (not inside a report).');
-      document.getElementById('btnUpdate').style.display='none';
+      banner('wait','Connector ready · v'+connVer,'Add your Tally ports below, then scan for companies. Keep each Tally on the Gateway screen (not inside a report).');
+      bu.textContent='⟳ Update connector';
     }
   }).catch(function(){
     setPill('off','connector not found');
+    document.getElementById('btnUpdate').style.display='none';
     banner('off','Connector not found on this PC','Install the KNAP connector, then reload. <a href="/connector/Install-Tally-Connector.bat" download>Download installer</a>');
   });
 }
 function doUpdate(){
-  banner('wait','Updating…','Fetching the latest connector.');
-  fetch(API+'/update',{method:'POST'}).then(function(){ setTimeout(function(){ var t=setInterval(function(){ fetch(API+'/health').then(function(r){return r.json();}).then(function(h){ if(verGE(h.version||'0','4.3')){ clearInterval(t); checkConn(); } }).catch(function(){}); },1500); },1500); }).catch(function(){});
+  banner('wait','Updating the connector…','Fetching the latest version — this takes a few seconds. Do not close this tab.');
+  fetch(API+'/update',{method:'POST'}).then(function(){
+    var tries=0;
+    var t=setInterval(function(){
+      tries++;
+      fetch(API+'/health').then(function(r){return r.json();}).then(function(h){
+        if(verGE(h.version||'0',REQVER)){ clearInterval(t); banner('wait','Updated to v'+(h.version||'')+' ✓','Reloading…'); setTimeout(function(){ location.reload(); },900); }
+        else if(tries>25){ clearInterval(t); banner('off','Update did not complete','The connector is still on v'+(h.version||'?')+'. Try again, or restart the connector on the Tally PC (or reinstall via the installer).'); }
+      }).catch(function(){ if(tries>25){ clearInterval(t); checkConn(); } });
+    },1500);
+  }).catch(function(){ banner('off','Could not reach the connector','Make sure the KNAP connector is running on this PC, then try again.'); });
 }
 function releaseTally(){ fetch(API+'/api/tally/release',{method:'POST'}).then(function(r){return r.json();}).then(function(){ setMsg('msgScan','Released.','ok'); }).catch(function(){}); }
 function setMsg(id,txt,cls){ var e=document.getElementById(id); e.className='msg'+(cls?' '+cls:''); e.innerHTML=txt; }
