@@ -387,7 +387,7 @@ var connVer = '';
 function setPill(cls,txt){ var p=document.getElementById('connPill'); p.className='conn-pill '+cls; document.getElementById('connPillText').textContent=txt; }
 function banner(cls,title,sub){ var b=document.getElementById('connBanner'); b.className='conn-banner '+cls; document.getElementById('connTitle').textContent=title; document.getElementById('connSub').innerHTML=sub; }
 function verGE(v,min){ var a=String(v).split('.').map(Number),b=String(min).split('.').map(Number); for(var i=0;i<Math.max(a.length,b.length);i++){var x=a[i]||0,y=b[i]||0; if(x!==y) return x>y;} return true; }
-var REQVER='4.19';
+var REQVER='4.20';
 function checkConn(){
   fetch(API+'/health',{signal:AbortSignal.timeout(3000)}).then(function(r){return r.json();}).then(function(h){
     connVer=h.version||''; setPill('on','connector v'+connVer+' · connected');
@@ -789,8 +789,10 @@ function buildSheet(){
   markStep(3,true); document.getElementById('card4').classList.remove('hidden');
   var neg=KIND==='debtors'?'credit balances shown negative':'debit balances shown negative';
   document.getElementById('sheetTitle').textContent='4 · '+(KIND==='debtors'?'Debtors':'Creditors')+' — as on '+fmtDate(RESULT.asOn);
-  var note=GROUPS.length+' parties across '+RESULT.companies.length+' companies · '+neg+'. Balances are built from Tally vouchers up to the as-on date (opening + movement).';
-  var empty=(RESULT.companies||[]).filter(function(c){return (c.voucherCount||0)===0;}).map(function(c){return c.label;});
+  var note=GROUPS.length+' parties across '+RESULT.companies.length+' companies · '+neg+'. Balances are the ledger closing balances under Sundry '+(KIND==='debtors'?'Debtors':'Creditors')+' as on the date — the same figures Tally’s Group Summary shows.';
+  // The empty-read warning only applies to the old voucher method; the closing
+  // read either returns balances or fails loudly (shown as an error above).
+  var empty=(RESULT.companies||[]).filter(function(c){return c.method==='vouchers' && (c.voucherCount||0)===0;}).map(function(c){return c.label;});
   var sub=document.getElementById('reportSub');
   if(empty.length){ sub.className='sub'; sub.style.color='var(--bad)'; sub.textContent='⚠ NO TRANSACTIONS read for '+empty.join(', ')+' — these balances are OPENING ONLY. Fix Tally (Gateway + company open, restart if needed), Reset data and re-run before trusting this.'; }
   else { sub.style.color=''; sub.textContent=note+' Pick a report below.'; }

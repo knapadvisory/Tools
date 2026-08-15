@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.19';
+const VERSION = '4.20';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2293,47 +2293,34 @@ function parseDcLedgers(xml) {
 // Read one company's debtors OR creditors (`kind`) as at `asOn`. `company`
 // scopes the Tally requests via SVCURRENTCOMPANY.
 //
-// Balance = master opening (as at books-start) + every voucher movement up to
-// `asOn`, in the Dr-positive convention. We DERIVE it from vouchers rather than
-// ask Tally for CLOSINGBALANCE, because a bare Tally collection computes
-// ClosingBalance at the latest date and ignores SVTODATE — so an "as on 15-Jul"
-// balance silently returned the latest figure. The voucher read enforces the
-// cut-off itself (readDCMovements' toKey), so the date is honoured exactly, and
-// membership comes from walking each ledger's group chain to Sundry Debtors /
-// Creditors, which catches ledgers nested in customer sub-groups.
+// Balance method — the CLOSING BALANCE of every ledger under Sundry Debtors /
+// Creditors as at the date, in ONE light, group-scoped request (the exact
+// figures Tally's own Group Summary shows). This is what a human does manually:
+// open the group as on a date and read the balances. It is scoped to one group
+// with SVFROMDATE/SVTODATE, so — unlike a whole-company voucher export — it does
+// NOT hang even on a high-volume company. We used to derive the balance by
+// summing every voucher; that is exact but freezes large companies (GIFFY), so
+// the balance now comes from this read. (Ageing / bill-wise still read vouchers,
+// since they need the individual invoices — see readAgeMovements.)
+//
+// openingDr() converts each CLOSINGBALANCE to the Dr-positive convention
+// (Dr +, Cr −); parseDcLedgers also pulls the ledger's group and GSTIN.
 async function readDCForCompany(url, company, asOn, label, kind) {
   const savedCompany = state.settings.company;
   state.settings.company = company || '';
   try {
-    dcProgress.phase = `Reading ${label} — group tree & ledgers…`;
-    dcProgress.monthsTotal = 0; dcProgress.monthsDone = 0;
-    const groups = parseGroups(await askTallyFast(url, GROUPS_REQUEST(), 180000));
-    const masters = parseLedgerMasters(await askTallyFast(url, LEDGER_MASTERS_REQUEST(), 180000));
-
-    // Tally's ledger OPENINGBALANCE is the opening at the CURRENT financial-year
-    // start (not books-start), so movements must be summed from that SAME FY
-    // start — otherwise prior-year vouchers get double-counted on top of an
-    // opening that already includes them. (Verified against Group Summary: the
-    // opening total ties to the paisa; only the movement window was wrong —
-    // reading from books-start added ~4 years of stale movement.)
-    const readStart = fyStartOf(asOn);
-
-    dcProgress.phase = `Reading ${label} — vouchers ${readStart.toISOString().slice(0, 10)} → ${asOn.toISOString().slice(0, 10)}…`;
-    const { sums, cal } = await readDCMovements(url, readStart, asOn); // toKey enforces the asOn cut-off
-    const voucherCount = cal.vouchers;
-
+    const group = kind === 'creditors' ? 'Sundry Creditors' : 'Sundry Debtors';
+    dcProgress.phase = `Reading ${label} — ${kind} balances as on ${asOn.toISOString().slice(0, 10)}…`;
+    dcProgress.monthsTotal = 1; dcProgress.monthsDone = 0; dcProgress.sub = group;
+    const xml = await askTallyFast(url, GROUP_LEDGERS_REQUEST(group, asOn), 120000);
+    dcProgress.monthsDone = 1; dcProgress.sub = '';
+    const rows = parseDcLedgers(xml);
     const parties = [];
-    const method = 'vouchers';
-    for (const name of new Set([...Object.keys(masters), ...Object.keys(sums)])) {
-      const m = masters[name] || { parent: '', openingDr: 0, gstin: '' };
-      if (dcClassOf(groupPathOf(m.parent, groups)) !== kind) continue; // only Sundry Debtors/Creditors
-      const balanceDr = r2((m.openingDr || 0) + ((sums[name] && sums[name].dr) || 0));
-      if (Math.abs(balanceDr) < 0.005) continue; // drop fully-settled ledgers
-      const gstin = (m.gstin || '').toUpperCase();
-      parties.push({ ledger: name, gstin, pan: panFromGstin(gstin), group: m.parent, balanceDr });
+    for (const r of rows) {
+      if (Math.abs(r.balanceDr) < 0.005) continue; // drop fully-settled ledgers
+      parties.push({ ledger: r.ledger, gstin: r.gstin, pan: r.pan, group: r.group, balanceDr: r.balanceDr });
     }
-    dcProgress.sub = '';
-    return { ok: true, url, company: company || '', label, method, voucherCount, ledgerCount: parties.length, parties };
+    return { ok: true, url, company: company || '', label, method: 'closing', ledgerCount: rows.length, partyCount: parties.length, parties };
   } finally {
     state.settings.company = savedCompany;
   }
