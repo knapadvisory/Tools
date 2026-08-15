@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.24';
+const VERSION = '4.25';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2279,8 +2279,17 @@ function GROUP_LEDGERS_REQUEST(group, asOn) {
 // Group Summary REPORT export (Tally's own report engine, as at the date). For a
 // very large company, COMPUTING each ledger's closing balance in a Collection
 // hangs Tally — but the Group Summary report renders on screen instantly, and
-// this export uses that same fast path. Exploded to ledger level so we get every
-// party, not just sub-group totals.
+// this export uses that same fast path.
+//
+// NOT exploded: we read the DIRECT children of the group only (its ledgers and
+// its immediate sub-groups, each as one net-closing row). Their balances sum to
+// Tally's Grand Total by construction — no matter how the tree is nested — so
+// there is no double-counting and no need to tell sub-group aggregates apart
+// from ledgers (which is impossible when a group and a ledger share a name, e.g.
+// GIFFY's "CRPG Customers" is BOTH a sub-group and a ledger). Sub-grouped
+// customers show as their sub-group's line rather than individually; the total
+// is always exact. Flat companies (every debtor a direct-child ledger) are
+// unaffected and still list every party.
 function GROUP_SUMMARY_REQUEST(group, asOn) {
   const fyStart = asOn.getUTCMonth() >= 3
     ? new Date(Date.UTC(asOn.getUTCFullYear(), 3, 1))
@@ -2293,7 +2302,7 @@ function GROUP_SUMMARY_REQUEST(group, asOn) {
    <SVFROMDATE>${toTallyDate(fyStart)}</SVFROMDATE>
    <SVTODATE>${toTallyDate(asOn)}</SVTODATE>${svCompany()}
    <GROUPNAME>${escXml(group)}</GROUPNAME>
-   <EXPLODEFLAG>Yes</EXPLODEFLAG>
+   <EXPLODEFLAG>No</EXPLODEFLAG>
   </STATICVARIABLES>
  </DESC></BODY>
 </ENVELOPE>`;
@@ -2384,28 +2393,26 @@ async function readDCForCompany(url, company, asOn, label, kind) {
     const group = kind === 'creditors' ? 'Sundry Creditors' : 'Sundry Debtors';
     dcProgress.phase = `Reading ${label} — ${kind} as on ${asOn.toISOString().slice(0, 10)}…`;
     dcProgress.monthsTotal = 2; dcProgress.monthsDone = 0; dcProgress.sub = 'ledger list';
-    // Group names — the exploded Group Summary lists SUB-GROUPS as well as
-    // ledgers, and a sub-group whose children are all on one side (e.g. "CRPG
-    // Customers", all-credit) shows only a Dr OR a Cr, so the both-sided test
-    // misses it. Skipping any row whose name is a group drops every sub-group
-    // aggregate, so its exploded children are never double-counted.
-    const groupNames = new Set(Object.keys(parseGroups(await askTallyFast(url, GROUPS_REQUEST(), 120000))).map(norm));
+    // Ledger list only for the GSTIN lookup (a sub-group row has no GSTIN).
     const info = parseDcLedgers(await askTallyFast(url, DC_LEDGER_INFO_REQUEST(group), 120000));
     const byName = new Map();
     for (const r of info) byName.set(norm(r.ledger), r);
     dcProgress.monthsDone = 1; dcProgress.sub = 'balances (Group Summary)';
+    // Direct children (non-exploded): every row is one net-closing figure and
+    // they sum to the group total. Count them all — skip only the group header
+    // and the Grand Total line.
     const rows = parseGroupSummary(await askTallyFast(url, GROUP_SUMMARY_REQUEST(group, asOn), 180000));
     dcProgress.monthsDone = 2; dcProgress.sub = '';
+    const groupKey = norm(group), totalKey = norm('Grand Total');
     const parties = [];
     for (const row of rows) {
       const key = norm(row.name);
-      if (row.both || groupNames.has(key)) continue; // a sub-group aggregate → skip (avoids double count)
+      if (key === groupKey || key === totalKey) continue;  // header / grand total line
+      if (Math.abs(row.balanceDr) < 0.005) continue;       // fully settled
       const inf = byName.get(key);
-      if (!inf) continue;                            // not a real ledger under the group → skip
-      if (Math.abs(row.balanceDr) < 0.005) continue; // fully settled
-      parties.push({ ledger: inf.ledger, gstin: inf.gstin, pan: inf.pan, group: inf.group, balanceDr: row.balanceDr });
+      parties.push({ ledger: inf ? inf.ledger : row.name, gstin: inf ? inf.gstin : '', pan: inf ? inf.pan : '', group: inf ? inf.group : group, balanceDr: row.balanceDr });
     }
-    return { ok: true, url, company: company || '', label, method: 'report', ledgerCount: info.length, partyCount: parties.length, parties };
+    return { ok: true, url, company: company || '', label, method: 'report', ledgerCount: parties.length, partyCount: parties.length, parties };
   } finally {
     state.settings.company = savedCompany;
   }
@@ -2572,20 +2579,19 @@ function fifoAge(items, natSign, asOn) {
 // them UNAGED — the whole balance sits in the on-account/"Unallocated" bucket, so
 // the report includes the company and still ties, it just isn't split by age.
 async function readDCBalancesUnaged(url, group, asOn, natSign) {
-  const groupNames = new Set(Object.keys(parseGroups(await askTallyFast(url, GROUPS_REQUEST(), 120000))).map(norm));
   const info = parseDcLedgers(await askTallyFast(url, DC_LEDGER_INFO_REQUEST(group), 120000));
   const byName = new Map();
   for (const r of info) byName.set(norm(r.ledger), r);
   const rows = parseGroupSummary(await askTallyFast(url, GROUP_SUMMARY_REQUEST(group, asOn), 180000));
+  const groupKey = norm(group), totalKey = norm('Grand Total');
   const ledgers = [];
   for (const row of rows) {
     const key = norm(row.name);
-    if (row.both || groupNames.has(key)) continue;   // sub-group aggregate → skip
-    const inf = byName.get(key);
-    if (!inf) continue;
+    if (key === groupKey || key === totalKey) continue;   // header / grand total
     const closing = r2(natSign * row.balanceDr);
     if (Math.abs(closing) < 0.005) continue;
-    ledgers.push({ ledger: inf.ledger, gstin: inf.gstin || '', pan: inf.pan || '', closing, onAccount: closing, bills: [] });
+    const inf = byName.get(key);
+    ledgers.push({ ledger: inf ? inf.ledger : row.name, gstin: inf ? inf.gstin || '' : '', pan: inf ? inf.pan || '' : '', closing, onAccount: closing, bills: [] });
   }
   return ledgers;
 }
@@ -3030,15 +3036,18 @@ const server = http.createServer(async (req, res) => {
         try {
           const xml = await askTallyFast(u, GROUP_SUMMARY_REQUEST(group, asOn), 180000);
           const ms = Date.now() - t0;
-          // count likely ledger rows a few common ways so I can see the shape
-          const counts = {
-            LEDGER: (xml.match(/<LEDGER[\s>]/gi) || []).length,
-            DSPACCNAME: (xml.match(/<DSPACCNAME>/gi) || []).length,
-            GROUPSUMMARY: (xml.match(/<GROUPSUMMARY>/gi) || []).length,
-            DSPDISPNAME: (xml.match(/<DSPDISPNAME>/gi) || []).length,
-          };
+          // parse exactly as the balance read does, so the total here == the sheet
+          const grpKey = norm(group), totKey = norm('Grand Total');
+          const rows = parseGroupSummary(xml);
+          let parsedTotal = 0, kept = 0;
+          for (const row of rows) {
+            const key = norm(row.name);
+            if (key === grpKey || key === totKey) continue;
+            if (Math.abs(row.balanceDr) < 0.005) continue;
+            parsedTotal = r2(parsedTotal + row.balanceDr); kept++;
+          }
           state.settings.company = saved;
-          json(res, 200, { ok: true, probe: 'group-summary', company, group, asOn: asOn.toISOString().slice(0, 10), ms, bytes: xml.length, counts, head: xml.slice(0, 40000) });
+          json(res, 200, { ok: true, probe: 'group-summary', company, group, asOn: asOn.toISOString().slice(0, 10), ms, bytes: xml.length, rowCount: rows.length, parties: kept, parsedTotal, head: xml.slice(0, 40000) });
         } catch (e) { state.settings.company = saved; json(res, 502, { ok: false, error: String((e && e.message) || e), ms: Date.now() - t0 }); }
         return;
       }
