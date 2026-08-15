@@ -46,6 +46,17 @@ TOOLS_PASSCODE="$TOOLS_PASSCODE"
 TOOLS_SESSION_HOURS="$TOOLS_SESSION_HOURS"
 EOF
 
+# Keep long-lived SSH / web-console connections alive across Docker's iptables
+# churn. With strict conntrack (nf_conntrack_tcp_be_liberal=0), recreating a
+# container invalidates established connections' tracking and drops them — that
+# was the "console lost on every deploy". Relaxing the TCP-window check fixes it;
+# we set it live and persist it. Best-effort: ignored where the knob is absent
+# (e.g. a restricted/container host) so the deploy never fails on this.
+sysctl -w net.netfilter.nf_conntrack_tcp_be_liberal=1 >/dev/null 2>&1 || true
+if [ -d /etc/sysctl.d ] && [ ! -f /etc/sysctl.d/99-docker-conntrack.conf ]; then
+  echo 'net.netfilter.nf_conntrack_tcp_be_liberal = 1' > /etc/sysctl.d/99-docker-conntrack.conf 2>/dev/null || true
+fi
+
 echo "==> Building the Tools hub image..."
 docker build -t knap-tools:latest .
 
