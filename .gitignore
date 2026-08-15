@@ -1,2 +1,3 @@
 node_modules/
 connector/gstr2b-tally-data.json
+connector/tally-audit-data.json
