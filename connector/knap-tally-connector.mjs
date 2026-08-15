@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.29';
+const VERSION = '4.30';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2664,6 +2664,15 @@ async function readBillwiseForCompany(url, company, asOn, label, kind) {
     const groups = parseGroups(await askTallyFast(url, GROUPS_REQUEST(), 180000));
     const masters = parseLedgerMasters(await askTallyFast(url, LEDGER_MASTERS_REQUEST(), 180000));
     const partySet = new Set(Object.keys(masters).filter((n) => dcClassOf(groupPathOf(masters[n].parent, groups)) === kind));
+    // AUTHORITATIVE closings — the exact figures the consolidated matrix shows,
+    // read the same way (Group Summary leaves). The ageing is reconciled to these
+    // so its total ALWAYS equals the balance sheet, party for party.
+    const groupByNorm = new Map();
+    for (const [gname, g] of Object.entries(groups)) groupByNorm.set(norm(gname), { name: gname, parent: g.parent });
+    const authLeaves = [];
+    await readDCLeaves(url, group, asOn, groupByNorm, new Set(), authLeaves, { reads: 0 });
+    const authClose = new Map();               // norm(ledger) -> closing (natural sign)
+    for (const lf of authLeaves) authClose.set(norm(lf.name), r2(natSign * lf.balanceDr));
     const fyStart = fyStartOf(asOn);
     dcProgress.phase = `Reading ${label} — vouchers ${fyStart.toISOString().slice(0, 10)} → ${asOn.toISOString().slice(0, 10)}…`;
     // Fail FAST: the first small window has a short timeout and no retry, so a
@@ -2682,17 +2691,33 @@ async function readBillwiseForCompany(url, company, asOn, label, kind) {
     dcProgress.sub = '';
 
     const ledgers = [];
+    const done = new Set();
     for (const name of partySet) {
       const m = masters[name];
       const vMoves = moves[name] || [];
       const items = vMoves.slice();
       const openDr = m.openingDr || 0;
       if (Math.abs(openDr) > 0.005) items.push({ date: fyStart, dr: openDr, ref: 'Opening balance' });
-      const closingDr = r2(openDr + vMoves.reduce((s, x) => r2(s + x.dr), 0));
-      const closing = r2(natSign * closingDr);
-      if (Math.abs(closing) < 0.005 && !items.length) continue;
       const { open, onAccount } = fifoAge(items, natSign, asOn);
-      ledgers.push({ ledger: name, gstin: m.gstin || '', pan: panFromGstin(m.gstin || ''), closing, onAccount, bills: open });
+      // Anchor to the authoritative closing: the aged bills + on-account must
+      // equal the balance-sheet figure. Any gap (rare, a voucher-vs-report
+      // rounding) is absorbed into on-account, so the report always ties.
+      const openSum = r2(open.reduce((s, x) => r2(s + x.amount), 0));
+      const auth = authClose.has(norm(name)) ? authClose.get(norm(name)) : r2(natSign * r2(openDr + vMoves.reduce((s, x) => r2(s + x.dr), 0)));
+      const onAcc = r2(auth - openSum);
+      if (Math.abs(auth) < 0.005 && !open.length) { done.add(norm(name)); continue; }
+      ledgers.push({ ledger: name, gstin: m.gstin || '', pan: panFromGstin(m.gstin || ''), closing: auth, onAccount: onAcc, bills: open });
+      done.add(norm(name));
+    }
+    // Any authoritative leaf the voucher party-set missed (e.g. a sub-grouped
+    // ledger the group-path classifier skipped): include it un-aged so the ageing
+    // party set matches the balance exactly.
+    for (const lf of authLeaves) {
+      const k = norm(lf.name);
+      if (done.has(k)) continue;
+      const closing = r2(natSign * lf.balanceDr);
+      if (Math.abs(closing) < 0.005) continue;
+      ledgers.push({ ledger: lf.name, gstin: '', pan: '', closing, onAccount: closing, bills: [] });
     }
     return { ok: true, url, company: company || '', label, vouchers: cal.vouchers, ledgerCount: ledgers.length, ledgers };
   } finally {
