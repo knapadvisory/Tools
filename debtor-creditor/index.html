@@ -387,7 +387,7 @@ var connVer = '';
 function setPill(cls,txt){ var p=document.getElementById('connPill'); p.className='conn-pill '+cls; document.getElementById('connPillText').textContent=txt; }
 function banner(cls,title,sub){ var b=document.getElementById('connBanner'); b.className='conn-banner '+cls; document.getElementById('connTitle').textContent=title; document.getElementById('connSub').innerHTML=sub; }
 function verGE(v,min){ var a=String(v).split('.').map(Number),b=String(min).split('.').map(Number); for(var i=0;i<Math.max(a.length,b.length);i++){var x=a[i]||0,y=b[i]||0; if(x!==y) return x>y;} return true; }
-var REQVER='4.22';
+var REQVER='4.23';
 function checkConn(){
   fetch(API+'/health',{signal:AbortSignal.timeout(3000)}).then(function(r){return r.json();}).then(function(h){
     connVer=h.version||''; setPill('on','connector v'+connVer+' · connected');
@@ -991,7 +991,10 @@ function renderAgeing(){
   var rows=ageingRows();
   var tot={b0:0,b1:0,b2:0,b3:0,b4:0,un:0,total:0};
   rows.forEach(function(r){ AGE_BUCKETS.forEach(function(x){tot[x[0]]+=r.b[x[0]];}); tot.total+=r.total; });
-  document.getElementById('ageSub').innerHTML='Ageing by invoice date as on '+fmtDate(RESULT.asOn)+' · '+rows.length+' parties · total '+fmt(tot.total)+'.';
+  var noAge=((BILLWISE&&BILLWISE.companies)||[]).filter(function(c){return c.ageingUnavailable;}).map(function(c){return c.label;});
+  var ageNote='Ageing by invoice date as on '+fmtDate(RESULT.asOn)+' · '+rows.length+' parties · total '+fmt(tot.total)+'.';
+  if(noAge.length) ageNote+=' <span style="color:var(--warn)">⚠ '+esc(noAge.join(', '))+' has too many transactions to age line-by-line — its balance is shown in <b>Unallocated</b>, not split by age.</span>';
+  document.getElementById('ageSub').innerHTML=ageNote;
   var h='<thead><tr><th class="l">Particulars</th>';
   AGE_BUCKETS.forEach(function(x){ h+='<th>'+x[1]+'</th>'; });
   h+='<th class="tot-col">Total</th></tr>';
@@ -1038,7 +1041,10 @@ function renderBillwise(){
   });
   h+='</tbody>';
   el.innerHTML=h;
-  var sub=document.getElementById('bwSub'); if(sub) sub.innerHTML=rows.length+' parties · '+nbills+' open bills · total '+fmt(gtot)+' as on '+fmtDate(RESULT.asOn)+'.';
+  var noAgeB=((BILLWISE&&BILLWISE.companies)||[]).filter(function(c){return c.ageingUnavailable;}).map(function(c){return c.label;});
+  var bwNote=rows.length+' parties · '+nbills+' open bills · total '+fmt(gtot)+' as on '+fmtDate(RESULT.asOn)+'.';
+  if(noAgeB.length) bwNote+=' <span style="color:var(--warn)">⚠ '+esc(noAgeB.join(', '))+' has too many transactions to list bill-by-bill — its balance is shown as “on account”.</span>';
+  var sub=document.getElementById('bwSub'); if(sub) sub.innerHTML=bwNote;
 }
 function togglePick(gi){ picked[gi]=!picked[gi]; document.getElementById('btnCombine').disabled=Object.keys(picked).filter(function(k){return picked[k];}).length<2; }
 function combineSelected(){

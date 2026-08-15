@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.22';
+const VERSION = '4.23';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2161,8 +2161,14 @@ let dcCancel = false;
 // once — never piling more requests on a busy Tally — then give up so the caller
 // can tell the user to restart Tally. `onXml` consumes each chunk immediately;
 // `prog(endDate)` reports how far we've read. A user "Release Tally" stops at once.
-async function readVouchersRamp(url, from, to, onXml, prog) {
-  let win = 5;                                   // days
+// opts.failFast: throw a distinct 'AGEING_TOO_DENSE' on the FIRST timeout with no
+// shrink-retry (used by ageing — a company too voucher-dense to age line-by-line
+// should fall back fast, not keep hammering a frozen Tally). opts.firstWin /
+// opts.attemptMs tune the opening window and per-attempt timeout.
+async function readVouchersRamp(url, from, to, onXml, prog, opts = {}) {
+  const attemptMs = opts.attemptMs || 120000;
+  const failFast = !!opts.failFast;
+  let win = opts.firstWin || 5;                  // days
   let cursor = from.getTime();
   const toMs = to.getTime();
   while (cursor <= toMs) {
@@ -2172,7 +2178,7 @@ async function readVouchersRamp(url, from, to, onXml, prog) {
     for (let attempt = 0; attempt < 2 && !done; attempt++) {
       const t0 = Date.now();
       try {
-        const xml = await tallyFetch(url, dcVoucherRequest(new Date(cursor), new Date(end)), 120000);
+        const xml = await tallyFetch(url, dcVoucherRequest(new Date(cursor), new Date(end)), attemptMs);
         onXml(xml);
         done = true;
         const ms = Date.now() - t0;
@@ -2181,6 +2187,7 @@ async function readVouchersRamp(url, from, to, onXml, prog) {
       } catch (e) {
         const msg = String((e && e.message) || e);
         if (/released/i.test(msg)) throw e;                         // user pressed Release
+        if (/timed out|timeout/i.test(msg) && failFast) throw new Error('AGEING_TOO_DENSE');
         if (/timed out|timeout/i.test(msg) && attempt === 0) {
           win = 2;
           end = Math.min(cursor + 1 * DAY_MS, toMs);                // just two days
@@ -2418,7 +2425,7 @@ async function readDCForCompany(url, company, asOn, label, kind) {
 const DAY_MS = 86400000;
 // One voucher pass (FY start → asOn): for the party ledgers in `partySet`,
 // collect each dated Dr-positive movement with a reference for display.
-async function readAgeMovements(url, fyStart, asOn, partySet) {
+async function readAgeMovements(url, fyStart, asOn, partySet, rampOpts) {
   const moves = {}, seen = new Set(), seenSig = new Set();
   const cal = { vouchers: 0, noFlag: 0, afterTo: 0 };
   const toKey = asOn.getUTCFullYear() * 10000 + (asOn.getUTCMonth() + 1) * 100 + asOn.getUTCDate();
@@ -2458,7 +2465,7 @@ async function readAgeMovements(url, fyStart, asOn, partySet) {
   }, (endDate) => {
     dcProgress.monthsDone = Math.min(totalDays, Math.round((endDate.getTime() - fyStart.getTime()) / DAY_MS) + 1);
     dcProgress.sub = `up to ${endDate.toISOString().slice(0, 10)}`;
-  });
+  }, rampOpts);
   return { moves, cal };
 }
 // Pass-through pre-pass. At KNAP a client also pays the firm the tax it will
@@ -2552,11 +2559,33 @@ function fifoAge(items, natSign, asOn) {
   }));
   return { open, onAccount: r2(-credit) }; // leftover credit is contra → negative in natural sign
 }
+// The balances-only fallback for ageing: when a company is too voucher-dense to
+// age line-by-line (it would freeze Tally), we still want its total in the
+// report. Read the Group Summary closing balances (fast, no computation) and show
+// them UNAGED — the whole balance sits in the on-account/"Unallocated" bucket, so
+// the report includes the company and still ties, it just isn't split by age.
+async function readDCBalancesUnaged(url, group, asOn, natSign) {
+  const info = parseDcLedgers(await askTallyFast(url, DC_LEDGER_INFO_REQUEST(group), 120000));
+  const byName = new Map();
+  for (const r of info) byName.set(norm(r.ledger), r);
+  const rows = parseGroupSummary(await askTallyFast(url, GROUP_SUMMARY_REQUEST(group, asOn), 180000));
+  const ledgers = [];
+  for (const row of rows) {
+    if (row.both) continue;
+    const inf = byName.get(norm(row.name));
+    if (!inf) continue;
+    const closing = r2(natSign * row.balanceDr);
+    if (Math.abs(closing) < 0.005) continue;
+    ledgers.push({ ledger: inf.ledger, gstin: inf.gstin || '', pan: inf.pan || '', closing, onAccount: closing, bills: [] });
+  }
+  return ledgers;
+}
 // Ageing + open-item list for one company (`kind`), as at `asOn`.
 async function readBillwiseForCompany(url, company, asOn, label, kind) {
   const savedCompany = state.settings.company;
   state.settings.company = company || '';
   const natSign = kind === 'creditors' ? -1 : 1;
+  const group = kind === 'creditors' ? 'Sundry Creditors' : 'Sundry Debtors';
   try {
     dcProgress.phase = `Reading ${label} — ledgers…`;
     dcProgress.monthsTotal = 0; dcProgress.monthsDone = 0;
@@ -2565,7 +2594,19 @@ async function readBillwiseForCompany(url, company, asOn, label, kind) {
     const partySet = new Set(Object.keys(masters).filter((n) => dcClassOf(groupPathOf(masters[n].parent, groups)) === kind));
     const fyStart = fyStartOf(asOn);
     dcProgress.phase = `Reading ${label} — vouchers ${fyStart.toISOString().slice(0, 10)} → ${asOn.toISOString().slice(0, 10)}…`;
-    const { moves, cal } = await readAgeMovements(url, fyStart, asOn, partySet);
+    // Fail FAST: the first small window has a short timeout and no retry, so a
+    // company too dense to age (GIFFY) falls back in ~45s instead of freezing.
+    let moves, cal;
+    try {
+      ({ moves, cal } = await readAgeMovements(url, fyStart, asOn, partySet, { firstWin: 2, attemptMs: 45000, failFast: true }));
+    } catch (e) {
+      if (/AGEING_TOO_DENSE/.test(String((e && e.message) || e))) {
+        dcProgress.sub = '';
+        const ledgers = await readDCBalancesUnaged(url, group, asOn, natSign);
+        return { ok: true, url, company: company || '', label, vouchers: 0, ageingUnavailable: true, ledgerCount: ledgers.length, ledgers };
+      }
+      throw e;
+    }
     dcProgress.sub = '';
 
     const ledgers = [];
