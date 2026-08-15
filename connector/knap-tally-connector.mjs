@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.26';
+const VERSION = '4.27';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -3047,28 +3047,40 @@ const server = http.createServer(async (req, res) => {
       if (!asOn) { json(res, 400, { ok: false, error: 'Add &asOn=YYYY-MM-DD' }); return; }
       const saved = state.settings.company;
       state.settings.company = company;
-      // REPORT PROBE (add &report=1): time the Group Summary report export and
-      // return a slice of its raw XML, so the fast report-engine output can be
-      // parsed correctly for huge companies that hang the balance computation.
+      // REPORT PROBE (add &report=1): expand Sundry Debtors/Creditors to leaf
+      // ledgers via the Group Summary report and return the leaf total — the
+      // exact figure the sheet produces. Add &dates=YYYY-MM-DD,YYYY-MM-DD,… to
+      // check MANY dates in one call (each is a fast report read), so the whole
+      // year can be reconciled against Tally's Group Summary in one go.
       if (url.searchParams.get('report')) {
         const group = kind === 'creditors' ? 'Sundry Creditors' : 'Sundry Debtors';
-        const t0 = Date.now();
+        const datesRaw = url.searchParams.get('dates');
+        const dateList = datesRaw
+          ? datesRaw.split(',').map((s) => tallyDateOf(s.trim().replace(/-/g, ''))).filter(Boolean)
+          : [asOn];
         try {
-          const directXml = await askTallyFast(u, GROUP_SUMMARY_REQUEST(group, asOn), 180000);
-          // expand groups into leaf ledgers exactly as the sheet does
+          // group tree is date-independent — read it once
           const groupByNorm = new Map();
           for (const [gname, g] of Object.entries(parseGroups(await askTallyFast(u, GROUPS_REQUEST(), 120000)))) {
             groupByNorm.set(norm(gname), { name: gname, parent: g.parent });
           }
+          const results = [];
+          for (const d of dateList) {
+            const t0 = Date.now();
+            const leaves = [];
+            await readDCLeaves(u, group, d, groupByNorm, new Set(), leaves, { reads: 0 });
+            let parsedTotal = 0, kept = 0;
+            for (const lf of leaves) { if (Math.abs(lf.balanceDr) < 0.005) continue; parsedTotal = r2(parsedTotal + lf.balanceDr); kept++; }
+            results.push({ asOn: d.toISOString().slice(0, 10), ms: Date.now() - t0, leafParties: kept, parsedTotal });
+          }
+          state.settings.company = saved;
+          if (datesRaw) { json(res, 200, { ok: true, probe: 'group-summary-leaves', company, group, results }); return; }
+          // single-date: also include a sample of the leaves
+          const r0 = results[0];
           const leaves = [];
           await readDCLeaves(u, group, asOn, groupByNorm, new Set(), leaves, { reads: 0 });
-          const ms = Date.now() - t0;
-          let parsedTotal = 0, kept = 0;
-          for (const lf of leaves) { if (Math.abs(lf.balanceDr) < 0.005) continue; parsedTotal = r2(parsedTotal + lf.balanceDr); kept++; }
-          const sample = leaves.slice(0, 60).map((l) => ({ ledger: l.name, balanceDr: l.balanceDr }));
-          state.settings.company = saved;
-          json(res, 200, { ok: true, probe: 'group-summary-leaves', company, group, asOn: asOn.toISOString().slice(0, 10), ms, directChildren: parseGroupSummary(directXml).length, leafParties: kept, parsedTotal, sample });
-        } catch (e) { state.settings.company = saved; json(res, 502, { ok: false, error: String((e && e.message) || e), ms: Date.now() - t0 }); }
+          json(res, 200, { ok: true, probe: 'group-summary-leaves', company, group, asOn: r0.asOn, ms: r0.ms, leafParties: r0.leafParties, parsedTotal: r0.parsedTotal, sample: leaves.slice(0, 60).map((l) => ({ ledger: l.name, balanceDr: l.balanceDr })) });
+        } catch (e) { state.settings.company = saved; json(res, 502, { ok: false, error: String((e && e.message) || e) }); }
         return;
       }
       // Raw voucher-entry dump for ONE ledger (add &ledger=<name>) — shows the
