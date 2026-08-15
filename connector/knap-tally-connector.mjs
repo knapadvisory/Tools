@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.23';
+const VERSION = '4.24';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2384,6 +2384,12 @@ async function readDCForCompany(url, company, asOn, label, kind) {
     const group = kind === 'creditors' ? 'Sundry Creditors' : 'Sundry Debtors';
     dcProgress.phase = `Reading ${label} — ${kind} as on ${asOn.toISOString().slice(0, 10)}…`;
     dcProgress.monthsTotal = 2; dcProgress.monthsDone = 0; dcProgress.sub = 'ledger list';
+    // Group names — the exploded Group Summary lists SUB-GROUPS as well as
+    // ledgers, and a sub-group whose children are all on one side (e.g. "CRPG
+    // Customers", all-credit) shows only a Dr OR a Cr, so the both-sided test
+    // misses it. Skipping any row whose name is a group drops every sub-group
+    // aggregate, so its exploded children are never double-counted.
+    const groupNames = new Set(Object.keys(parseGroups(await askTallyFast(url, GROUPS_REQUEST(), 120000))).map(norm));
     const info = parseDcLedgers(await askTallyFast(url, DC_LEDGER_INFO_REQUEST(group), 120000));
     const byName = new Map();
     for (const r of info) byName.set(norm(r.ledger), r);
@@ -2392,9 +2398,10 @@ async function readDCForCompany(url, company, asOn, label, kind) {
     dcProgress.monthsDone = 2; dcProgress.sub = '';
     const parties = [];
     for (const row of rows) {
-      if (row.both) continue;                       // a sub-group aggregate → skip
-      const inf = byName.get(norm(row.name));
-      if (!inf) continue;                           // not a real ledger under the group → skip
+      const key = norm(row.name);
+      if (row.both || groupNames.has(key)) continue; // a sub-group aggregate → skip (avoids double count)
+      const inf = byName.get(key);
+      if (!inf) continue;                            // not a real ledger under the group → skip
       if (Math.abs(row.balanceDr) < 0.005) continue; // fully settled
       parties.push({ ledger: inf.ledger, gstin: inf.gstin, pan: inf.pan, group: inf.group, balanceDr: row.balanceDr });
     }
@@ -2565,14 +2572,16 @@ function fifoAge(items, natSign, asOn) {
 // them UNAGED — the whole balance sits in the on-account/"Unallocated" bucket, so
 // the report includes the company and still ties, it just isn't split by age.
 async function readDCBalancesUnaged(url, group, asOn, natSign) {
+  const groupNames = new Set(Object.keys(parseGroups(await askTallyFast(url, GROUPS_REQUEST(), 120000))).map(norm));
   const info = parseDcLedgers(await askTallyFast(url, DC_LEDGER_INFO_REQUEST(group), 120000));
   const byName = new Map();
   for (const r of info) byName.set(norm(r.ledger), r);
   const rows = parseGroupSummary(await askTallyFast(url, GROUP_SUMMARY_REQUEST(group, asOn), 180000));
   const ledgers = [];
   for (const row of rows) {
-    if (row.both) continue;
-    const inf = byName.get(norm(row.name));
+    const key = norm(row.name);
+    if (row.both || groupNames.has(key)) continue;   // sub-group aggregate → skip
+    const inf = byName.get(key);
     if (!inf) continue;
     const closing = r2(natSign * row.balanceDr);
     if (Math.abs(closing) < 0.005) continue;
