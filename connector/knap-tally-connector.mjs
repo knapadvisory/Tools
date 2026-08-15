@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.27';
+const VERSION = '4.28';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -3044,7 +3044,8 @@ const server = http.createServer(async (req, res) => {
       const kind = url.searchParams.get('kind') === 'creditors' ? 'creditors' : 'debtors';
       const u = url.searchParams.get('url') || state.settings.tallyUrl;
       const asOn = tallyDateOf(String(url.searchParams.get('asOn') || '').replace(/-/g, ''));
-      if (!asOn) { json(res, 400, { ok: false, error: 'Add &asOn=YYYY-MM-DD' }); return; }
+      // asOn is optional when &dates=… supplies its own list (report probe).
+      if (!asOn && !url.searchParams.get('dates')) { json(res, 400, { ok: false, error: 'Add &asOn=YYYY-MM-DD (or &dates=YYYY-MM-DD,YYYY-MM-DD,… with &report=1)' }); return; }
       const saved = state.settings.company;
       state.settings.company = company;
       // REPORT PROBE (add &report=1): expand Sundry Debtors/Creditors to leaf
