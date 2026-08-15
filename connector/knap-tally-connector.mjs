@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.30';
+const VERSION = '4.31';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2147,6 +2147,10 @@ const dcProgress = { active: false, phase: '', sub: '', done: 0, total: 0, compa
 // Set by "Release Tally" so a running read stops even between chunks (when no
 // fetch is in flight to abort). Cleared when a read starts.
 let dcCancel = false;
+// Companies found too voucher-dense to age line-by-line (their ageing shows
+// un-aged). Session-only (not persisted) so a one-off timeout never permanently
+// mislabels a normal company — it just re-checks after a connector restart.
+const dcDenseSet = new Set();
 
 // Read a company's per-ledger Dr-positive movements from books-start to `asOn`,
 // month by month (discarding each chunk's XML after summing it), enforcing the
@@ -2628,36 +2632,14 @@ function fifoAge(items, natSign, asOn) {
   }));
   return { open, onAccount: r2(-credit) }; // leftover credit is contra → negative in natural sign
 }
-// The balances-only fallback for ageing: when a company is too voucher-dense to
-// age line-by-line (it would freeze Tally), we still want its total in the
-// report. Read the Group Summary closing balances (fast, no computation) and show
-// them UNAGED — the whole balance sits in the on-account/"Unallocated" bucket, so
-// the report includes the company and still ties, it just isn't split by age.
-async function readDCBalancesUnaged(url, group, asOn, natSign) {
-  const groupByNorm = new Map();
-  for (const [gname, g] of Object.entries(parseGroups(await askTallyFast(url, GROUPS_REQUEST(), 120000)))) {
-    groupByNorm.set(norm(gname), { name: gname, parent: g.parent });
-  }
-  const info = parseDcLedgers(await askTallyFast(url, DC_LEDGER_INFO_REQUEST(group), 120000));
-  const byName = new Map();
-  for (const r of info) byName.set(norm(r.ledger), r);
-  const leaves = [];
-  await readDCLeaves(url, group, asOn, groupByNorm, new Set(), leaves, { reads: 0 });
-  const ledgers = [];
-  for (const lf of leaves) {
-    const closing = r2(natSign * lf.balanceDr);
-    if (Math.abs(closing) < 0.005) continue;
-    const inf = byName.get(norm(lf.name));
-    ledgers.push({ ledger: inf ? inf.ledger : lf.name, gstin: inf ? inf.gstin || '' : '', pan: inf ? inf.pan || '' : '', closing, onAccount: closing, bills: [] });
-  }
-  return ledgers;
-}
 // Ageing + open-item list for one company (`kind`), as at `asOn`.
 async function readBillwiseForCompany(url, company, asOn, label, kind) {
   const savedCompany = state.settings.company;
   state.settings.company = company || '';
   const natSign = kind === 'creditors' ? -1 : 1;
   const group = kind === 'creditors' ? 'Sundry Creditors' : 'Sundry Debtors';
+  const denseKey = norm(company || label);
+  const knownDense = dcDenseSet.has(denseKey);
   try {
     dcProgress.phase = `Reading ${label} — ledgers…`;
     dcProgress.monthsTotal = 0; dcProgress.monthsDone = 0;
@@ -2673,18 +2655,37 @@ async function readBillwiseForCompany(url, company, asOn, label, kind) {
     await readDCLeaves(url, group, asOn, groupByNorm, new Set(), authLeaves, { reads: 0 });
     const authClose = new Map();               // norm(ledger) -> closing (natural sign)
     for (const lf of authLeaves) authClose.set(norm(lf.name), r2(natSign * lf.balanceDr));
+    // Un-aged result built ONLY from data already in memory (report leaves +
+    // masters) — never re-reads Tally, so it works even while Tally is still busy
+    // finishing an aborted probe export.
+    const unagedResult = () => {
+      const ledgers = [];
+      for (const lf of authLeaves) {
+        const closing = r2(natSign * lf.balanceDr);
+        if (Math.abs(closing) < 0.005) continue;
+        const m = masters[lf.name] || {};
+        ledgers.push({ ledger: lf.name, gstin: m.gstin || '', pan: panFromGstin(m.gstin || ''), closing, onAccount: closing, bills: [] });
+      }
+      return { ok: true, url, company: company || '', label, vouchers: 0, ageingUnavailable: true, ledgerCount: ledgers.length, ledgers };
+    };
+    // Company already known too-dense to age line-by-line → skip the voucher read
+    // entirely (so Tally is never frozen again by it), show balances un-aged.
+    if (knownDense) { dcProgress.sub = ''; return unagedResult(); }
+
     const fyStart = fyStartOf(asOn);
     dcProgress.phase = `Reading ${label} — vouchers ${fyStart.toISOString().slice(0, 10)} → ${asOn.toISOString().slice(0, 10)}…`;
-    // Fail FAST: the first small window has a short timeout and no retry, so a
-    // company too dense to age (GIFFY) falls back in ~45s instead of freezing.
+    // Fail FAST: a single-day window, short timeout, no retry — a company too
+    // dense to age (GIFFY) bails in ~25s. On bail we REMEMBER it so it is never
+    // voucher-probed again, and fall back to the un-aged report figures already
+    // in memory (no further Tally read).
     let moves, cal;
     try {
-      ({ moves, cal } = await readAgeMovements(url, fyStart, asOn, partySet, { firstWin: 2, attemptMs: 45000, failFast: true }));
+      ({ moves, cal } = await readAgeMovements(url, fyStart, asOn, partySet, { firstWin: 1, attemptMs: 25000, failFast: true }));
     } catch (e) {
       if (/AGEING_TOO_DENSE/.test(String((e && e.message) || e))) {
+        dcDenseSet.add(denseKey);   // don't voucher-probe (and freeze) this one again this session
         dcProgress.sub = '';
-        const ledgers = await readDCBalancesUnaged(url, group, asOn, natSign);
-        return { ok: true, url, company: company || '', label, vouchers: 0, ageingUnavailable: true, ledgerCount: ledgers.length, ledgers };
+        return unagedResult();
       }
       throw e;
     }
@@ -2698,7 +2699,7 @@ async function readBillwiseForCompany(url, company, asOn, label, kind) {
       const items = vMoves.slice();
       const openDr = m.openingDr || 0;
       if (Math.abs(openDr) > 0.005) items.push({ date: fyStart, dr: openDr, ref: 'Opening balance' });
-      const { open, onAccount } = fifoAge(items, natSign, asOn);
+      const { open } = fifoAge(items, natSign, asOn);
       // Anchor to the authoritative closing: the aged bills + on-account must
       // equal the balance-sheet figure. Any gap (rare, a voucher-vs-report
       // rounding) is absorbed into on-account, so the report always ties.
@@ -2717,7 +2718,8 @@ async function readBillwiseForCompany(url, company, asOn, label, kind) {
       if (done.has(k)) continue;
       const closing = r2(natSign * lf.balanceDr);
       if (Math.abs(closing) < 0.005) continue;
-      ledgers.push({ ledger: lf.name, gstin: '', pan: '', closing, onAccount: closing, bills: [] });
+      const m = masters[lf.name] || {};
+      ledgers.push({ ledger: lf.name, gstin: m.gstin || '', pan: panFromGstin(m.gstin || ''), closing, onAccount: closing, bills: [] });
     }
     return { ok: true, url, company: company || '', label, vouchers: cal.vouchers, ledgerCount: ledgers.length, ledgers };
   } finally {
