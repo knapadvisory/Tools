@@ -1,0 +1,68 @@
+name: Sign connector releases
+
+# Every time the connector or audit-engine code changes, sign the exact bytes
+# that the hub will serve with the Ed25519 private key held ONLY in the
+# CONNECTOR_SIGNING_KEY secret, and commit the detached signatures next to the
+# files. The connector fetches <file>.sig and verifies it against the embedded
+# public key before applying any self-update, so a compromised hub/VPS cannot
+# push code that runs on accountants' PCs.
+#
+# One-time setup: run deploy/gen-signing-keys.sh, put the private key in the
+# repo secret CONNECTOR_SIGNING_KEY, and hand over the public key to embed.
+# Until the secret exists this workflow no-ops (updates stay unsigned, with a
+# loud warning in the connector log) so rollout isn't blocked.
+
+on:
+  push:
+    branches:
+      - claude/tools-hub-unified-access-k4kdue   # the deploy branch
+    paths:
+      - connector/knap-tally-connector.mjs
+      - connector/knap-tally-audit-engine.mjs
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sign-connector-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sign artifacts (skips if no key configured)
+        env:
+          SIGNING_KEY: ${{ secrets.CONNECTOR_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SIGNING_KEY:-}" ]; then
+            echo "CONNECTOR_SIGNING_KEY not set yet — skipping signing (updates remain unsigned)."
+            echo "skip=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          umask 077
+          printf '%s' "$SIGNING_KEY" > /tmp/sign.pem
+          for f in connector/knap-tally-connector.mjs connector/knap-tally-audit-engine.mjs; do
+            [ -f "$f" ] || continue
+            openssl pkeyutl -sign -inkey /tmp/sign.pem -rawin -in "$f" -out "/tmp/$(basename "$f").sig.bin"
+            base64 -w0 "/tmp/$(basename "$f").sig.bin" > "$f.sig"
+          done
+          rm -f /tmp/sign.pem /tmp/*.sig.bin
+
+      - name: Commit signatures
+        if: env.skip != '1'
+        run: |
+          set -euo pipefail
+          git config user.name  "knap-signing-bot"
+          git config user.email "knap-signing-bot@users.noreply.github.com"
+          git add connector/knap-tally-connector.mjs.sig connector/knap-tally-audit-engine.mjs.sig 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "Signatures already up to date."
+            exit 0
+          fi
+          # [skip ci] + the paths filter (only *.mjs triggers) both prevent a loop.
+          git commit -m "chore(security): sign connector artifacts [skip ci]"
+          git push

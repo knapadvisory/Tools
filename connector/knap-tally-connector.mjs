@@ -25,9 +25,10 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.2';
+const VERSION = '4.3';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2785,6 +2786,10 @@ async function ensureAudit(wantVersion, force) {
     const code = await fetch(HUB + '/connector/knap-tally-audit-engine.mjs', { signal: AbortSignal.timeout(30000) })
       .then((r) => (r.ok ? r.text() : null));
     if (!code || !code.includes('KNAP Tally Audit Engine')) return; // sanity check
+    const sig = await fetchSig(HUB + '/connector/knap-tally-audit-engine.mjs.sig');
+    const ver = verifyUpdate(code, sig);
+    if (!ver.ok) { console.log('  ⚠ audit-engine update refused — ' + ver.reason + '.'); startAudit(); return; }
+    if (ver.unsigned) console.log('  ⚠ applying UNSIGNED audit-engine update — configure signing (deploy/gen-signing-keys.sh).');
     fs.writeFileSync(AUDIT_FILE + '.new', code);
     if (auditChild) { stopping = true; auditChild.kill(); await new Promise((r) => setTimeout(r, 1500)); stopping = false; auditChild = null; }
     fs.renameSync(AUDIT_FILE + '.new', AUDIT_FILE);
@@ -2796,6 +2801,35 @@ async function ensureAudit(wantVersion, force) {
 process.on('exit', () => { stopping = true; if (auditChild) auditChild.kill(); });
 process.on('SIGINT', () => process.exit(0));
 process.on('SIGTERM', () => process.exit(0));
+
+// ---------------------- signed self-update (security P0) --------------------
+// The connector auto-fetches its own new code from the hub and runs it, so an
+// attacker who controlled the hub could run code on every accountant's PC. To
+// stop that, each release is signed with an Ed25519 private key that lives ONLY
+// in a GitHub Actions secret (never in the repo or on the VPS); the connector
+// carries the matching PUBLIC key and verifies the signature before applying an
+// update. A compromised hub or VPS cannot forge a signature.
+//
+// UPDATE_PUBLIC_KEY is an Ed25519 SPKI public key in PEM. It's filled in once
+// the firm generates the keypair (deploy/gen-signing-keys.sh) and sets the
+// secret. Until then it's empty and updates are applied UNSIGNED (with a loud
+// warning) so update propagation isn't broken during rollout — the moment the
+// key is set, every update is enforced.
+const UPDATE_PUBLIC_KEY = `` /* paste the Ed25519 public-key PEM here to enforce signed updates */;
+async function fetchSig(url) {
+  try { const r = await fetch(url, { signal: AbortSignal.timeout(15000) }); return r.ok ? (await r.text()).trim() : ''; }
+  catch { return ''; }
+}
+// Returns {ok, unsigned?, reason?}. ok=false means DO NOT apply the update.
+function verifyUpdate(codeText, sigB64) {
+  if (!UPDATE_PUBLIC_KEY.trim()) return { ok: true, unsigned: true }; // signing not configured yet
+  if (!sigB64) return { ok: false, reason: 'no signature published for this release yet' };
+  try {
+    const ok = crypto.verify(null, Buffer.from(codeText, 'utf8'),
+      crypto.createPublicKey(UPDATE_PUBLIC_KEY), Buffer.from(sigB64, 'base64'));
+    return { ok, reason: ok ? '' : 'signature does not match — refusing update' };
+  } catch (e) { return { ok: false, reason: 'signature check error: ' + String((e && e.message) || e) }; }
+}
 
 // ------------------------------ self-update ---------------------------------
 // Checks the hub for a newer connector when idle; writes the new file over
@@ -2814,6 +2848,10 @@ async function selfUpdate(force) {
     const code = await fetch(HUB + '/connector/knap-tally-connector.mjs', { signal: AbortSignal.timeout(30000) })
       .then((r) => (r.ok ? r.text() : null));
     if (!code || !code.includes('KNAP Tally Connector')) return; // sanity check
+    const sig = await fetchSig(HUB + '/connector/knap-tally-connector.mjs.sig');
+    const ver = verifyUpdate(code, sig);
+    if (!ver.ok) { console.log('  ⚠ update refused — ' + ver.reason + ' (staying on v' + VERSION + ').'); startAudit(); return; }
+    if (ver.unsigned) console.log('  ⚠ applying UNSIGNED update — configure signing (deploy/gen-signing-keys.sh).');
     fs.writeFileSync(SELF + '.new', code);
     fs.renameSync(SELF + '.new', SELF);
     console.log('  ⬆ Updated to v' + v.version + ' — restarting.');
