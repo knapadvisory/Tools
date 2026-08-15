@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.31';
+const VERSION = '4.32';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2355,32 +2355,11 @@ function parseGroupSummary(xml) {
   }
   return out;
 }
-// ---- RESEARCH: candidate requests for Tally's outstanding / ageing data. ----
-// The DC ageing/bill-wise reports need each party's OPEN BILLS (ref, date, due
-// date, pending amount). We probe several ways so we can see which one Tally
-// answers for these books and what its XML looks like, then build the parser.
-// (1) A Collection of Bills — every outstanding bill as a stored object, with
-//     its pending ClosingBalance, its date, its party and its credit period.
-function DC_BILLS_COLLECTION(asOn) {
-  return `<ENVELOPE>
- <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>DcBills</ID></HEADER>
- <BODY><DESC>
-  <STATICVARIABLES>
-   <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-   <SVFROMDATE>${toTallyDate(fyStartOf(asOn))}</SVFROMDATE><SVTODATE>${toTallyDate(asOn)}</SVTODATE>${svCompany()}
-  </STATICVARIABLES>
-  <TDL><TDLMESSAGE>
-   <COLLECTION NAME="DcBills" ISMODIFY="No">
-    <TYPE>Bills</TYPE>
-    <FETCH>BillDate</FETCH><FETCH>Name</FETCH><FETCH>Parent</FETCH><FETCH>BillType</FETCH>
-    <FETCH>ClosingBalance</FETCH><FETCH>BillCreditPeriod</FETCH><FETCH>IsAdvance</FETCH>
-   </COLLECTION>
-  </TDLMESSAGE></TDL>
- </DESC></BODY>
-</ENVELOPE>`;
-}
-// (2) Tally's own outstanding REPORT via the report engine (fast, as at date).
-//     `id` = "Bills Receivable" for debtors, "Bills Payable" for creditors.
+// Tally's own outstanding REPORT via the report engine (fast, as at date).
+// `id` = "Bills Receivable" for debtors, "Bills Payable" for creditors. Used by
+// the ageing research probe to see whether these books carry any bill data.
+// (A Collection of Bills was tried first but it makes Tally compute across all
+// transactions and freezes a high-volume company, so it was removed.)
 function OUTSTANDING_REPORT(id, asOn) {
   return `<ENVELOPE>
  <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Data</TYPE><ID>${escXml(id)}</ID></HEADER>
@@ -2633,13 +2612,13 @@ function fifoAge(items, natSign, asOn) {
   return { open, onAccount: r2(-credit) }; // leftover credit is contra → negative in natural sign
 }
 // Ageing + open-item list for one company (`kind`), as at `asOn`.
-async function readBillwiseForCompany(url, company, asOn, label, kind) {
+async function readBillwiseForCompany(url, company, asOn, label, kind, balanceOnly) {
   const savedCompany = state.settings.company;
   state.settings.company = company || '';
   const natSign = kind === 'creditors' ? -1 : 1;
   const group = kind === 'creditors' ? 'Sundry Creditors' : 'Sundry Debtors';
   const denseKey = norm(company || label);
-  const knownDense = dcDenseSet.has(denseKey);
+  const knownDense = balanceOnly || dcDenseSet.has(denseKey);
   try {
     dcProgress.phase = `Reading ${label} — ledgers…`;
     dcProgress.monthsTotal = 0; dcProgress.monthsDone = 0;
@@ -3148,37 +3127,30 @@ const server = http.createServer(async (req, res) => {
         } catch (e) { state.settings.company = saved; json(res, 502, { ok: false, error: String((e && e.message) || e) }); }
         return;
       }
-      // AGEING / BILL-WISE RESEARCH PROBE (add &ageprobe=1): try several ways to
-      // get outstanding-bill data and dump each one's timing, size and a head
-      // slice, so the real ageing/bill-wise reader can be built against what
-      // Tally actually returns for these books.
+      // AGEING / BILL-WISE RESEARCH PROBE (add &ageprobe=1): try ONLY Tally's own
+      // outstanding REPORT (report engine — the fast, non-freezing path; the
+      // earlier Collection-of-Bills attempt made Tally compute across all
+      // transactions and froze it, so it is gone). Short timeout so even a slow
+      // one bails fast. Shows whether these books carry any outstanding bills.
       if (url.searchParams.get('ageprobe')) {
         if (!asOn) { json(res, 400, { ok: false, error: 'Add &asOn=YYYY-MM-DD' }); return; }
         const rptId = kind === 'creditors' ? 'Bills Payable' : 'Bills Receivable';
-        const attempts = [
-          { name: 'Bills collection (TYPE Bills)', req: DC_BILLS_COLLECTION(asOn) },
-          { name: `${rptId} report`, req: OUTSTANDING_REPORT(rptId, asOn) },
-        ];
-        const out = [];
-        for (const a of attempts) {
-          const t0 = Date.now();
-          try {
-            const xml = await askTallyFast(u, a.req, 90000);
-            out.push({
-              name: a.name, ok: true, ms: Date.now() - t0, bytes: xml.length,
-              tagCounts: {
-                BILLS: (xml.match(/<BILLS[\s>]/gi) || []).length,
-                BILLFIXED: (xml.match(/<BILLFIXED/gi) || []).length,
-                BILL: (xml.match(/<BILL[\s>]/gi) || []).length,
-                DSPACCNAME: (xml.match(/<DSPACCNAME>/gi) || []).length,
-                LEDGER: (xml.match(/<LEDGER[\s>]/gi) || []).length,
-              },
-              head: xml.slice(0, 20000),
-            });
-          } catch (e) { out.push({ name: a.name, ok: false, ms: Date.now() - t0, error: String((e && e.message) || e) }); }
-        }
-        state.settings.company = saved;
-        json(res, 200, { ok: true, probe: 'ageing-research', company, kind, asOn: asOn.toISOString().slice(0, 10), attempts: out });
+        const t0 = Date.now();
+        try {
+          const xml = await askTallyFast(u, OUTSTANDING_REPORT(rptId, asOn), 25000);
+          state.settings.company = saved;
+          json(res, 200, {
+            ok: true, probe: 'ageing-research', company, kind, report: rptId,
+            asOn: asOn.toISOString().slice(0, 10), ms: Date.now() - t0, bytes: xml.length,
+            tagCounts: {
+              BILLFIXED: (xml.match(/<BILLFIXED/gi) || []).length,
+              BILL: (xml.match(/<BILL[\s>]/gi) || []).length,
+              DSPACCNAME: (xml.match(/<DSPACCNAME>/gi) || []).length,
+              DSPBILLDATE: (xml.match(/<DSPBILLDATE/gi) || []).length,
+            },
+            head: xml.slice(0, 20000),
+          });
+        } catch (e) { state.settings.company = saved; json(res, 502, { ok: false, error: String((e && e.message) || e), ms: Date.now() - t0 }); }
         return;
       }
       // Raw voucher-entry dump for ONE ledger (add &ledger=<name>) — shows the
@@ -3353,6 +3325,9 @@ const server = http.createServer(async (req, res) => {
       const targets = Array.isArray(body.targets) ? body.targets : [];
       if (!asOn) { json(res, 400, { ok: false, error: 'Set the "as on" date.' }); return; }
       if (!targets.length) { json(res, 400, { ok: false, error: 'Pick at least one company.' }); return; }
+      // Companies the user marked "balance only" (too large to age line-by-line):
+      // never voucher-read them, so Tally is never frozen.
+      const noAge = new Set((Array.isArray(body.noAge) ? body.noAge : []).map((x) => norm(String(x))));
       dcCancel = false;   // fresh read; a later "Release Tally" flips this to stop it
       dcProgress.active = true; dcProgress.done = 0; dcProgress.total = targets.length; dcProgress.phase = 'Starting…'; dcProgress.sub = '';
       dcProgress.startedAt = Date.now(); dcProgress.monthsDone = 0; dcProgress.monthsTotal = 0;
@@ -3362,14 +3337,15 @@ const server = http.createServer(async (req, res) => {
           const t = targets[i] || {};
           const label = String(t.company || '').trim() || `Tally ${t.url || ''}`;
           dcProgress.company = label; dcProgress.done = i;
-          const one = await readBillwiseForCompany(String(t.url || state.settings.tallyUrl), String(t.company || ''), asOn, label, kind);
+          const balanceOnly = noAge.has(norm(label)) || noAge.has(norm(t.company || ''));
+          const one = await readBillwiseForCompany(String(t.url || state.settings.tallyUrl), String(t.company || ''), asOn, label, kind, balanceOnly);
           // values already in the party's natural sign (debtors +, creditors +)
           const ledgers = one.ledgers.map((L) => ({
             ledger: L.ledger, gstin: L.gstin, pan: L.pan,
             closing: L.closing, onAccount: L.onAccount,
             bills: L.bills.map((b) => ({ ref: b.ref, date: b.date, dueDate: b.dueDate || null, days: b.days, amount: b.amount })),
           }));
-          companies.push({ url: one.url, company: one.company, label, ledgerCount: ledgers.length, ledgers });
+          companies.push({ url: one.url, company: one.company, label, ageingUnavailable: !!one.ageingUnavailable, ledgerCount: ledgers.length, ledgers });
           dcProgress.done = i + 1;
         }
         dcProgress.active = false;

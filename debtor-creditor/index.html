@@ -387,7 +387,7 @@ var connVer = '';
 function setPill(cls,txt){ var p=document.getElementById('connPill'); p.className='conn-pill '+cls; document.getElementById('connPillText').textContent=txt; }
 function banner(cls,title,sub){ var b=document.getElementById('connBanner'); b.className='conn-banner '+cls; document.getElementById('connTitle').textContent=title; document.getElementById('connSub').innerHTML=sub; }
 function verGE(v,min){ var a=String(v).split('.').map(Number),b=String(min).split('.').map(Number); for(var i=0;i<Math.max(a.length,b.length);i++){var x=a[i]||0,y=b[i]||0; if(x!==y) return x>y;} return true; }
-var REQVER='4.31';
+var REQVER='4.32';
 function checkConn(){
   fetch(API+'/health',{signal:AbortSignal.timeout(3000)}).then(function(r){return r.json();}).then(function(h){
     connVer=h.version||''; setPill('on','connector v'+connVer+' · connected');
@@ -831,10 +831,31 @@ function showReport(rep){
       +'<div class="flow-note">Open invoices per party (FIFO, oldest first) with days outstanding. “On account” is any advance / credit not against an invoice (invoices + on-account = the balance).</div>'; renderBillwise(); }
   }
 }
+function bwKey(label){ return 'dc_balanceonly_'+label; }
+function bwBalanceOnly(label){ try{ return localStorage.getItem(bwKey(label))==='1'; }catch(e){ return false; } }
+function bwToggleAge(chk){
+  var label=chk.getAttribute('data-label');
+  try{ if(chk.checked) localStorage.removeItem(bwKey(label)); else localStorage.setItem(bwKey(label),'1'); }catch(e){}
+  var h=chk.parentNode.querySelector('.bwhint'); if(h){ h.textContent=chk.checked?'age line-by-line':'balance only'; h.style.color=chk.checked?'var(--muted)':'var(--warn)'; }
+}
+// companies the user marked balance-only (persisted) — never voucher-read
+function bwNoAgeList(){ var out=[]; ((RESULT&&RESULT.companies)||[]).forEach(function(c){ if(bwBalanceOnly(c.label)) out.push(c.label); }); return out; }
 function billBuildPanel(which){
   var name=which==='ageing'?'Ageing':'Bill-wise summary';
+  var cos=(RESULT&&RESULT.companies)||[];
+  var colist='';
+  if(cos.length){
+    colist='<div style="margin:14px 0;padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:var(--surface)">'
+      +'<div style="font-size:12.5px;color:var(--muted);margin-bottom:8px">Which companies to age line-by-line. <b>Untick a very large company</b> (a marketplace / e-com book with millions of transactions) to show its <b>balance only</b> — that skips the heavy voucher read and keeps Tally responsive.</div>';
+    cos.forEach(function(c){
+      var off=bwBalanceOnly(c.label);
+      colist+='<label style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px"><input type="checkbox" class="bwAgeChk" data-label="'+esc(c.label)+'" '+(off?'':'checked')+' onchange="bwToggleAge(this)" style="width:15px;height:15px;accent-color:var(--green)"><span>'+esc(c.label)+'</span> <span class="bwhint" style="font-size:11px;color:'+(off?'var(--warn)':'var(--muted)')+'">'+(off?'balance only':'age line-by-line')+'</span></label>';
+    });
+    colist+='</div>';
+  }
   return '<div class="soonpanel"><h3>'+esc(name)+'</h3>'
     +'<p>Reads each party’s ledger and ages the outstanding by <b>FIFO</b> — every invoice is aged by its own date, and receipts / credit notes (including on-account payments) clear the <b>oldest</b> invoice first, exactly as Tally does for ledgers not kept bill-by-bill. Any excess credit left over is the advance / on-account. The buckets always tie to the balance. One read powers both Ageing and Bill-wise.</p>'
+    +colist
     +'<div class="prog hidden" id="bwProgWrap" style="max-width:520px"><i id="bwProgBar"></i></div>'
     +'<div class="prog-line hidden" id="bwProgLine"></div>'
     +'<div class="msg" id="bwMsg"></div>'
@@ -1222,7 +1243,7 @@ function ensureBillwise(cb){
     .catch(function(e){ if(btn){btn.disabled=false;btn.textContent=old;} if(confirm('Could not read bills ('+e.message+').\nDownload the master WITHOUT the Ageing and Bill-wise sheets?')) cb(false); });
 }
 function fetchBillwise(){
-  return fetch(API+'/api/dc/billwise',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kind:KIND,asOn:RESULT.asOn,targets:selectedTargets()})})
+  return fetch(API+'/api/dc/billwise',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kind:KIND,asOn:RESULT.asOn,targets:selectedTargets(),noAge:bwNoAgeList()})})
     .then(function(r){return r.json();}).then(function(j){
       if(!j.ok) throw new Error((j.company?('while reading '+j.company+': '):'')+(j.error||'failed'));
       BILLWISE=j; buildBwIndex(); return j;
