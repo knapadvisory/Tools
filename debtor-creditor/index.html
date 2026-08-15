@@ -387,7 +387,7 @@ var connVer = '';
 function setPill(cls,txt){ var p=document.getElementById('connPill'); p.className='conn-pill '+cls; document.getElementById('connPillText').textContent=txt; }
 function banner(cls,title,sub){ var b=document.getElementById('connBanner'); b.className='conn-banner '+cls; document.getElementById('connTitle').textContent=title; document.getElementById('connSub').innerHTML=sub; }
 function verGE(v,min){ var a=String(v).split('.').map(Number),b=String(min).split('.').map(Number); for(var i=0;i<Math.max(a.length,b.length);i++){var x=a[i]||0,y=b[i]||0; if(x!==y) return x>y;} return true; }
-var REQVER='4.18';
+var REQVER='4.19';
 function checkConn(){
   fetch(API+'/health',{signal:AbortSignal.timeout(3000)}).then(function(r){return r.json();}).then(function(h){
     connVer=h.version||''; setPill('on','connector v'+connVer+' · connected');
@@ -418,7 +418,22 @@ function doUpdate(){
     },1500);
   }).catch(function(){ banner('off','Could not reach the connector','Make sure the KNAP connector is running on this PC, then try again.'); });
 }
-function releaseTally(){ fetch(API+'/api/tally/release',{method:'POST'}).then(function(r){return r.json();}).then(function(){ setMsg('msgScan','Released.','ok'); }).catch(function(){}); }
+function releaseTally(){
+  fetch(API+'/api/tally/release',{method:'POST'}).then(function(r){return r.json();}).then(function(j){
+    // stop any in-progress read UI and let go of every held state, so it's clear
+    // the tool is not holding Tally anymore.
+    if(POLL){ clearInterval(POLL); POLL=null; }
+    var pw=document.getElementById('progWrap'), pl=document.getElementById('progLine');
+    if(pw) pw.classList.add('hidden'); if(pl){ pl.classList.add('hidden'); }
+    var be=document.getElementById('btnExtract'); if(be) be.disabled=false;
+    endpoints=[]; var cl=document.getElementById('cmpList'); if(cl) cl.innerHTML='';
+    ['card2','card3','card4'].forEach(function(id){ var c=document.getElementById(id); if(c) c.classList.add('hidden'); });
+    setMsg('msgExtract','','');
+    setMsg('msgScan', (j&&j.released)
+      ? 'Released — the tool let go of Tally and cleared what it had. If Tally still looks frozen it is finishing the last export it already started (the tool can’t cancel that from outside) — give it a moment, and if it stays stuck, close & reopen TallyPrime. Then Scan again.'
+      : 'Tally is free — nothing was running. Scan when ready.', 'ok');
+  }).catch(function(e){ setMsg('msgScan','Could not reach the connector: '+e.message,'bad'); });
+}
 function setMsg(id,txt,cls){ var e=document.getElementById(id); e.className='msg'+(cls?' '+cls:''); e.innerHTML=txt; }
 
 /* ============================ step 1: endpoints & companies ============================ */

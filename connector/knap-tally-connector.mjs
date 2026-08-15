@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.18';
+const VERSION = '4.19';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -398,6 +398,34 @@ function voucherCollectionRequest(from, to) {
     <FETCH>DATE</FETCH><FETCH>GUID</FETCH><FETCH>VOUCHERTYPENAME</FETCH><FETCH>VOUCHERNUMBER</FETCH>
     <FETCH>REFERENCE</FETCH><FETCH>NARRATION</FETCH><FETCH>PARTYLEDGERNAME</FETCH><FETCH>PARTYGSTIN</FETCH>
     <FETCH>CMPGSTIN</FETCH><FETCH>ISCANCELLED</FETCH><FETCH>ISOPTIONAL</FETCH>
+    <FETCH>ALLLEDGERENTRIES.LIST</FETCH>
+   </COLLECTION>
+  </TDLMESSAGE></TDL>
+ </DESC></BODY>
+</ENVELOPE>`;
+}
+
+// LEAN voucher request for the debtor/creditor reads. The DC balance & ageing
+// only need each voucher's date, type, number, cancel/optional flags and its
+// ledger lines (name + amount + Dr/Cr flag) — NOT narration, reference or the
+// GSTIN fields. Dropping those (narration especially, which is free text on
+// every voucher) makes Tally's export dramatically smaller and faster, so a
+// high-volume company exports without choking. Kept separate from
+// voucherCollectionRequest so the GSTR-2B/recon path is untouched.
+function dcVoucherRequest(from, to) {
+  return `<ENVELOPE>
+ <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>DcVouchers</ID></HEADER>
+ <BODY><DESC>
+  <STATICVARIABLES>
+   <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+   <SVFROMDATE>${toTallyDate(from)}</SVFROMDATE>
+   <SVTODATE>${toTallyDate(to)}</SVTODATE>${svCompany()}
+  </STATICVARIABLES>
+  <TDL><TDLMESSAGE>
+   <COLLECTION NAME="DcVouchers" ISMODIFY="No">
+    <TYPE>Voucher</TYPE>
+    <FETCH>DATE</FETCH><FETCH>GUID</FETCH><FETCH>VOUCHERTYPENAME</FETCH><FETCH>VOUCHERNUMBER</FETCH>
+    <FETCH>PARTYLEDGERNAME</FETCH><FETCH>ISCANCELLED</FETCH><FETCH>ISOPTIONAL</FETCH>
     <FETCH>ALLLEDGERENTRIES.LIST</FETCH>
    </COLLECTION>
   </TDLMESSAGE></TDL>
@@ -2116,55 +2144,70 @@ setTimeout(autoRecoTick, 8000);
 // happen in the browser; confirmed groupings are remembered in state.dcAliases.
 
 const dcProgress = { active: false, phase: '', sub: '', done: 0, total: 0, company: '', startedAt: 0, monthsDone: 0, monthsTotal: 0 };
+// Set by "Release Tally" so a running read stops even between chunks (when no
+// fetch is in flight to abort). Cleared when a read starts.
+let dcCancel = false;
 
 // Read a company's per-ledger Dr-positive movements from books-start to `asOn`,
 // month by month (discarding each chunk's XML after summing it), enforcing the
 // `asOn` cut-off in code so a Tally that ignores SVTODATE can't leak later
 // vouchers into an earlier-dated balance. Updates dcProgress month counters.
-// Read the vouchers in [from,to], adapting to what this Tally can serve within
-// the timeout: on a timeout the window is HALVED and each half retried, down to
-// a single day. A lighter export genuinely completes where the same heavy one
-// re-sent would just time out again — so a big company (many months / a full
-// year of data) reads in bites Tally can manage instead of dying on one giant
-// chunk. `onXml` consumes each chunk immediately (raw XML is never accumulated).
-// Only a genuine timeout splits; a user "Release Tally" (abort/released) stops.
-async function readVouchersAdaptive(url, from, to, onXml, attemptMs = 120000) {
-  async function go(a, b) {
-    try {
-      onXml(await tallyFetch(url, voucherCollectionRequest(a, b), attemptMs));
-    } catch (e) {
-      const msg = String((e && e.message) || e);
-      const spanDays = Math.round((b.getTime() - a.getTime()) / DAY_MS);
-      // split only on a plain timeout, and only while there is still room to split
-      if (/timed out|timeout/i.test(msg) && !/released/i.test(msg) && spanDays >= 2) {
-        const midMs = a.getTime() + Math.floor(spanDays / 2) * DAY_MS;
-        await go(a, new Date(midMs));
-        await go(new Date(midMs + DAY_MS), b);
-      } else throw e;
+// Read every voucher in [from,to] in date order, RAMPING the window size to what
+// this Tally can serve WITHOUT choking. We start small (5 days) so Tally is never
+// handed a giant first export — the thing that freezes a high-volume company and
+// can't be cancelled once started. Each chunk that returns fast lets the next one
+// grow (up to a month); a slow one shrinks it. If a chunk times out, Tally likely
+// choked: we shrink to ~2 days, PAUSE so it can recover, and retry that one slice
+// once — never piling more requests on a busy Tally — then give up so the caller
+// can tell the user to restart Tally. `onXml` consumes each chunk immediately;
+// `prog(endDate)` reports how far we've read. A user "Release Tally" stops at once.
+async function readVouchersRamp(url, from, to, onXml, prog) {
+  let win = 5;                                   // days
+  let cursor = from.getTime();
+  const toMs = to.getTime();
+  while (cursor <= toMs) {
+    if (dcCancel) throw new Error('released by user');   // stop between chunks too
+    let end = Math.min(cursor + (win - 1) * DAY_MS, toMs);
+    let done = false;
+    for (let attempt = 0; attempt < 2 && !done; attempt++) {
+      const t0 = Date.now();
+      try {
+        const xml = await tallyFetch(url, dcVoucherRequest(new Date(cursor), new Date(end)), 120000);
+        onXml(xml);
+        done = true;
+        const ms = Date.now() - t0;
+        if (ms < 8000) win = Math.min(win * 2, 31);                 // fast → read bigger next
+        else if (ms > 45000) win = Math.max(Math.floor(win / 2), 2); // slow → back off
+      } catch (e) {
+        const msg = String((e && e.message) || e);
+        if (/released/i.test(msg)) throw e;                         // user pressed Release
+        if (/timed out|timeout/i.test(msg) && attempt === 0) {
+          win = 2;
+          end = Math.min(cursor + 1 * DAY_MS, toMs);                // just two days
+          await new Promise((r) => setTimeout(r, 4000));            // let Tally breathe
+          continue;
+        }
+        throw e;
+      }
     }
+    if (!done) throw new Error('Tally request timed out');
+    if (prog) prog(new Date(end));
+    cursor = end + DAY_MS;
   }
-  await go(from, to);
 }
 async function readDCMovements(url, readStart, asOn) {
   const sums = {}, seen = new Set(), seenSig = new Set();
   const cal = { vouchers: 0, dupes: 0, noFlag: 0, afterTo: 0 };
   const toKey = asOn.getUTCFullYear() * 10000 + (asOn.getUTCMonth() + 1) * 100 + asOn.getUTCDate();
-  let monthsTotal = 0;
-  for (let d = new Date(Date.UTC(readStart.getUTCFullYear(), readStart.getUTCMonth(), 1)); d <= asOn;
-       d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1))) monthsTotal++;
-  dcProgress.monthsTotal = monthsTotal; dcProgress.monthsDone = 0;
-  let done = 0;
-  for (let d = new Date(Date.UTC(readStart.getUTCFullYear(), readStart.getUTCMonth(), 1)); d <= asOn;
-       d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1))) {
-    const mFrom = d < readStart ? readStart : d;
-    const mEnd = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
-    const mTo = mEnd > asOn ? asOn : mEnd;
-    dcProgress.sub = `${MONTH_NAMES[mFrom.getUTCMonth()]} ${mFrom.getUTCFullYear()} (${done + 1}/${monthsTotal})`;
-    // svCompany() is set by the caller; heavy months split themselves on timeout
-    await readVouchersAdaptive(url, mFrom, mTo, (xml) => accumulateTB(xml, sums, seen, cal, 0, toKey, seenSig));
-    done++; dcProgress.monthsDone = done;
-  }
-  return { sums, cal, monthsTotal };
+  const totalDays = Math.max(1, Math.round((asOn.getTime() - readStart.getTime()) / DAY_MS) + 1);
+  dcProgress.monthsTotal = totalDays; dcProgress.monthsDone = 0;   // progress is day-based now
+  await readVouchersRamp(url, readStart, asOn,
+    (xml) => accumulateTB(xml, sums, seen, cal, 0, toKey, seenSig),
+    (endDate) => {
+      dcProgress.monthsDone = Math.min(totalDays, Math.round((endDate.getTime() - readStart.getTime()) / DAY_MS) + 1);
+      dcProgress.sub = `up to ${endDate.toISOString().slice(0, 10)}`;
+    });
+  return { sums, cal, monthsTotal: totalDays };
 }
 
 // PAN sits inside every GSTIN as characters 3–12 (0-based 2..12). Deriving it
@@ -2321,16 +2364,9 @@ async function readAgeMovements(url, fyStart, asOn, partySet) {
   const moves = {}, seen = new Set(), seenSig = new Set();
   const cal = { vouchers: 0, noFlag: 0, afterTo: 0 };
   const toKey = asOn.getUTCFullYear() * 10000 + (asOn.getUTCMonth() + 1) * 100 + asOn.getUTCDate();
-  let monthsTotal = 0;
-  for (let d = new Date(Date.UTC(fyStart.getUTCFullYear(), fyStart.getUTCMonth(), 1)); d <= asOn; d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1))) monthsTotal++;
-  dcProgress.monthsTotal = monthsTotal; dcProgress.monthsDone = 0;
-  let done = 0;
-  for (let d = new Date(Date.UTC(fyStart.getUTCFullYear(), fyStart.getUTCMonth(), 1)); d <= asOn; d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1))) {
-    const mFrom = d < fyStart ? fyStart : d;
-    const mEnd = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
-    const mTo = mEnd > asOn ? asOn : mEnd;
-    dcProgress.sub = `${MONTH_NAMES[mFrom.getUTCMonth()]} ${mFrom.getUTCFullYear()} (${done + 1}/${monthsTotal})`;
-    await readVouchersAdaptive(url, mFrom, mTo, (xml) => {
+  const totalDays = Math.max(1, Math.round((asOn.getTime() - fyStart.getTime()) / DAY_MS) + 1);
+  dcProgress.monthsTotal = totalDays; dcProgress.monthsDone = 0;   // progress is day-based now
+  await readVouchersRamp(url, fyStart, asOn, (xml) => {
     for (const block of xml.match(/<VOUCHER[\s>][\s\S]*?<\/VOUCHER>/gi) || []) {
       if (/(^|>)\s*Yes\s*<\/ISCANCELLED>/i.test(block.match(/<ISCANCELLED>[\s\S]*?<\/ISCANCELLED>/i)?.[0] ?? '')) continue;
       if (/<ISOPTIONAL>\s*Yes/i.test(block)) continue;
@@ -2361,9 +2397,10 @@ async function readAgeMovements(url, fyStart, asOn, partySet) {
       }
       cal.vouchers++;
     }
-    });
-    done++; dcProgress.monthsDone = done;
-  }
+  }, (endDate) => {
+    dcProgress.monthsDone = Math.min(totalDays, Math.round((endDate.getTime() - fyStart.getTime()) / DAY_MS) + 1);
+    dcProgress.sub = `up to ${endDate.toISOString().slice(0, 10)}`;
+  });
   return { moves, cal };
 }
 // Pass-through pre-pass. At KNAP a client also pays the firm the tax it will
@@ -2541,9 +2578,10 @@ const server = http.createServer(async (req, res) => {
     // Release Tally: abort any in-flight request so Tally is freed for normal
     // use, without killing it from Task Manager. Also clears progress state.
     if (req.method === 'POST' && url.pathname === '/api/tally/release') {
-      const wasBusy = !!currentTallyAbort;
+      const wasBusy = !!currentTallyAbort || dcProgress.active;
+      dcCancel = true;   // stop a DC read even between chunks (no fetch to abort)
       if (currentTallyAbort) { try { currentTallyAbort.abort(new Error('released by user')); } catch { /* */ } currentTallyAbort = null; }
-      finProgress.active = false; recoProgress.active = false;
+      finProgress.active = false; recoProgress.active = false; dcProgress.active = false;
       json(res, 200, { ok: true, released: wasBusy });
       return;
     }
@@ -3002,11 +3040,13 @@ const server = http.createServer(async (req, res) => {
       const targets = Array.isArray(body.targets) ? body.targets : [];
       if (!asOn) { json(res, 400, { ok: false, error: 'Set the "as on" date.' }); return; }
       if (!targets.length) { json(res, 400, { ok: false, error: 'Pick at least one company.' }); return; }
+      dcCancel = false;   // fresh read; a later "Release Tally" flips this to stop it
       dcProgress.active = true; dcProgress.done = 0; dcProgress.total = targets.length; dcProgress.phase = 'Starting…'; dcProgress.sub = '';
       dcProgress.startedAt = Date.now(); dcProgress.monthsDone = 0; dcProgress.monthsTotal = 0;
       const companies = [];
       try {
         for (let i = 0; i < targets.length; i++) {
+          if (dcCancel) throw new Error('released by user');   // stop between companies
           const t = targets[i] || {};
           const label = String(t.company || '').trim() || `Tally ${t.url || ''}`;
           dcProgress.company = label; dcProgress.done = i;
@@ -3045,6 +3085,7 @@ const server = http.createServer(async (req, res) => {
       const targets = Array.isArray(body.targets) ? body.targets : [];
       if (!asOn) { json(res, 400, { ok: false, error: 'Set the "as on" date.' }); return; }
       if (!targets.length) { json(res, 400, { ok: false, error: 'Pick at least one company.' }); return; }
+      dcCancel = false;   // fresh read; a later "Release Tally" flips this to stop it
       dcProgress.active = true; dcProgress.done = 0; dcProgress.total = targets.length; dcProgress.phase = 'Starting…'; dcProgress.sub = '';
       dcProgress.startedAt = Date.now(); dcProgress.monthsDone = 0; dcProgress.monthsTotal = 0;
       const companies = [];
