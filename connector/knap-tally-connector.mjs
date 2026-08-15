@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.21';
+const VERSION = '4.22';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2291,6 +2291,50 @@ function GROUP_SUMMARY_REQUEST(group, asOn) {
  </DESC></BODY>
 </ENVELOPE>`;
 }
+// The actual party ledgers under a group (+ GSTIN), STORED fields only — no
+// CLOSINGBALANCE, so Tally never has to compute anything and this stays fast
+// even for a company whose ledgers hold millions of vouchers. Gives us the
+// party list + GSTIN; the balances come from the Group Summary report.
+function DC_LEDGER_INFO_REQUEST(group) {
+  return `<ENVELOPE>
+ <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>DcLedgerInfo</ID></HEADER>
+ <BODY><DESC>
+  <STATICVARIABLES><SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>${svCompany()}</STATICVARIABLES>
+  <TDL><TDLMESSAGE>
+   <COLLECTION NAME="DcLedgerInfo" ISMODIFY="No">
+    <TYPE>Ledger</TYPE>
+    <CHILDOF>${escXml(group)}</CHILDOF>
+    <BELONGSTO>Yes</BELONGSTO>
+    <FETCH>NAME</FETCH><FETCH>PARENT</FETCH>
+    <FETCH>PARTYGSTIN</FETCH><FETCH>GSTREGISTRATIONNUMBER</FETCH><FETCH>VATTINNUMBER</FETCH>
+   </COLLECTION>
+  </TDLMESSAGE></TDL>
+ </DESC></BODY>
+</ENVELOPE>`;
+}
+// Parse the Group Summary report export. Each row is a
+// <DSPACCNAME><DSPDISPNAME>NAME</DSPDISPNAME></DSPACCNAME> followed by a
+// <DSPACCINFO> carrying the closing Dr (<DSPCLDRAMTA>, exported negative) and/or
+// Cr (<DSPCLCRAMTA>, positive). We take magnitudes and net to the Dr-positive
+// convention (Dr +, Cr −). Sub-group rows (which carry BOTH a Dr and a Cr total)
+// are returned too; the caller drops any name that is not a real ledger, so the
+// sub-group aggregates never double-count their exploded children.
+function parseGroupSummary(xml) {
+  const out = [];
+  const re = /<DSPACCNAME>[\s\S]*?<DSPDISPNAME>([\s\S]*?)<\/DSPDISPNAME>[\s\S]*?<\/DSPACCNAME>\s*<DSPACCINFO>([\s\S]*?)<\/DSPACCINFO>/gi;
+  let m;
+  while ((m = re.exec(xml))) {
+    const name = decodeXml(m[1]).trim();
+    if (!name) continue;
+    const info = m[2];
+    const drRaw = (info.match(/<DSPCLDRAMTA>([\s\S]*?)<\/DSPCLDRAMTA>/i) || [, ''])[1];
+    const crRaw = (info.match(/<DSPCLCRAMTA>([\s\S]*?)<\/DSPCLCRAMTA>/i) || [, ''])[1];
+    const dr = Math.abs(parseFloat(String(drRaw).replace(/[^0-9.\-]/g, ''))) || 0;
+    const cr = Math.abs(parseFloat(String(crRaw).replace(/[^0-9.\-]/g, ''))) || 0;
+    out.push({ name, balanceDr: r2(dr - cr), both: dr > 0.005 && cr > 0.005 });
+  }
+  return out;
+}
 function parseDcLedgers(xml) {
   const out = [];
   for (const b of xml.match(/<LEDGER[\s>][\s\S]*?<\/LEDGER>/gi) || []) {
@@ -2315,34 +2359,39 @@ function parseDcLedgers(xml) {
 // Read one company's debtors OR creditors (`kind`) as at `asOn`. `company`
 // scopes the Tally requests via SVCURRENTCOMPANY.
 //
-// Balance method — the CLOSING BALANCE of every ledger under Sundry Debtors /
-// Creditors as at the date, in ONE light, group-scoped request (the exact
-// figures Tally's own Group Summary shows). This is what a human does manually:
-// open the group as on a date and read the balances. It is scoped to one group
-// with SVFROMDATE/SVTODATE, so — unlike a whole-company voucher export — it does
-// NOT hang even on a high-volume company. We used to derive the balance by
-// summing every voucher; that is exact but freezes large companies (GIFFY), so
-// the balance now comes from this read. (Ageing / bill-wise still read vouchers,
-// since they need the individual invoices — see readAgeMovements.)
-//
-// openingDr() converts each CLOSINGBALANCE to the Dr-positive convention
-// (Dr +, Cr −); parseDcLedgers also pulls the ledger's group and GSTIN.
+// Balance method — TWO light requests, no computation, so it stays fast even for
+// a company whose ledgers hold millions of vouchers (GIFFY: 269 ms):
+//   1. DC_LEDGER_INFO_REQUEST — the party ledgers under the group + their GSTIN,
+//      stored fields only.
+//   2. GROUP_SUMMARY_REQUEST — Tally's own Group Summary report as at the date,
+//      which renders the closing balances instantly (the fast manual path).
+// The report is exploded to ledger level, so it also lists sub-group aggregate
+// rows; those names are not in the ledger list, so they are skipped — the
+// sub-group totals never double-count their children. Figures tie to Tally's
+// Group Summary by construction. (Ageing / bill-wise still read vouchers, since
+// they need the individual invoices — see readAgeMovements.)
 async function readDCForCompany(url, company, asOn, label, kind) {
   const savedCompany = state.settings.company;
   state.settings.company = company || '';
   try {
     const group = kind === 'creditors' ? 'Sundry Creditors' : 'Sundry Debtors';
-    dcProgress.phase = `Reading ${label} — ${kind} balances as on ${asOn.toISOString().slice(0, 10)}…`;
-    dcProgress.monthsTotal = 1; dcProgress.monthsDone = 0; dcProgress.sub = group;
-    const xml = await askTallyFast(url, GROUP_LEDGERS_REQUEST(group, asOn), 120000);
-    dcProgress.monthsDone = 1; dcProgress.sub = '';
-    const rows = parseDcLedgers(xml);
+    dcProgress.phase = `Reading ${label} — ${kind} as on ${asOn.toISOString().slice(0, 10)}…`;
+    dcProgress.monthsTotal = 2; dcProgress.monthsDone = 0; dcProgress.sub = 'ledger list';
+    const info = parseDcLedgers(await askTallyFast(url, DC_LEDGER_INFO_REQUEST(group), 120000));
+    const byName = new Map();
+    for (const r of info) byName.set(norm(r.ledger), r);
+    dcProgress.monthsDone = 1; dcProgress.sub = 'balances (Group Summary)';
+    const rows = parseGroupSummary(await askTallyFast(url, GROUP_SUMMARY_REQUEST(group, asOn), 180000));
+    dcProgress.monthsDone = 2; dcProgress.sub = '';
     const parties = [];
-    for (const r of rows) {
-      if (Math.abs(r.balanceDr) < 0.005) continue; // drop fully-settled ledgers
-      parties.push({ ledger: r.ledger, gstin: r.gstin, pan: r.pan, group: r.group, balanceDr: r.balanceDr });
+    for (const row of rows) {
+      if (row.both) continue;                       // a sub-group aggregate → skip
+      const inf = byName.get(norm(row.name));
+      if (!inf) continue;                           // not a real ledger under the group → skip
+      if (Math.abs(row.balanceDr) < 0.005) continue; // fully settled
+      parties.push({ ledger: inf.ledger, gstin: inf.gstin, pan: inf.pan, group: inf.group, balanceDr: row.balanceDr });
     }
-    return { ok: true, url, company: company || '', label, method: 'closing', ledgerCount: rows.length, partyCount: parties.length, parties };
+    return { ok: true, url, company: company || '', label, method: 'report', ledgerCount: info.length, partyCount: parties.length, parties };
   } finally {
     state.settings.company = savedCompany;
   }
