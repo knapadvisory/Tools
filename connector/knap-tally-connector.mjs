@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.1';
+const VERSION = '4.2';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2103,6 +2103,23 @@ const server = http.createServer(async (req, res) => {
       res.setHeader('Access-Control-Max-Age', '86400');
     }
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+    // ---- CSRF / cross-site write guard (security P0) --------------------------
+    // The connector can post & delete vouchers in the open Tally company, change
+    // its own settings, release Tally and self-update. Those must NEVER be
+    // triggerable by another website the user happens to have open. A browser
+    // sets the Origin header on every cross-site request and a page CANNOT forge
+    // it, so any state-changing method (POST/PUT/DELETE/PATCH) must carry an
+    // allow-listed Origin — otherwise it's rejected BEFORE the handler runs.
+    // (GET/HEAD are reads: a foreign page can fire them but CORS already blocks
+    // it from reading the reply, so no book data leaks.) `text/plain` "simple"
+    // POSTs — the exact trick used to dodge the preflight — are caught here too.
+    const isWrite = req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS';
+    if (isWrite && !ORIGIN_OK.test(origin)) {
+      res.writeHead(403, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ ok: false, error: 'Forbidden: this request did not come from apps.knapadvisory.com. If you are on the tool page, reload it.' }));
+      return;
+    }
 
     if (req.method === 'GET' && url.pathname === '/health') {
       json(res, 200, { ok: true, version: VERSION, tallyBusy: !!currentTallyAbort });

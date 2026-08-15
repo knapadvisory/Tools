@@ -55,7 +55,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '1.3';
+const VERSION = '1.4';
 const PORT = Number(process.env.PORT || 8799);
 const HUB = process.env.KNAP_HUB || 'https://apps.knapadvisory.com';
 // Browser pages allowed to talk to this engine (same rule as the connector).
@@ -1793,6 +1793,17 @@ const server = http.createServer(async (req, res) => {
       res.setHeader('Access-Control-Max-Age', '86400');
     }
     if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+    // CSRF / cross-site write guard (security P0): a state-changing request
+    // (running an audit reads the client's whole book) must come from an
+    // allow-listed origin. The browser sets Origin on every cross-site request
+    // and a page cannot forge it, so a foreign website can't drive the engine.
+    // GET reads stay open but CORS blocks a foreign page from reading the reply.
+    if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS' && !ORIGIN_OK.test(origin)) {
+      res.writeHead(403, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ ok: false, error: 'Forbidden: request did not come from apps.knapadvisory.com. Reload the tool page.' }));
+      return;
+    }
 
     if (req.method === 'GET' && url.pathname === '/health') {
       json(res, 200, { ok: true, version: VERSION });
