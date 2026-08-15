@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.20';
+const VERSION = '4.21';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2269,6 +2269,28 @@ function GROUP_LEDGERS_REQUEST(group, asOn) {
  </DESC></BODY>
 </ENVELOPE>`;
 }
+// Group Summary REPORT export (Tally's own report engine, as at the date). For a
+// very large company, COMPUTING each ledger's closing balance in a Collection
+// hangs Tally — but the Group Summary report renders on screen instantly, and
+// this export uses that same fast path. Exploded to ledger level so we get every
+// party, not just sub-group totals.
+function GROUP_SUMMARY_REQUEST(group, asOn) {
+  const fyStart = asOn.getUTCMonth() >= 3
+    ? new Date(Date.UTC(asOn.getUTCFullYear(), 3, 1))
+    : new Date(Date.UTC(asOn.getUTCFullYear() - 1, 3, 1));
+  return `<ENVELOPE>
+ <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Data</TYPE><ID>Group Summary</ID></HEADER>
+ <BODY><DESC>
+  <STATICVARIABLES>
+   <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+   <SVFROMDATE>${toTallyDate(fyStart)}</SVFROMDATE>
+   <SVTODATE>${toTallyDate(asOn)}</SVTODATE>${svCompany()}
+   <GROUPNAME>${escXml(group)}</GROUPNAME>
+   <EXPLODEFLAG>Yes</EXPLODEFLAG>
+  </STATICVARIABLES>
+ </DESC></BODY>
+</ENVELOPE>`;
+}
 function parseDcLedgers(xml) {
   const out = [];
   for (const b of xml.match(/<LEDGER[\s>][\s\S]*?<\/LEDGER>/gi) || []) {
@@ -2900,6 +2922,27 @@ const server = http.createServer(async (req, res) => {
       if (!asOn) { json(res, 400, { ok: false, error: 'Add &asOn=YYYY-MM-DD' }); return; }
       const saved = state.settings.company;
       state.settings.company = company;
+      // REPORT PROBE (add &report=1): time the Group Summary report export and
+      // return a slice of its raw XML, so the fast report-engine output can be
+      // parsed correctly for huge companies that hang the balance computation.
+      if (url.searchParams.get('report')) {
+        const group = kind === 'creditors' ? 'Sundry Creditors' : 'Sundry Debtors';
+        const t0 = Date.now();
+        try {
+          const xml = await askTallyFast(u, GROUP_SUMMARY_REQUEST(group, asOn), 180000);
+          const ms = Date.now() - t0;
+          // count likely ledger rows a few common ways so I can see the shape
+          const counts = {
+            LEDGER: (xml.match(/<LEDGER[\s>]/gi) || []).length,
+            DSPACCNAME: (xml.match(/<DSPACCNAME>/gi) || []).length,
+            GROUPSUMMARY: (xml.match(/<GROUPSUMMARY>/gi) || []).length,
+            DSPDISPNAME: (xml.match(/<DSPDISPNAME>/gi) || []).length,
+          };
+          state.settings.company = saved;
+          json(res, 200, { ok: true, probe: 'group-summary', company, group, asOn: asOn.toISOString().slice(0, 10), ms, bytes: xml.length, counts, head: xml.slice(0, 40000) });
+        } catch (e) { state.settings.company = saved; json(res, 502, { ok: false, error: String((e && e.message) || e), ms: Date.now() - t0 }); }
+        return;
+      }
       // Raw voucher-entry dump for ONE ledger (add &ledger=<name>) — shows the
       // exact <AMOUNT>/forex fields so a specific mismatch can be pinned down.
       const wantLedger = url.searchParams.get('ledger');
