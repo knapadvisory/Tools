@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.32';
+const VERSION = '4.33';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2611,6 +2611,48 @@ function fifoAge(items, natSign, asOn) {
   }));
   return { open, onAccount: r2(-credit) }; // leftover credit is contra → negative in natural sign
 }
+// MONTH-LEVEL ageing — for a company too dense for voucher (invoice-level)
+// ageing. Reads the Group Summary at each FY month-end (fast report reads, NO
+// vouchers, never freezes), derives each ledger's monthly net movement and FIFOs
+// those into buckets. Coarser than invoice-level (a whole month's invoices share
+// one age) but it ages EVERY ledger — even a marketplace book with millions of
+// vouchers — and ties to the balance. Reuses fifoAge (the month items carry no
+// voucher type, so the reimbursement pass-through is a no-op).
+async function readDCAgeingMonthly(url, group, asOn, natSign, groupByNorm, gstinByName) {
+  const fy = fyStartOf(asOn);
+  // dates: opening (day before FY start), each FY month-end, then asOn
+  const dates = [new Date(fy.getTime() - DAY_MS)];
+  for (let d = new Date(Date.UTC(fy.getUTCFullYear(), fy.getUTCMonth() + 1, 0)); d < asOn; d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 2, 0))) dates.push(d);
+  dates.push(asOn);
+  const series = new Map();                 // norm(ledger) -> Dr-positive closing at each date index
+  for (let di = 0; di < dates.length; di++) {
+    dcProgress.sub = `month ${di + 1}/${dates.length} (${dates[di].toISOString().slice(0, 10)})`;
+    const leaves = [];
+    await readDCLeaves(url, group, dates[di], groupByNorm, new Set(), leaves, { reads: 0 });
+    for (const lf of leaves) {
+      const k = norm(lf.name);
+      if (!series.has(k)) series.set(k, { name: lf.name, c: new Array(dates.length).fill(0) });
+      series.get(k).c[di] = lf.balanceDr;
+    }
+  }
+  const ledgers = [];
+  for (const [k, s] of series) {
+    const items = [];
+    if (Math.abs(s.c[0]) > 0.005) items.push({ date: fy, dr: s.c[0], ref: 'Opening balance' });
+    for (let di = 1; di < dates.length; di++) {
+      const mv = r2(s.c[di] - s.c[di - 1]);
+      if (Math.abs(mv) > 0.005) items.push({ date: dates[di], dr: mv, ref: `${MONTH_NAMES[dates[di].getUTCMonth()]} ${dates[di].getUTCFullYear()}` });
+    }
+    const { open } = fifoAge(items, natSign, asOn);
+    const auth = r2(natSign * s.c[dates.length - 1]);
+    const openSum = r2(open.reduce((a, x) => r2(a + x.amount), 0));
+    const onAcc = r2(auth - openSum);
+    if (Math.abs(auth) < 0.005 && !open.length) continue;
+    const inf = gstinByName.get(k);
+    ledgers.push({ ledger: inf ? inf.ledger : s.name, gstin: inf ? inf.gstin || '' : '', pan: inf ? inf.pan || '' : '', closing: auth, onAccount: onAcc, bills: open });
+  }
+  return ledgers;
+}
 // Ageing + open-item list for one company (`kind`), as at `asOn`.
 async function readBillwiseForCompany(url, company, asOn, label, kind, balanceOnly) {
   const savedCompany = state.settings.company;
@@ -2647,9 +2689,26 @@ async function readBillwiseForCompany(url, company, asOn, label, kind, balanceOn
       }
       return { ok: true, url, company: company || '', label, vouchers: 0, ageingUnavailable: true, ledgerCount: ledgers.length, ledgers };
     };
+    // MONTH-LEVEL ageing — for a company too dense to age line-by-line. Reads the
+    // Group Summary at each FY month-end (fast report reads, never freezes) and
+    // FIFOs each ledger's monthly net movements into buckets. Coarser than
+    // invoice-level but ages every ledger and ties to the balance. Falls back to
+    // the un-aged report figures only if the monthly read itself errors.
+    const monthlyResult = async () => {
+      try {
+        const gstinByName = new Map();
+        for (const [nm, m] of Object.entries(masters)) gstinByName.set(norm(nm), { ledger: nm, gstin: m.gstin || '', pan: panFromGstin(m.gstin || '') });
+        const ledgers = await readDCAgeingMonthly(url, group, asOn, natSign, groupByNorm, gstinByName);
+        dcProgress.sub = '';
+        return { ok: true, url, company: company || '', label, vouchers: 0, ageingMethod: 'monthly', ledgerCount: ledgers.length, ledgers };
+      } catch (e) {
+        dcProgress.sub = '';
+        return unagedResult();
+      }
+    };
     // Company already known too-dense to age line-by-line → skip the voucher read
-    // entirely (so Tally is never frozen again by it), show balances un-aged.
-    if (knownDense) { dcProgress.sub = ''; return unagedResult(); }
+    // entirely (so Tally is never frozen again by it), age at month level instead.
+    if (knownDense) { dcProgress.sub = ''; return await monthlyResult(); }
 
     const fyStart = fyStartOf(asOn);
     dcProgress.phase = `Reading ${label} — vouchers ${fyStart.toISOString().slice(0, 10)} → ${asOn.toISOString().slice(0, 10)}…`;
@@ -2664,7 +2723,7 @@ async function readBillwiseForCompany(url, company, asOn, label, kind, balanceOn
       if (/AGEING_TOO_DENSE/.test(String((e && e.message) || e))) {
         dcDenseSet.add(denseKey);   // don't voucher-probe (and freeze) this one again this session
         dcProgress.sub = '';
-        return unagedResult();
+        return await monthlyResult();
       }
       throw e;
     }
@@ -3345,7 +3404,7 @@ const server = http.createServer(async (req, res) => {
             closing: L.closing, onAccount: L.onAccount,
             bills: L.bills.map((b) => ({ ref: b.ref, date: b.date, dueDate: b.dueDate || null, days: b.days, amount: b.amount })),
           }));
-          companies.push({ url: one.url, company: one.company, label, ageingUnavailable: !!one.ageingUnavailable, ledgerCount: ledgers.length, ledgers });
+          companies.push({ url: one.url, company: one.company, label, ageingUnavailable: !!one.ageingUnavailable, ageingMethod: one.ageingMethod || 'invoice', ledgerCount: ledgers.length, ledgers });
           dcProgress.done = i + 1;
         }
         dcProgress.active = false;
