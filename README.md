@@ -13,7 +13,7 @@ Sibling sites: [teamhub.knapadvisory.com](https://teamhub.knapadvisory.com) ·
 | Tool | Kind | Where it really lives |
 |---|---|---|
 | Marketplace Invoice Parser (Amazon/Flipkart/Myntra/Nykaa) | **Hosted here** at `/fee-parser/` | This repo — page `fee-parser/`, API in `server.js`, parser `parser/amazon_invoice_parser.py` (ported from the `Management-tool` repo) |
-| AR / Customer Dashboard | Web app (link) | `Dashboard` repo `main`, deployed at <https://dashboard-knap1.vercel.app> |
+| AR / Customer Dashboard | Web app (link) | `Dashboard` repo, self-hosted on the TeamHub VPS at <https://dashboard.knapadvisory.com> (Next.js + own Postgres, off Vercel/Neon) |
 | Tally Statutory Audit Assistant | **Hosted here** at `/audit/` + local connector | This repo — page `audit/`, engine `connector/knap-tally-audit-engine.mjs` (ported from `Dashboard` branch `claude/tally-audit-tool-24lawp` v1.2) |
 | GSTR-2B ⇄ Tally Poster | **Hosted here** at `/gstr2b/` + local connector | This repo — page `gstr2b/`, engine `connector/knap-tally-connector.mjs` (ported from `Dashboard` branch `claude/gstr2b-tally-posting-mqt7zn` v1.7) |
 | GSTR-1 Excel Summary | **Hosted here** at `/gstr1/` | This repo — page `gstr1/`, engine `gstr1-engine/` run unmodified as an internal child process, proxied at `/gstr1-api` (from `Dashboard` branch `claude/pdf-excel-extraction-tool-izu1zp`) |
