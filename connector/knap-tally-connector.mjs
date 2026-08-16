@@ -27,13 +27,13 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.34';
+const VERSION = '4.35';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
 const HUB = process.env.KNAP_HUB || 'https://apps.knapadvisory.com';
 // Browser pages allowed to talk to this connector.
-const ORIGIN_OK = /^https:\/\/apps\.knapadvisory\.com$|^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
+const ORIGIN_OK = /^https:\/\/(apps|dashboard)\.knapadvisory\.com$|^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
 
 // ------------------------------ local state ---------------------------------
 const DEFAULT_STATE = {
@@ -65,6 +65,9 @@ const DEFAULT_STATE = {
   fileGstin: '', // the GSTIN of the loaded 2B data (from upload / watcher)
   reco: null, // last reconciliation result + timestamp
   ingested: {}, // watched-file signature -> { at, file, period, added }
+  // Financial Cockpit push target (set from the dashboard's "Connect this Tally"):
+  // { url: dashboard base, key: the client's tallyKey, company: Tally company }
+  cockpit: { url: '', key: '', company: '' },
   epoch: 1, // bumped on every clear/fresh start — stale browser tabs holding
   // pre-clear documents are refused when they try to merge them back in
 };
@@ -2457,6 +2460,93 @@ async function readDCForCompany(url, company, asOn, label, kind) {
 }
 
 // ===========================================================================
+// FINANCIAL COCKPIT — rail extraction (pushed to the dashboard as snapshots)
+// ---------------------------------------------------------------------------
+// Cash rail: bank + cash-in-hand balances from Tally's Group Summary (the fast,
+// non-freezing report path we already use for debtors/creditors), plus a net
+// cash-flow trend (this month + 3 prior) from month-end balance deltas. The
+// inflow/outflow SPLIT is a later refinement; net is exact.
+const CASH_GROUPS = [
+  { group: 'Bank Accounts', kind: 'bank' },
+  { group: 'Bank OD A/c', kind: 'bank' },
+  { group: 'Bank OCC A/c', kind: 'bank' },
+  { group: 'Cash-in-hand', kind: 'cash' },
+];
+const monthEndUTC = (year, monthIdx) => new Date(Date.UTC(year, monthIdx + 1, 0));
+async function readCashForCompany(url, company, asOn) {
+  const savedCompany = state.settings.company;
+  state.settings.company = company || '';
+  try {
+    dcProgress.phase = `Cash — balances as on ${asOn.toISOString().slice(0, 10)}…`;
+    const groupByNorm = new Map();
+    for (const [gname, g] of Object.entries(parseGroups(await askTallyFast(url, GROUPS_REQUEST(), 120000)))) {
+      groupByNorm.set(norm(gname), { name: gname, parent: g.parent });
+    }
+    // Sum of all leaf balances under a cash/bank group, as-at date `d`.
+    const totalAt = async (d) => {
+      let t = 0;
+      for (const { group } of CASH_GROUPS) {
+        if (!groupByNorm.has(norm(group))) continue;
+        const leaves = [];
+        await readDCLeaves(url, group, d, groupByNorm, new Set(), leaves, { reads: 0 });
+        for (const lf of leaves) t = r2(t + lf.balanceDr);
+      }
+      return t;
+    };
+    // Balances per account (Dr-positive; a bank OD shows negative), as-at asOn.
+    const accounts = [];
+    for (const { group, kind } of CASH_GROUPS) {
+      if (!groupByNorm.has(norm(group))) continue;
+      dcProgress.sub = group;
+      const leaves = [];
+      await readDCLeaves(url, group, asOn, groupByNorm, new Set(), leaves, { reads: 0 });
+      for (const lf of leaves) {
+        if (Math.abs(lf.balanceDr) < 0.005) continue;
+        accounts.push({ ledger: lf.name, group, kind, currency: 'INR', balance: r2(lf.balanceDr) });
+      }
+    }
+    // Net flow trend: total at 5 month points (M-4…M-1 ends + asOn), diffed.
+    // If any historical read fails (e.g. a date before the books begin), skip
+    // the trend rather than losing the balances.
+    let flow = [];
+    try {
+      const y = asOn.getUTCFullYear(), m = asOn.getUTCMonth();
+      const points = [];
+      for (let i = 4; i >= 1; i--) points.push(monthEndUTC(y, m - i));
+      points.push(asOn);
+      let prev = null;
+      for (let i = 0; i < points.length; i++) {
+        dcProgress.sub = `cash flow ${i + 1}/${points.length}`;
+        const tot = await totalAt(points[i]);
+        if (prev !== null) {
+          const p = points[i];
+          flow.push({ month: `${p.getUTCFullYear()}-${String(p.getUTCMonth() + 1).padStart(2, '0')}`, net: r2(tot - prev) });
+        }
+        prev = tot;
+      }
+    } catch { flow = []; }
+    dcProgress.sub = '';
+    return { accounts, flow };
+  } finally {
+    state.settings.company = savedCompany;
+  }
+}
+
+// Push one rail's figure-set to the configured dashboard as a draft snapshot.
+async function pushRailToDashboard(rail, data, asOn) {
+  const base = String((state.cockpit && state.cockpit.url) || '').replace(/\/+$/, '');
+  const key = String((state.cockpit && state.cockpit.key) || '');
+  const res = await fetch(base + '/api/tally/snapshot', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-tally-key': key },
+    body: JSON.stringify({ asOf: asOn.toISOString().slice(0, 10), rail, data }),
+  });
+  let body = {};
+  try { body = await res.json(); } catch { /* */ }
+  return { status: res.status, ok: res.ok, ...body };
+}
+
+// ===========================================================================
 // AGEING & BILL-WISE (FIFO)  (page reports)
 // ---------------------------------------------------------------------------
 // The client's ledgers are NOT maintained bill-by-bill — invoices are Sales
@@ -3437,6 +3527,67 @@ const server = http.createServer(async (req, res) => {
           ? 'Tally stopped responding while reading bills. Keep Tally on the Gateway, make sure the company is open, then try again. “Release Tally” frees a stuck read.'
           : 'Could not read Tally: ' + String((e && e.message) || e);
         json(res, 502, { ok: false, error: msg, company: dcProgress.company });
+      }
+      return;
+    }
+
+    // ---------------- Financial Cockpit (dashboard.knapadvisory.com) --------
+    // The dashboard page configures the connector with the client's push URL +
+    // key, then triggers a pull; the connector extracts each rail from the
+    // OPEN Tally company and pushes it to the dashboard as a draft snapshot.
+    if (req.method === 'POST' && url.pathname === '/api/cockpit/config') {
+      const body = JSON.parse(await readBody(req));
+      state.cockpit = state.cockpit || { url: '', key: '', company: '' };
+      if (body.url !== undefined) state.cockpit.url = String(body.url || '').trim();
+      if (body.key !== undefined) state.cockpit.key = String(body.key || '').trim();
+      if (body.company !== undefined) state.cockpit.company = String(body.company || '').trim();
+      saveState();
+      json(res, 200, { ok: true, url: state.cockpit.url, company: state.cockpit.company, keySet: !!state.cockpit.key });
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/api/cockpit/status') {
+      const c = state.cockpit || {};
+      json(res, 200, {
+        ok: true, version: VERSION,
+        configured: !!(c.url && c.key),
+        url: c.url || '', company: c.company || '', keySet: !!c.key,
+        tallyUrl: state.settings.tallyUrl,
+      });
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/api/cockpit/pull') {
+      if (dcProgress.active) { json(res, 409, { ok: false, error: 'A read is already running.' }); return; }
+      const c = state.cockpit || {};
+      if (!c.url || !c.key) { json(res, 400, { ok: false, error: 'Cockpit not configured — click “Connect this Tally” first.' }); return; }
+      const body = JSON.parse(await readBody(req));
+      const company = String(body.company || c.company || '').trim();
+      const now = new Date();
+      const asOn = body.asOn
+        ? tallyDateOf(String(body.asOn).replace(/-/g, ''))
+        : new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+      if (!asOn) { json(res, 400, { ok: false, error: 'Bad asOn date.' }); return; }
+      const rails = Array.isArray(body.rails) && body.rails.length ? body.rails : ['cash'];
+      const tallyUrl = state.settings.tallyUrl;
+      dcCancel = false; dcProgress.active = true; dcProgress.startedAt = Date.now();
+      const results = [];
+      try {
+        for (const rail of rails) {
+          if (rail === 'cash') {
+            const cash = await readCashForCompany(tallyUrl, company, asOn);
+            const push = await pushRailToDashboard('cash', cash, asOn);
+            results.push({ rail, accounts: cash.accounts.length, flow: cash.flow.length, push });
+          } else {
+            results.push({ rail, error: 'rail not supported yet' });
+          }
+        }
+        dcProgress.active = false;
+        json(res, 200, { ok: true, asOf: asOn.toISOString().slice(0, 10), company, results });
+      } catch (e) {
+        dcProgress.active = false;
+        const msg = /timed out|timeout|abort|released/i.test(String((e && e.message) || e))
+          ? 'Tally stopped responding. Keep Tally on the Gateway with the company open, then try again.'
+          : 'Could not read Tally: ' + String((e && e.message) || e);
+        json(res, 502, { ok: false, error: msg });
       }
       return;
     }
