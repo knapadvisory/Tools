@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.33';
+const VERSION = '4.34';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2618,10 +2618,16 @@ function fifoAge(items, natSign, asOn) {
 // one age) but it ages EVERY ledger — even a marketplace book with millions of
 // vouchers — and ties to the balance. Reuses fifoAge (the month items carry no
 // voucher type, so the reimbursement pass-through is a no-op).
-async function readDCAgeingMonthly(url, group, asOn, natSign, groupByNorm, gstinByName) {
+// `openingByNorm`: norm(ledger) -> Dr-positive FY-start opening (from the ledger
+// masters — the authoritative opening that ties to Tally). We DON'T read a Group
+// Summary as-on the day before FY start: for a company whose books begin on the
+// FY-start date, that pre-books date makes Tally error out (which used to abort
+// the whole ageing). Opening comes from the masters instead — no pre-FY read.
+async function readDCAgeingMonthly(url, group, asOn, natSign, groupByNorm, gstinByName, openingByNorm) {
   const fy = fyStartOf(asOn);
-  // dates: opening (day before FY start), each FY month-end, then asOn
-  const dates = [new Date(fy.getTime() - DAY_MS)];
+  // dates: each FY month-end that is on/after the first month-end and before
+  // asOn, then asOn itself. (No pre-FY opening read — opening is from masters.)
+  const dates = [];
   for (let d = new Date(Date.UTC(fy.getUTCFullYear(), fy.getUTCMonth() + 1, 0)); d < asOn; d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 2, 0))) dates.push(d);
   dates.push(asOn);
   const series = new Map();                 // norm(ledger) -> Dr-positive closing at each date index
@@ -2635,13 +2641,20 @@ async function readDCAgeingMonthly(url, group, asOn, natSign, groupByNorm, gstin
       series.get(k).c[di] = lf.balanceDr;
     }
   }
+  // include ledgers that had an opening but no month-end row (fully settled early)
+  for (const [k, open0] of openingByNorm) {
+    if (Math.abs(open0) > 0.005 && !series.has(k)) series.set(k, { name: k, c: new Array(dates.length).fill(0) });
+  }
   const ledgers = [];
   for (const [k, s] of series) {
+    const open0 = openingByNorm.get(k) || 0;   // Dr-positive FY-start opening
     const items = [];
-    if (Math.abs(s.c[0]) > 0.005) items.push({ date: fy, dr: s.c[0], ref: 'Opening balance' });
-    for (let di = 1; di < dates.length; di++) {
-      const mv = r2(s.c[di] - s.c[di - 1]);
+    if (Math.abs(open0) > 0.005) items.push({ date: fy, dr: open0, ref: 'Opening balance' });
+    let prev = open0;
+    for (let di = 0; di < dates.length; di++) {
+      const mv = r2(s.c[di] - prev);
       if (Math.abs(mv) > 0.005) items.push({ date: dates[di], dr: mv, ref: `${MONTH_NAMES[dates[di].getUTCMonth()]} ${dates[di].getUTCFullYear()}` });
+      prev = s.c[di];
     }
     const { open } = fifoAge(items, natSign, asOn);
     const auth = r2(natSign * s.c[dates.length - 1]);
@@ -2697,13 +2710,22 @@ async function readBillwiseForCompany(url, company, asOn, label, kind, balanceOn
     const monthlyResult = async () => {
       try {
         const gstinByName = new Map();
-        for (const [nm, m] of Object.entries(masters)) gstinByName.set(norm(nm), { ledger: nm, gstin: m.gstin || '', pan: panFromGstin(m.gstin || '') });
-        const ledgers = await readDCAgeingMonthly(url, group, asOn, natSign, groupByNorm, gstinByName);
+        const openingByNorm = new Map();
+        for (const [nm, m] of Object.entries(masters)) {
+          gstinByName.set(norm(nm), { ledger: nm, gstin: m.gstin || '', pan: panFromGstin(m.gstin || '') });
+          if (Math.abs(m.openingDr || 0) > 0.005) openingByNorm.set(norm(nm), m.openingDr);
+        }
+        const ledgers = await readDCAgeingMonthly(url, group, asOn, natSign, groupByNorm, gstinByName, openingByNorm);
         dcProgress.sub = '';
         return { ok: true, url, company: company || '', label, vouchers: 0, ageingMethod: 'monthly', ledgerCount: ledgers.length, ledgers };
       } catch (e) {
+        // Monthly read failed — fall back to un-aged, but SURFACE why (so it's not
+        // silently indistinguishable from "too dense"): logged + attached to result.
+        try { console.error(`[dc] month-level ageing failed for ${label}:`, (e && e.stack) || e); } catch { /* */ }
         dcProgress.sub = '';
-        return unagedResult();
+        const r = unagedResult();
+        r.ageingError = String((e && e.message) || e);
+        return r;
       }
     };
     // Company already known too-dense to age line-by-line → skip the voucher read
@@ -3404,7 +3426,7 @@ const server = http.createServer(async (req, res) => {
             closing: L.closing, onAccount: L.onAccount,
             bills: L.bills.map((b) => ({ ref: b.ref, date: b.date, dueDate: b.dueDate || null, days: b.days, amount: b.amount })),
           }));
-          companies.push({ url: one.url, company: one.company, label, ageingUnavailable: !!one.ageingUnavailable, ageingMethod: one.ageingMethod || 'invoice', ledgerCount: ledgers.length, ledgers });
+          companies.push({ url: one.url, company: one.company, label, ageingUnavailable: !!one.ageingUnavailable, ageingMethod: one.ageingMethod || 'invoice', ageingError: one.ageingError || '', ledgerCount: ledgers.length, ledgers });
           dcProgress.done = i + 1;
         }
         dcProgress.active = false;
