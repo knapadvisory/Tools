@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.36';
+const VERSION = '4.37';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2556,8 +2556,10 @@ const ageBucketOf = (days) => {
   if (days <= 90) return 'b2';
   return 'b3';
 };
-async function readReceivablesForCompany(url, company, asOn) {
-  const bw = await readBillwiseForCompany(url, company, asOn, 'Receivables', 'debtors', false);
+// Shared engine for the Receivables (Sundry Debtors) and Payables (Sundry
+// Creditors) rails — identical shape, only the group/side differs.
+async function readPartyAgeingRail(url, company, asOn, kind, label) {
+  const bw = await readBillwiseForCompany(url, company, asOn, label, kind, false);
   const b = { b0: 0, b1: 0, b2: 0, b3: 0, un: 0 };
   const parties = [];
   for (const l of (bw.ledgers || [])) {
@@ -2577,6 +2579,8 @@ async function readReceivablesForCompany(url, company, asOn) {
   const ageingMethod = bw.ageingUnavailable ? 'balance-only' : (bw.ageingMethod || 'invoice');
   return { total, ageing, parties, ageingMethod };
 }
+const readReceivablesForCompany = (url, company, asOn) => readPartyAgeingRail(url, company, asOn, 'debtors', 'Receivables');
+const readPayablesForCompany = (url, company, asOn) => readPartyAgeingRail(url, company, asOn, 'creditors', 'Payables');
 
 // ===========================================================================
 // AGEING & BILL-WISE (FIFO)  (page reports)
@@ -3612,6 +3616,10 @@ const server = http.createServer(async (req, res) => {
             const rec = await readReceivablesForCompany(tallyUrl, company, asOn);
             const push = await pushRailToDashboard('receivables', rec, asOn);
             results.push({ rail, parties: rec.parties.length, total: rec.total, ageingMethod: rec.ageingMethod, push });
+          } else if (rail === 'payables') {
+            const pay = await readPayablesForCompany(tallyUrl, company, asOn);
+            const push = await pushRailToDashboard('payables', pay, asOn);
+            results.push({ rail, parties: pay.parties.length, total: pay.total, ageingMethod: pay.ageingMethod, push });
           } else {
             results.push({ rail, error: 'rail not supported yet' });
           }
