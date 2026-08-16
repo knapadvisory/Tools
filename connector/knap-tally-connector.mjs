@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.35';
+const VERSION = '4.36';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2546,6 +2546,38 @@ async function pushRailToDashboard(rail, data, asOn) {
   return { status: res.status, ok: res.ok, ...body };
 }
 
+// Receivables rail: total outstanding + ageing + parties, from Sundry Debtors.
+// Reuses the debtor/creditor bill-wise engine (with its dense month-level
+// fallback), so ageing is as good as the books allow and never freezes Tally.
+const ageBucketOf = (days) => {
+  if (days == null) return 'un';
+  if (days <= 30) return 'b0';
+  if (days <= 60) return 'b1';
+  if (days <= 90) return 'b2';
+  return 'b3';
+};
+async function readReceivablesForCompany(url, company, asOn) {
+  const bw = await readBillwiseForCompany(url, company, asOn, 'Receivables', 'debtors', false);
+  const b = { b0: 0, b1: 0, b2: 0, b3: 0, un: 0 };
+  const parties = [];
+  for (const l of (bw.ledgers || [])) {
+    for (const bill of (l.bills || [])) { const k = ageBucketOf(bill.days); b[k] = r2(b[k] + bill.amount); }
+    if (Math.abs(l.onAccount || 0) > 0.005) b.un = r2(b.un + l.onAccount);
+    if (Math.abs(l.closing || 0) > 0.005) parties.push({ name: l.ledger, gstin: l.gstin || '', balance: r2(l.closing) });
+  }
+  parties.sort((x, y) => Math.abs(y.balance) - Math.abs(x.balance));
+  const total = r2(parties.reduce((s, p) => s + p.balance, 0));
+  const ageing = [
+    { bucket: '0-30', amount: r2(b.b0) },
+    { bucket: '31-60', amount: r2(b.b1) },
+    { bucket: '61-90', amount: r2(b.b2) },
+    { bucket: '90+', amount: r2(b.b3) },
+    { bucket: 'Unallocated', amount: r2(b.un) },
+  ];
+  const ageingMethod = bw.ageingUnavailable ? 'balance-only' : (bw.ageingMethod || 'invoice');
+  return { total, ageing, parties, ageingMethod };
+}
+
 // ===========================================================================
 // AGEING & BILL-WISE (FIFO)  (page reports)
 // ---------------------------------------------------------------------------
@@ -3576,6 +3608,10 @@ const server = http.createServer(async (req, res) => {
             const cash = await readCashForCompany(tallyUrl, company, asOn);
             const push = await pushRailToDashboard('cash', cash, asOn);
             results.push({ rail, accounts: cash.accounts.length, flow: cash.flow.length, push });
+          } else if (rail === 'receivables') {
+            const rec = await readReceivablesForCompany(tallyUrl, company, asOn);
+            const push = await pushRailToDashboard('receivables', rec, asOn);
+            results.push({ rail, parties: rec.parties.length, total: rec.total, ageingMethod: rec.ageingMethod, push });
           } else {
             results.push({ rail, error: 'rail not supported yet' });
           }
