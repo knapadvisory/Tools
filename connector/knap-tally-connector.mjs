@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.37';
+const VERSION = '4.38';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2582,6 +2582,78 @@ async function readPartyAgeingRail(url, company, asOn, kind, label) {
 const readReceivablesForCompany = (url, company, asOn) => readPartyAgeingRail(url, company, asOn, 'debtors', 'Receivables');
 const readPayablesForCompany = (url, company, asOn) => readPartyAgeingRail(url, company, asOn, 'creditors', 'Payables');
 
+// --- Sales & Profitability rails --------------------------------------------
+// P&L reads use the SAME Group Summary report path (non-freezing). Because the
+// request scopes SVFROMDATE to the FY start, a P&L group's figure at any date
+// is the FY-to-date total; monthly figures come from month-end deltas.
+const PL_INCOME_GROUPS = ['Sales Accounts', 'Direct Incomes', 'Indirect Incomes'];
+const PL_EXPENSE_GROUPS = ['Purchase Accounts', 'Direct Expenses', 'Indirect Expenses'];
+const EXPENSE_HEAD_GROUPS = ['Indirect Expenses', 'Direct Expenses'];
+
+async function groupTreeByNorm(url) {
+  const m = new Map();
+  for (const [gname, g] of Object.entries(parseGroups(await askTallyFast(url, GROUPS_REQUEST(), 120000)))) {
+    m.set(norm(gname), { name: gname, parent: g.parent });
+  }
+  return m;
+}
+// Sum of leaf balances (Dr-positive) under a group as-at `asOn`, plus the leaves.
+async function readGroupLeaves(url, group, asOn, groupByNorm) {
+  if (!groupByNorm.has(norm(group))) return { total: 0, leaves: [] };
+  const leaves = [];
+  await readDCLeaves(url, group, asOn, groupByNorm, new Set(), leaves, { reads: 0 });
+  return { total: r2(leaves.reduce((s, lf) => r2(s + lf.balanceDr), 0)), leaves };
+}
+
+async function readSalesForCompany(url, company, asOn) {
+  const saved = state.settings.company; state.settings.company = company || '';
+  try {
+    dcProgress.phase = `Sales — as on ${asOn.toISOString().slice(0, 10)}…`;
+    const groupByNorm = await groupTreeByNorm(url);
+    const fy = fyStartOf(asOn);
+    const points = [];
+    for (let d = new Date(Date.UTC(fy.getUTCFullYear(), fy.getUTCMonth() + 1, 0)); d < asOn; d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 2, 0))) points.push(d);
+    points.push(asOn);
+    let prevCum = 0;
+    const monthly = [];
+    for (let i = 0; i < points.length; i++) {
+      dcProgress.sub = `sales ${i + 1}/${points.length}`;
+      const { total } = await readGroupLeaves(url, 'Sales Accounts', points[i], groupByNorm);
+      const cum = r2(-total);   // income is Cr-positive
+      const p = points[i];
+      monthly.push({ month: `${p.getUTCFullYear()}-${String(p.getUTCMonth() + 1).padStart(2, '0')}`, amount: r2(cum - prevCum) });
+      prevCum = cum;
+    }
+    dcProgress.sub = '';
+    return { total: prevCum, monthly };   // total = FY-to-date sales at asOn
+  } finally { state.settings.company = saved; }
+}
+
+async function readProfitabilityForCompany(url, company, asOn) {
+  const saved = state.settings.company; state.settings.company = company || '';
+  try {
+    dcProgress.phase = `Profitability — as on ${asOn.toISOString().slice(0, 10)}…`;
+    const groupByNorm = await groupTreeByNorm(url);
+    let revenue = 0;
+    for (const g of PL_INCOME_GROUPS) { dcProgress.sub = g; const { total } = await readGroupLeaves(url, g, asOn, groupByNorm); revenue = r2(revenue - total); }
+    let expenses = 0;
+    for (const g of PL_EXPENSE_GROUPS) { dcProgress.sub = g; const { total } = await readGroupLeaves(url, g, asOn, groupByNorm); expenses = r2(expenses + total); }
+    const heads = [];
+    for (const g of EXPENSE_HEAD_GROUPS) {
+      dcProgress.sub = g;
+      const { leaves } = await readGroupLeaves(url, g, asOn, groupByNorm);
+      for (const lf of leaves) if (Math.abs(lf.balanceDr) > 0.005) heads.push({ name: lf.name, amount: r2(lf.balanceDr) });
+    }
+    heads.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+    const topHeads = heads.slice(0, 8).map((h) => ({ name: h.name, amount: h.amount, pctRevenue: revenue ? h.amount / revenue : 0 }));
+    dcProgress.sub = '';
+    // Net profit = total income − total expense (indicative: excludes closing-
+    // stock/COGS adjustment, so it ties exactly for service books, approximately
+    // where stock matters — the dashboard labels this).
+    return { revenue, expenses, netProfit: r2(revenue - expenses), topHeads };
+  } finally { state.settings.company = saved; }
+}
+
 // ===========================================================================
 // AGEING & BILL-WISE (FIFO)  (page reports)
 // ---------------------------------------------------------------------------
@@ -3620,6 +3692,14 @@ const server = http.createServer(async (req, res) => {
             const pay = await readPayablesForCompany(tallyUrl, company, asOn);
             const push = await pushRailToDashboard('payables', pay, asOn);
             results.push({ rail, parties: pay.parties.length, total: pay.total, ageingMethod: pay.ageingMethod, push });
+          } else if (rail === 'sales') {
+            const sales = await readSalesForCompany(tallyUrl, company, asOn);
+            const push = await pushRailToDashboard('sales', sales, asOn);
+            results.push({ rail, total: sales.total, months: sales.monthly.length, push });
+          } else if (rail === 'profitability') {
+            const prof = await readProfitabilityForCompany(tallyUrl, company, asOn);
+            const push = await pushRailToDashboard('profitability', prof, asOn);
+            results.push({ rail, revenue: prof.revenue, netProfit: prof.netProfit, push });
           } else {
             results.push({ rail, error: 'rail not supported yet' });
           }
