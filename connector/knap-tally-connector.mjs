@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.38';
+const VERSION = '4.39';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2565,7 +2565,14 @@ async function readPartyAgeingRail(url, company, asOn, kind, label) {
   for (const l of (bw.ledgers || [])) {
     for (const bill of (l.bills || [])) { const k = ageBucketOf(bill.days); b[k] = r2(b[k] + bill.amount); }
     if (Math.abs(l.onAccount || 0) > 0.005) b.un = r2(b.un + l.onAccount);
-    if (Math.abs(l.closing || 0) > 0.005) parties.push({ name: l.ledger, gstin: l.gstin || '', balance: r2(l.closing) });
+    if (Math.abs(l.closing || 0) > 0.005) {
+      // Bill-wise detail per party (open items already FIFO-aged in memory).
+      const bills = (l.bills || []).map((x) => ({
+        ref: x.ref || '', date: x.date || null, days: x.days == null ? null : x.days,
+        amount: r2(x.amount), bucket: ageBucketOf(x.days),
+      }));
+      parties.push({ name: l.ledger, gstin: l.gstin || '', balance: r2(l.closing), onAccount: r2(l.onAccount || 0), bills });
+    }
   }
   parties.sort((x, y) => Math.abs(y.balance) - Math.abs(x.balance));
   const total = r2(parties.reduce((s, p) => s + p.balance, 0));
