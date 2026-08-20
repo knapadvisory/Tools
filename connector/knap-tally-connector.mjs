@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.45';
+const VERSION = '4.46';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -3233,7 +3233,15 @@ const server = http.createServer(async (req, res) => {
       const from = tallyDateOf(String(body.from || '').replace(/-/g, ''));
       const to = tallyDateOf(String(body.to || '').replace(/-/g, ''));
       if (!from || !to || from > to) { json(res, 400, { ok: false, error: 'Bad period.' }); return; }
+      // Scope to the picked company (scan-and-pick); restored in finally.
+      const tdsSavedCompany = state.settings.company;
+      if (body.company !== undefined) state.settings.company = String(body.company || '').trim();
+      // Match either an explicit list of chosen ledgers (the picker) or, as a
+      // fallback, a name pattern. Explicit selection wins when provided.
+      const chosenLedgers = Array.isArray(body.ledgers) ? body.ledgers.map((n) => norm(String(n))).filter(Boolean) : [];
+      const chosenSet = new Set(chosenLedgers);
       const pat = new RegExp(String(body.pattern || 'tds.*receivable').trim() || 'tds.*receivable', 'i');
+      const matchLedger = (name) => chosenSet.size ? chosenSet.has(norm(name)) : pat.test(name);
       const entries = [];
       // Tally's collection export can emit the same voucher block several
       // times (seen in the field: every entry exactly 4×). Dedupe by GUID,
@@ -3255,7 +3263,7 @@ const server = http.createServer(async (req, res) => {
               const name = tag(e, 'LEDGERNAME');
               if (name) legs.push({ name, amt: toNum(tag(e, 'AMOUNT')) });
             }
-            const tdsLegs = legs.filter((l) => pat.test(l.name));
+            const tdsLegs = legs.filter((l) => matchLedger(l.name));
             if (!tdsLegs.length) continue;
             const vid = tag(block, 'GUID') ||
               (tag(block, 'DATE') + '|' + tag(block, 'VOUCHERTYPENAME') + '|' + tag(block, 'VOUCHERNUMBER') + '|' +
@@ -3277,9 +3285,9 @@ const server = http.createServer(async (req, res) => {
               // Dr Bank + Dr TDS / Cr Customer both resolve to the customer).
               let party = partyTag;
               if (!party || pat.test(party)) {
-                const opp = legs.filter((l) => !pat.test(l.name) && Math.sign(l.amt) !== Math.sign(tl.amt))
+                const opp = legs.filter((l) => !matchLedger(l.name) && Math.sign(l.amt) !== Math.sign(tl.amt))
                   .sort((a, b) => Math.abs(b.amt) - Math.abs(a.amt));
-                party = opp.length ? opp[0].name : (legs.find((l) => !pat.test(l.name)) || {}).name || '';
+                party = opp.length ? opp[0].name : (legs.find((l) => !matchLedger(l.name)) || {}).name || '';
               }
               entries.push({
                 date: date ? date.toISOString().slice(0, 10) : '',
@@ -3293,7 +3301,7 @@ const server = http.createServer(async (req, res) => {
         json(res, 200, { ok: true, entries, months, vouchers });
       } catch (e) {
         json(res, 502, { ok: false, error: 'Could not read Tally: ' + String((e && e.message) || e) });
-      }
+      } finally { state.settings.company = tdsSavedCompany; }
       return;
     }
 

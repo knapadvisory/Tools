@@ -91,12 +91,22 @@
 
   <!-- Step 2: Tally -->
   <div class="card" id="p2">
-    <h2><span class="stepno">2</span>TDS Receivable from Tally</h2>
+    <h2><span class="stepno">2</span>TDS / TCS Receivable from Tally</h2>
+    <div class="row">
+      <label>Company <span style="color:var(--muted);font-weight:400">— scan, then pick</span>
+        <select id="tdsCompany" class="small"><option value="">(the open company)</option></select></label>
+      <button class="btn" id="scanCoBtn">🔎 Scan companies</button>
+      <span style="white-space:nowrap;font-size:12.5px"><span id="tally-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#c3ccd8;margin-right:5px"></span><span id="tally-status" class="msg" style="margin:0">checking connector…</span></span>
+    </div>
+    <div class="row">
+      <button class="btn" id="loadLedBtn">📋 Load ledgers &amp; pick TDS/TCS receivable</button>
+      <label style="flex:1;min-width:170px">Filter <input type="text" class="small" id="ledSearch" placeholder="type to filter…" style="width:100%"></label>
+      <label>or name contains <input type="text" class="small" id="pattern" value="TDS Receivable" title="Fallback: a name pattern, used only when no ledgers are ticked below"></label>
+    </div>
+    <div id="tdsLedList" class="hidden" style="max-height:220px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin:2px 0 6px"></div>
     <div class="row">
       <label>Period <input type="date" id="from"> → <input type="date" id="to"></label>
-      <label>Ledger name contains <input type="text" class="small" id="pattern" value="TDS Receivable" title="Regular expression matched against ledger names"></label>
       <button class="btn primary" id="readBtn">📖 Read from Tally</button>
-      <span style="white-space:nowrap;font-size:12.5px"><span id="tally-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#c3ccd8;margin-right:5px"></span><span id="tally-status" class="msg" style="margin:0">checking connector…</span></span>
     </div>
     <div class="msg" id="msgTally"></div>
     <div id="bookStats" class="stats hidden"></div>
@@ -210,6 +220,7 @@ function checkConn(){
     document.getElementById('conn-ver').textContent='· connector v'+connVer;
     if(parseFloat(connVer)<2.6){ document.getElementById('msgTally').innerHTML='This tool needs connector <b>v2.6+</b> — press ⟳ Update connector.'; }
     fetch(API+'/api/tds/data').then(function(r){return r.json();}).then(function(d){ tdsMap=d.map||{}; }).catch(function(){});
+    if(parseFloat(connVer)>=4.46) scanTdsCompanies();   // populate the company picker
   }).catch(function(){
     document.getElementById('tally-dot').style.background='var(--bad)';
     document.getElementById('tally-status').innerHTML='connector not found — <a href="/connector/Install-Tally-Connector.bat" download>install it</a> (once) on this PC';
@@ -235,6 +246,51 @@ function updateConnector(){
     },3000);
   }).catch(function(){ el.disabled=false; el.textContent='⟳ Update connector'; });
 }
+
+/* ================= step 2a: company + ledger picker ================= */
+var tdsLedgers=[], picked={};
+var TDS_SUGG=/tds.*receivable|tcs.*receivable/i;   // auto-suggest input-side receivable ledgers
+function scanTdsCompanies(){
+  var btn=document.getElementById('scanCoBtn'), was=btn.textContent; btn.disabled=true; btn.textContent='⏳ Scanning…';
+  fetch(API+'/api/dc/companies',{method:'POST',headers:{'content-type':'application/json'},body:'{}'})
+    .then(function(r){return r.json();}).then(function(j){
+      btn.disabled=false; btn.textContent=was;
+      var sel=document.getElementById('tdsCompany'), keep=sel.value, list=[];
+      (j.endpoints||[]).forEach(function(ep){(ep.companies||[]).forEach(function(c){list.push((typeof c==='string')?c:c.name);});});
+      sel.innerHTML='<option value="">(the open company)</option>'+list.map(function(n){return '<option value="'+n.replace(/"/g,'&quot;')+'">'+n+'</option>';}).join('');
+      if(keep&&list.indexOf(keep)>=0)sel.value=keep;
+      document.getElementById('tally-status').textContent='connector v'+connVer+' · '+list.length+' company(ies) open';
+    }).catch(function(){ btn.disabled=false; btn.textContent=was; });
+}
+function loadTdsLedgers(){
+  var btn=document.getElementById('loadLedBtn'), was=btn.textContent; btn.disabled=true; btn.textContent='⏳ Loading…';
+  fetch(API+'/api/itc/ledgers',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({company:document.getElementById('tdsCompany').value})})
+    .then(function(r){return r.json();}).then(function(j){
+      btn.disabled=false;
+      tdsLedgers=j.ledgers||[];
+      tdsLedgers.forEach(function(l){ if(picked[l.name]===undefined&&TDS_SUGG.test(l.name))picked[l.name]=true; });
+      renderTdsLedgers();
+    }).catch(function(){ btn.disabled=false; btn.textContent=was; document.getElementById('msgTally').innerHTML='<span class="msg bad">Could not read ledgers — pick a company and make sure Tally is open.</span>'; });
+}
+function renderTdsLedgers(){
+  var wrap=document.getElementById('tdsLedList'); wrap.classList.remove('hidden');
+  if(!tdsLedgers.length){ wrap.innerHTML='<div class="msg">No ledgers returned — pick a company and load again.</div>'; return; }
+  var q=(document.getElementById('ledSearch').value||'').toLowerCase();
+  var shown=tdsLedgers.filter(function(l){return !q||l.name.toLowerCase().indexOf(q)>=0||(l.parent||'').toLowerCase().indexOf(q)>=0;});
+  wrap.innerHTML=shown.slice(0,400).map(function(l){
+    return '<label style="display:flex;gap:8px;align-items:center;padding:3px 2px;font-size:13px;cursor:pointer"><input type="checkbox" class="tdsLedChk" data-n="'+l.name.replace(/"/g,'&quot;')+'"'+(picked[l.name]?' checked':'')+'><span>'+l.name+(l.parent?' <span style="color:var(--muted);font-size:11.5px">· '+l.parent+'</span>':'')+'</span></label>';
+  }).join('')+(shown.length>400?'<div class="msg">Showing first 400 — use the filter to narrow.</div>':'');
+  Array.prototype.forEach.call(wrap.querySelectorAll('.tdsLedChk'),function(c){ c.onchange=function(){ picked[c.getAttribute('data-n')]=c.checked; updateLedCount(); }; });
+  updateLedCount();
+}
+function updateLedCount(){
+  var n=selectedTdsLedgers().length;
+  document.getElementById('loadLedBtn').textContent = n? ('📋 '+n+' ledger(s) picked — reload') : '📋 Load ledgers & pick TDS/TCS receivable';
+}
+function selectedTdsLedgers(){ return Object.keys(picked).filter(function(k){return picked[k];}); }
+document.getElementById('scanCoBtn').onclick=scanTdsCompanies;
+document.getElementById('loadLedBtn').onclick=loadTdsLedgers;
+document.getElementById('ledSearch').oninput=function(){ if(tdsLedgers.length)renderTdsLedgers(); };
 
 /* ================= step 1: 26AS ================= */
 (function(){
@@ -272,7 +328,7 @@ document.getElementById('readBtn').onclick=function(){
   var btn=this; btn.disabled=true;
   document.getElementById('msgTally').textContent='⏳ Reading the Tally books month by month — keep Tally open, this can take a few minutes…';
   fetch(API+'/api/tds/read',{method:'POST',headers:{'content-type':'application/json'},
-    body:JSON.stringify({from:from,to:to,pattern:document.getElementById('pattern').value})})
+    body:JSON.stringify({from:from,to:to,company:document.getElementById('tdsCompany').value,ledgers:selectedTdsLedgers(),pattern:document.getElementById('pattern').value})})
     .then(function(r){return r.json();})
     .then(function(j){
       btn.disabled=false;
