@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GSTR-2B vs Books ITC Reconciliation — KNAP Tools</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23173f28'/><text x='50' y='68' text-anchor='middle' font-size='52' font-weight='700' fill='%235fd68a'>2B</text></svg>">
+<script src="/session.js" defer></script>
+<script src="/gstr2b/exceljs.js" defer></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --bg:#f4f5f2; --surface:#ffffff; --surface-2:#f6f7f4; --surface-3:#eef1ec;
+    --border:#e2e5df; --border-2:#d7dcd2;
+    --text:#141a16; --ink:#141a16; --muted:#5f6b62; --faint:#8b968c;
+    --green:#1b6a3a; --green-2:#155630; --green-ink:#0f3d22; --green-soft:#e7f2ea; --green-line:#cfe6d7;
+    --head-bg:#173f28; --head-ink:rgba(255,255,255,.9);
+    --ok:#1b6a3a; --ok-soft:#e7f2ea;
+    --warn:#a86617; --warn-soft:#fbf1dd; --warn-line:#f0dcb4;
+    --bad:#b3261e; --bad-soft:#fbe9e7; --bad-line:#f3cdc8;
+    --info:#1f5f8b; --info-soft:#e6eff5;
+    --shadow:rgba(24,40,28,.07);
+    --mono:ui-monospace,"SF Mono","IBM Plex Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#10130f; --surface:#171b15; --surface-2:#1d221a; --surface-3:#232a20;
+      --border:#2a3126; --border-2:#333c2e; --text:#e8ece5; --ink:#e8ece5; --muted:#a1ac9f; --faint:#7d887a;
+      --green:#4bbd74; --green-2:#3fa864; --green-ink:#bfe9cd; --green-soft:#16311f; --green-line:#26492f;
+      --head-bg:#0e2a1a; --ok:#4bbd74; --ok-soft:#16311f;
+      --warn:#e0a94a; --warn-soft:#332a12; --warn-line:#4a3d1a;
+      --bad:#e8756b; --bad-soft:#331a17; --bad-line:#4a2823; --info:#6fb2e0; --info-soft:#16283a;
+      --shadow:rgba(0,0,0,.5);
+    }
+  }
+  body{background:var(--bg);color:var(--text);font:14.5px/1.55 var(--sans);min-height:100vh;-webkit-font-smoothing:antialiased}
+  a{color:var(--green);text-decoration:none} a:hover{text-decoration:underline}
+  .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .site-head{background:var(--head-bg);position:sticky;top:0;z-index:30}
+  .site-head-inner{max-width:1520px;margin:0 auto;padding:12px 22px;display:flex;align-items:center;gap:14px}
+  .brand{font-weight:700;font-size:15.5px;color:#fff;display:flex;align-items:center;gap:8px;white-space:nowrap}
+  .brand .g{width:15px;height:15px;border-radius:4px;background:#5fd68a;display:inline-block}
+  .back{color:var(--head-ink);font-size:13px;padding:5px 10px;border-radius:8px}
+  .back:hover{background:rgba(255,255,255,.1);text-decoration:none}
+  .spacer{flex:1}
+  .conn-pill{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:#eaf3ec;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);padding:5px 12px;border-radius:999px;white-space:nowrap}
+  .conn-pill .dot{width:8px;height:8px;border-radius:50%;background:#8b968c}
+  .conn-pill.on .dot{background:#5fd68a;box-shadow:0 0 0 3px rgba(95,214,138,.22)}
+  .conn-pill.off .dot{background:#e8756b}
+  .sess-out{font:inherit;font-size:12.5px;font-weight:600;color:#fff;background:transparent;border:1px solid rgba(255,255,255,.32);padding:6px 13px;border-radius:9px;cursor:pointer}
+  .sess-out:hover{background:rgba(255,255,255,.12)}
+  main{max-width:1520px;margin:0 auto;padding:26px 22px 60px}
+  h1{font-size:24px;font-weight:700;letter-spacing:-.02em}
+  .lede{color:var(--muted);font-size:13.5px;margin:8px 0 0;max-width:900px}
+  .stepper{display:grid;grid-template-columns:repeat(5,1fr);gap:0;margin:20px 0;background:var(--surface);border:1px solid var(--border);border-radius:13px;overflow:hidden;box-shadow:0 1px 2px var(--shadow)}
+  .step{display:flex;align-items:center;gap:11px;padding:14px 16px;border-right:1px solid var(--border)}
+  .step:last-child{border-right:0}
+  .step .num{flex:none;width:25px;height:25px;border-radius:50%;display:grid;place-items:center;font-size:12.5px;font-weight:700;background:var(--surface-3);color:var(--faint)}
+  .step .lbl{font-size:13px;font-weight:600;color:var(--muted)}
+  .step.done .num{background:var(--green-soft);color:var(--green)} .step.done .lbl{color:var(--text)}
+  .step.active{background:var(--green-soft)} .step.active .num{background:var(--green);color:#fff} .step.active .lbl{color:var(--green-ink)}
+  @media (max-width:820px){.stepper{grid-template-columns:1fr 1fr}.step{border-bottom:1px solid var(--border)}}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:0 1px 2px var(--shadow);padding:20px 22px;margin-bottom:16px}
+  .card.hidden{display:none}
+  .card h2{font-size:15.5px;font-weight:700;margin-bottom:3px}
+  .card .sub{color:var(--muted);font-size:12.5px;margin-bottom:10px}
+  .btn{display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:13px;font-weight:600;padding:9px 16px;border-radius:10px;border:1px solid var(--border-2);background:var(--surface-2);color:var(--text);cursor:pointer;transition:.12s}
+  .btn:hover{border-color:var(--green);color:var(--green)}
+  .btn:disabled{opacity:.5;cursor:default;color:var(--text);border-color:var(--border-2)}
+  .btn.primary{background:var(--green);border-color:var(--green);color:#fff} .btn.primary:hover{background:var(--green-2);color:#fff}
+  .btn.ghost{background:transparent;border-color:var(--border-2);font-size:12.5px;padding:7px 13px}
+  .btn.sm{font-size:12px;padding:5px 11px;border-radius:8px}
+  .row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .msg{font-size:13px;margin-top:10px;color:var(--muted)} .msg.ok{color:var(--ok)} .msg.bad{color:var(--bad)} .msg.warn{color:var(--warn)}
+  input[type=date],input[type=text],select{font:inherit;padding:8px 11px;border:1px solid var(--border-2);border-radius:9px;background:var(--surface);color:var(--text)}
+  input[type=date]{font-family:var(--mono);font-size:13px}
+  label.lbl{font-size:12.5px;color:var(--muted);font-weight:600}
+  .conn-banner{display:flex;align-items:flex-start;gap:12px;background:var(--green-soft);border:1px solid var(--green-line);border-radius:12px;padding:14px 16px;margin-bottom:16px}
+  .conn-banner.off{background:var(--bad-soft);border-color:var(--bad-line)} .conn-banner.wait{background:var(--surface-2);border-color:var(--border)}
+  .conn-banner .cdot{flex:none;width:11px;height:11px;border-radius:50%;background:var(--green);margin-top:4px}
+  .conn-banner.off .cdot{background:var(--bad)} .conn-banner.wait .cdot{background:var(--faint)}
+  .conn-banner .ctitle{font-weight:700;font-size:14px} .conn-banner .csub{color:var(--muted);font-size:12.5px;margin-top:2px}
+  .conn-banner .cact{margin-left:auto;display:flex;gap:8px;flex-wrap:wrap}
+  .ep{display:flex;align-items:center;gap:8px;margin-top:8px}
+  .ep input{flex:1;min-width:180px;font-family:var(--mono);font-size:12.5px}
+  .cmp-ep{border:1px solid var(--border);border-radius:11px;margin-top:12px;overflow:hidden}
+  .cmp-ep .eph{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--surface-2);border-bottom:1px solid var(--border);font-size:12.5px}
+  .cmp-ep .eph .u{font-family:var(--mono);font-weight:700} .cmp-ep .eph .st{margin-left:auto;font-size:11.5px}
+  .cmp-ep .eph .st.ok{color:var(--ok)} .cmp-ep .eph .st.bad{color:var(--bad)}
+  .cmp{display:flex;align-items:center;gap:11px;padding:9px 14px;border-bottom:1px solid var(--surface-2)} .cmp:last-child{border-bottom:0}
+  .cmp input{width:16px;height:16px;accent-color:var(--green)} .cmp .nm{font-weight:600;font-size:13px} .cmp .gs{font-family:var(--mono);font-size:11px;color:var(--faint)}
+  .empty{padding:14px;color:var(--muted);font-size:12.5px}
+  /* ledger picker */
+  .ledtools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+  .ledtools input[type=text]{flex:1;min-width:220px}
+  .ledwrap{border:1px solid var(--border);border-radius:11px;max-height:360px;overflow:auto}
+  .led{display:flex;align-items:center;gap:12px;padding:8px 14px;border-bottom:1px solid var(--surface-2)} .led:last-child{border-bottom:0}
+  .led:hover{background:var(--surface-2)}
+  .led .lnm{flex:1;min-width:0;font-size:13px} .led .lnm .lp{font-size:11px;color:var(--faint);font-family:var(--mono)}
+  .led select{font-size:12px;padding:5px 9px}
+  .led.sel{background:var(--green-soft)}
+  .picked{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}
+  .pchip{font-size:11.5px;background:var(--green-soft);border:1px solid var(--green-line);color:var(--green-ink);border-radius:999px;padding:4px 11px;font-weight:600}
+  .pchip .k{opacity:.7;font-weight:700}
+  /* file drop */
+  .drop{border:1.5px dashed var(--border-2);border-radius:12px;padding:22px;text-align:center;color:var(--muted);font-size:13px;background:var(--surface-2);cursor:pointer}
+  .drop:hover{border-color:var(--green);color:var(--green)} .drop.has{border-style:solid;border-color:var(--green-line);background:var(--green-soft);color:var(--green-ink)}
+  .statgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:6px 0 18px}
+  @media (max-width:820px){.statgrid{grid-template-columns:1fr 1fr}}
+  .statc{background:var(--surface);border:1px solid var(--border);border-radius:13px;padding:15px 16px;box-shadow:0 1px 2px var(--shadow);text-align:left}
+  button.statc{font:inherit;cursor:pointer;width:100%;transition:.12s} button.statc:hover{border-color:var(--green)} button.statc.open{border-color:var(--green);box-shadow:0 0 0 2px var(--green-soft)}
+  .statc .v{font-size:22px;font-weight:800;font-family:var(--mono);letter-spacing:-.01em} .statc .k{font-size:11.5px;color:var(--muted);margin-top:3px} .statc .s{font-size:11px;color:var(--faint);margin-top:2px}
+  .statc.good .v{color:var(--green)} .statc.warnv .v{color:var(--warn)} .statc.badv .v{color:var(--bad)}
+  .tblwrap{overflow:auto;border:1px solid var(--border);border-radius:12px;margin-top:6px;max-height:520px}
+  table.mtx{width:100%;border-collapse:collapse;font-size:12.5px;min-width:820px}
+  table.mtx th{position:sticky;top:0;background:var(--surface-2);text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--faint);padding:9px 12px;border-bottom:1px solid var(--border);white-space:nowrap;z-index:1}
+  table.mtx th.r,table.mtx td.r{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+  table.mtx td{padding:7px 12px;border-bottom:1px solid var(--surface-2);vertical-align:top} table.mtx tr:hover td{background:var(--surface-2)}
+  table.mtx td.neg{color:var(--bad)} .pill{font-size:10.5px;font-weight:700;border-radius:999px;padding:2px 8px}
+  .pill.rcm{background:var(--info-soft);color:var(--info)}
+  .repsec{margin-top:18px} .repsec h3{font-size:14px;font-weight:700;margin-bottom:2px;display:flex;align-items:center;gap:8px}
+  .repsec .rc{font-size:11.5px;color:var(--muted);font-weight:600}
+  .prog{height:10px;background:var(--surface-3);border-radius:999px;overflow:hidden;margin-top:12px} .prog>i{display:block;height:100%;background:var(--green);width:0;transition:width .4s}
+  .prog-line{font-size:12px;color:var(--muted);margin-top:6px;font-family:var(--mono)}
+  footer{max-width:1520px;margin:20px auto 0;padding:0 22px 30px;color:var(--faint);font-size:12px}
+</style>
+</head>
+<body>
+<header class="site-head"><div class="site-head-inner">
+  <span class="brand"><span class="g"></span> GSTR-2B vs Books ITC</span>
+  <a class="back" href="/">← All tools</a>
+  <span class="spacer"></span>
+  <span class="conn-pill" id="connPill"><span class="dot"></span><span id="connPillText">checking connector…</span></span>
+  <button class="sess-out" id="btnRelease" title="Let go of Tally if a read got stuck" onclick="releaseTally()">Release Tally</button>
+</div></header>
+
+<main>
+  <h1>GSTR-2B vs Books ITC Reconciliation</h1>
+  <p class="lede">Reads your <b>input-GST ledgers straight from Tally</b> (invoice-wise), matches them to your downloaded <b>GSTR-2B</b>, and shows what’s matched, mismatched, only in 2B, or only in your books. Everything runs on this computer — books flow browser ↔ connector ↔ Tally; only the report you export is saved.</p>
+
+  <div class="stepper" id="stepper">
+    <div class="step active" data-s="1"><span class="num">1</span><span class="lbl">Connect Tally</span></div>
+    <div class="step" data-s="2"><span class="num">2</span><span class="lbl">Pick input ledgers</span></div>
+    <div class="step" data-s="3"><span class="num">3</span><span class="lbl">Fetch books ITC</span></div>
+    <div class="step" data-s="4"><span class="num">4</span><span class="lbl">Add GSTR-2B</span></div>
+    <div class="step" data-s="5"><span class="num">5</span><span class="lbl">Reconcile</span></div>
+  </div>
+
+  <div class="conn-banner wait" id="connBanner">
+    <span class="cdot"></span>
+    <div><div class="ctitle" id="connTitle">Looking for the connector…</div><div class="csub" id="connSub">The KNAP connector reads Tally on this PC.</div></div>
+    <div class="cact"><button class="btn ghost" id="btnUpdate" style="display:none" onclick="doUpdate()">⟳ Update connector</button></div>
+  </div>
+
+  <!-- STEP 1 -->
+  <div class="card" id="card1">
+    <h2>1 · Connect to Tally</h2>
+    <div class="sub">Keep each company on the <b>Gateway of Tally</b> (not inside a report). Add a line per Tally port (9000, 9001…), then scan.</div>
+    <div id="epList"></div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn ghost sm" onclick="addEndpoint('')">+ Add port</button>
+      <button class="btn primary" id="btnScan" onclick="scanCompanies()">Scan for companies</button>
+    </div>
+    <div class="msg" id="msgScan"></div>
+    <div id="cmpList"></div>
+  </div>
+
+  <!-- STEP 2 -->
+  <div class="card hidden" id="card2">
+    <h2>2 · Pick the input-GST ledgers</h2>
+    <div class="sub">Tick the tax you claim ITC through and tag each as IGST / CGST / SGST — and separately if it’s a <b>reverse-charge (RCM)</b> ledger. Ledger names vary company to company, so you choose. Debits = ITC availed, credits = reversals; both are netted.</div>
+    <div class="ledtools">
+      <input type="text" id="ledSearch" placeholder="Search ledgers…" oninput="renderLedgers()">
+      <span class="msg" id="msgLed" style="margin:0"></span>
+    </div>
+    <div class="ledwrap" id="ledWrap"></div>
+    <div class="picked" id="pickedChips"></div>
+    <div class="row" style="margin-top:14px">
+      <label class="lbl">From <input type="date" id="fromDate"></label>
+      <label class="lbl">To <input type="date" id="toDate"></label>
+      <button class="btn primary" id="btnFetch" onclick="fetchItc()">Fetch books ITC →</button>
+    </div>
+    <div class="prog" id="fetchProg" style="display:none"><i id="fetchBar"></i></div>
+    <div class="prog-line" id="fetchLine" style="display:none"></div>
+    <div class="msg" id="msgFetch"></div>
+  </div>
+
+  <!-- STEP 3 summary -->
+  <div class="card hidden" id="card3">
+    <h2>3 · Books ITC fetched</h2>
+    <div class="sub" id="booksSub"></div>
+    <div class="tblwrap"><table class="mtx" id="booksTbl"></table></div>
+  </div>
+
+  <!-- STEP 4 -->
+  <div class="card hidden" id="card4">
+    <h2>4 · Add your GSTR-2B</h2>
+    <div class="sub">Upload the <b>GSTR-2B JSON</b> from the GST portal, or a filled CSV template. Nothing is uploaded anywhere — parsed in your browser.</div>
+    <div class="row" style="margin-bottom:10px">
+      <button class="btn ghost sm" onclick="downloadTemplate()">⬇ CSV template</button>
+      <span class="lbl">Reverse-charge invoices in 2B are matched against your RCM ledgers.</span>
+    </div>
+    <div class="drop" id="drop">Drop the GSTR-2B <b>.json</b> or template <b>.csv</b> here, or click to choose.
+      <input type="file" id="file2b" accept=".json,.csv" style="display:none">
+    </div>
+    <div class="msg" id="msg2b"></div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn primary" id="btnReco" onclick="reconcile()" disabled>RECONCILE →</button>
+    </div>
+  </div>
+
+  <!-- STEP 5 report -->
+  <div class="card hidden" id="card5">
+    <div class="row" style="justify-content:space-between">
+      <div><h2>5 · Reconciliation</h2><div class="sub" id="repSub"></div></div>
+      <button class="btn primary" onclick="exportXlsx()">⬇ Download Excel</button>
+    </div>
+    <div class="statgrid" id="statGrid"></div>
+    <div id="repTables"></div>
+  </div>
+</main>
+<footer>KNAP Advisory · internal tools · GSTR-2B vs books ITC · reads Tally on this computer via the connector; nothing leaves the machine until you export.</footer>
+
+<script>
+/* ============================ connector ============================ */
+var API=(function(){try{return localStorage.getItem('knap_connector_url');}catch(e){return null;}})()||'http://127.0.0.1:8797';
+var REQVER='4.41', connVer='', POLL=null;
+function $(id){return document.getElementById(id);}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function setPill(cls,txt){var p=$('connPill');p.className='conn-pill '+cls;$('connPillText').textContent=txt;}
+function banner(cls,title,sub){var b=$('connBanner');b.className='conn-banner '+cls;$('connTitle').textContent=title;$('connSub').innerHTML=sub;}
+function setMsg(id,txt,cls){var e=$(id);e.className='msg'+(cls?' '+cls:'');e.innerHTML=txt;}
+function verGE(v,min){var a=String(v).split('.').map(Number),b=String(min).split('.').map(Number);for(var i=0;i<Math.max(a.length,b.length);i++){var x=a[i]||0,y=b[i]||0;if(x!==y)return x>y;}return true;}
+function checkConn(){
+  fetch(API+'/health',{signal:AbortSignal.timeout(3000)}).then(function(r){return r.json();}).then(function(h){
+    connVer=h.version||'';setPill('on','connector v'+connVer+' · connected');
+    var bu=$('btnUpdate');bu.style.display='';
+    if(!verGE(connVer,REQVER)){banner('off','Connector needs updating','This tool needs connector v'+REQVER+'+ (you have v'+connVer+'). Press ⟳ Update connector — a few seconds, then this page reloads.');bu.textContent='⟳ Update to v'+REQVER;}
+    else{banner('wait','Connector ready · v'+connVer,'Add your Tally port(s) below and scan for companies.');bu.textContent='⟳ Update connector';}
+  }).catch(function(){setPill('off','connector not found');$('btnUpdate').style.display='none';banner('off','Connector not found on this PC','Install the KNAP connector, then reload. <a href="/connector/Install-Tally-Connector.bat" download>Download installer</a>');});
+}
+function doUpdate(){
+  banner('wait','Updating the connector…','Fetching the latest version — a few seconds. Don’t close this tab.');
+  fetch(API+'/update',{method:'POST'}).then(function(){
+    var tries=0,t=setInterval(function(){tries++;fetch(API+'/health').then(function(r){return r.json();}).then(function(h){
+      if(verGE(h.version||'0',REQVER)){clearInterval(t);banner('wait','Updated to v'+(h.version||'')+' ✓','Reloading…');setTimeout(function(){location.reload();},900);}
+      else if(tries>25){clearInterval(t);banner('off','Update did not complete','Still on v'+(h.version||'?')+'. Try again, or restart the connector on the Tally PC.');}
+    }).catch(function(){if(tries>25){clearInterval(t);checkConn();}});},1500);
+  }).catch(function(){banner('off','Could not reach the connector','Make sure the KNAP connector is running on this PC.');});
+}
+function releaseTally(){fetch(API+'/api/tally/release',{method:'POST'}).then(function(r){return r.json();}).then(function(){if(POLL){clearInterval(POLL);POLL=null;}$('fetchProg').style.display='none';$('fetchLine').style.display='none';$('btnFetch').disabled=false;setMsg('msgFetch','Released Tally.','warn');}).catch(function(e){setMsg('msgFetch','Could not reach connector: '+e.message,'bad');});}
+function markStep(n,done){var s=document.querySelector('.step[data-s="'+n+'"]');if(!s)return;s.classList.remove('active');if(done)s.classList.add('done');var nx=document.querySelector('.step[data-s="'+(n+1)+'"]');if(nx)nx.classList.add('active');}
+
+/* ============================ step 1: scan ============================ */
+var endpoints=[];
+function addEndpoint(v){var w=$('epList'),d=document.createElement('div');d.className='ep';d.innerHTML='<input type="text" autocomplete="off" placeholder="http://localhost:9000" value="'+esc(v||'')+'"><button class="btn ghost sm" onclick="this.parentNode.remove()">✕</button>';w.appendChild(d);}
+function endpointUrls(){return Array.prototype.map.call(document.querySelectorAll('#epList input'),function(i){return i.value.trim();}).filter(Boolean);}
+function scanCompanies(){
+  var urls=endpointUrls();if(!urls.length){setMsg('msgScan','Add at least one Tally port.','bad');return;}
+  setMsg('msgScan','Scanning '+urls.length+' port(s)…','');$('btnScan').disabled=true;
+  fetch(API+'/api/dc/companies',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({urls:urls})})
+    .then(function(r){return r.json();}).then(function(j){
+      $('btnScan').disabled=false;
+      if(!j.ok){setMsg('msgScan',j.error||'Scan failed.','bad');return;}
+      endpoints=j.endpoints||[];renderCompanies();
+      var n=0;endpoints.forEach(function(e){n+=(e.companies||[]).length;});
+      setMsg('msgScan',n?('Found '+n+' company(ies) — pick one.'):'No companies found — is a company open in Tally?',n?'ok':'warn');
+    }).catch(function(e){$('btnScan').disabled=false;setMsg('msgScan','Could not reach the connector: '+e.message,'bad');});
+}
+function renderCompanies(){
+  var wrap=$('cmpList');wrap.innerHTML='';
+  endpoints.forEach(function(ep,ei){
+    var box=document.createElement('div');box.className='cmp-ep';
+    var head='<div class="eph"><span class="u">'+esc(ep.url)+'</span><span class="st '+(ep.ok?'ok':'bad')+'">'+(ep.ok?((ep.companies||[]).length+' open'):('✕ '+esc(ep.error||'unreachable')))+'</span></div>';
+    var rows='';(ep.companies||[]).forEach(function(c){
+      var name=(typeof c==='string')?c:c.name;var gst=(c.gstins||[]).join(', ');
+      rows+='<label class="cmp"><input type="radio" name="cmp" onchange="pickCompany(this)" data-url="'+esc(ep.url)+'" data-name="'+esc(name)+'">'
+        +'<span><span class="nm">'+esc(name)+'</span>'+(gst?' <span class="gs">'+esc(gst)+'</span>':'')+'</span></label>';
+    });
+    box.innerHTML=head+(rows||'<div class="empty">No company open on this port.</div>');
+    wrap.appendChild(box);
+  });
+}
+var chosen=null; // {url, company}
+function pickCompany(r){chosen={url:r.getAttribute('data-url'),company:r.getAttribute('data-name')};loadLedgers();}
+
+/* ============================ step 2: ledgers ============================ */
+var ledgers=[]; // [{name,parent}]
+var kinds={}; // norm(name) -> kind
+var KIND_OPTS=[['','—'],['igst','IGST'],['cgst','CGST'],['sgst','SGST'],['rcm_igst','RCM IGST'],['rcm_cgst','RCM CGST'],['rcm_sgst','RCM SGST']];
+function loadLedgers(){
+  $('card2').classList.remove('hidden');markStep(1,true);
+  setMsg('msgLed','Reading ledgers of '+chosen.company+'…','');
+  fetch(API+'/api/itc/ledgers',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(chosen)})
+    .then(function(r){return r.json();}).then(function(j){
+      if(!j.ok){setMsg('msgLed',j.error||'Could not read ledgers.','bad');return;}
+      ledgers=j.ledgers||[];setMsg('msgLed',ledgers.length+' ledgers','ok');
+      // preselect likely input-GST ledgers by name
+      ledgers.forEach(function(L){var g=guessKind(L.name);if(g)kinds[nk(L.name)]=g;});
+      renderLedgers();renderPicked();
+    }).catch(function(e){setMsg('msgLed','Could not reach the connector: '+e.message,'bad');});
+}
+function nk(s){return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'');}
+function guessKind(name){
+  var n=name.toLowerCase();if(n.indexOf('input')<0&&n.indexOf('itc')<0&&!/gst/.test(n))return '';
+  var rcm=/rcm|reverse/.test(n);
+  if(/igst/.test(n))return rcm?'rcm_igst':'igst';
+  if(/cgst/.test(n))return rcm?'rcm_cgst':'cgst';
+  if(/sgst|utgst/.test(n))return rcm?'rcm_sgst':'sgst';
+  return '';
+}
+function renderLedgers(){
+  var q=($('ledSearch').value||'').toLowerCase().trim();
+  var wrap=$('ledWrap');wrap.innerHTML='';
+  var list=ledgers.filter(function(L){return !q||L.name.toLowerCase().indexOf(q)>=0||(L.parent||'').toLowerCase().indexOf(q)>=0;});
+  // selected first
+  list.sort(function(a,b){var sa=kinds[nk(a.name)]?0:1,sb=kinds[nk(b.name)]?0:1;return sa-sb||a.name.localeCompare(b.name);});
+  list.slice(0,400).forEach(function(L){
+    var k=kinds[nk(L.name)]||'';
+    var row=document.createElement('div');row.className='led'+(k?' sel':'');
+    var opts=KIND_OPTS.map(function(o){return '<option value="'+o[0]+'"'+(o[0]===k?' selected':'')+'>'+o[1]+'</option>';}).join('');
+    row.innerHTML='<div class="lnm">'+esc(L.name)+(L.parent?' <span class="lp">· '+esc(L.parent)+'</span>':'')+'</div><select data-n="'+esc(L.name)+'" onchange="setKind(this)">'+opts+'</select>';
+    wrap.appendChild(row);
+  });
+  if(list.length>400)wrap.insertAdjacentHTML('beforeend','<div class="empty">Showing first 400 — search to narrow.</div>');
+}
+function setKind(sel){var name=sel.getAttribute('data-n'),k=sel.value;if(k)kinds[nk(name)]=k;else delete kinds[nk(name)];renderLedgers();renderPicked();}
+function selectedLedgers(){return ledgers.filter(function(L){return kinds[nk(L.name)];}).map(function(L){return {name:L.name,kind:kinds[nk(L.name)]};});}
+function renderPicked(){
+  var sel=selectedLedgers();var c=$('pickedChips');
+  c.innerHTML=sel.length?sel.map(function(s){return '<span class="pchip">'+esc(s.name)+' <span class="k">'+s.kind.replace('_',' ').toUpperCase()+'</span></span>';}).join(''):'<span class="lbl">No input ledgers selected yet.</span>';
+}
+
+/* ============================ step 3: fetch books ITC ============================ */
+var booksRows=[];
+function fetchItc(){
+  var sel=selectedLedgers();
+  if(!sel.length){setMsg('msgFetch','Select at least one input-GST ledger.','bad');return;}
+  var from=$('fromDate').value,to=$('toDate').value;
+  if(!from||!to){setMsg('msgFetch','Set the from and to dates.','bad');return;}
+  $('btnFetch').disabled=true;setMsg('msgFetch','','');
+  $('fetchProg').style.display='';$('fetchLine').style.display='';$('fetchBar').style.width='15%';
+  pollFetch();
+  fetch(API+'/api/itc/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url:chosen.url,company:chosen.company,from:from,to:to,taxLedgers:sel})})
+    .then(function(r){return r.json();}).then(function(j){
+      if(POLL){clearInterval(POLL);POLL=null;}$('btnFetch').disabled=false;$('fetchProg').style.display='none';$('fetchLine').style.display='none';
+      if(!j.ok){setMsg('msgFetch',j.error||'Could not read ITC.','bad');return;}
+      booksRows=j.rows||[];showBooks(j);markStep(2,true);
+      $('card4').classList.remove('hidden');markStep(3,true);
+    }).catch(function(e){if(POLL){clearInterval(POLL);POLL=null;}$('btnFetch').disabled=false;$('fetchProg').style.display='none';$('fetchLine').style.display='none';setMsg('msgFetch','Could not reach the connector: '+e.message,'bad');});
+}
+function pollFetch(){POLL=setInterval(function(){fetch(API+'/api/dc/progress').then(function(r){return r.json();}).then(function(p){if(p&&p.phase){$('fetchLine').textContent=(p.phase||'')+' '+(p.sub||'');var pc=p.monthsTotal?Math.min(95,Math.round(p.monthsDone/p.monthsTotal*90)+10):40;$('fetchBar').style.width=pc+'%';}}).catch(function(){});},700);}
+function tsum(r){return r.igst+r.cgst+r.sgst+(r.rcmIgst||0)+(r.rcmCgst||0)+(r.rcmSgst||0);}
+function showBooks(j){
+  $('card3').classList.remove('hidden');
+  var tot=booksRows.reduce(function(a,r){return a+tsum(r);},0);
+  $('booksSub').innerHTML=booksRows.length+' invoices · '+j.from+' → '+j.to+' · total ITC <b>'+inr(tot)+'</b> (regular + RCM, net of reversals)';
+  var t=$('booksTbl');
+  t.innerHTML='<thead><tr><th>Date</th><th>Voucher / Supp. inv.</th><th>Party</th><th>GSTIN</th><th class="r">Taxable</th><th class="r">IGST</th><th class="r">CGST</th><th class="r">SGST</th><th class="r">RCM</th></tr></thead><tbody>'
+    +booksRows.slice(0,300).map(function(r){return '<tr><td>'+esc(r.date||'—')+'</td><td>'+esc(r.voucherNo||'')+(r.supplierInvNo&&r.supplierInvNo!==r.voucherNo?' <span class="lp mono" style="color:var(--faint)">/ '+esc(r.supplierInvNo)+'</span>':'')+'</td><td>'+esc(r.party||'')+(r.rcm?' <span class="pill rcm">RCM</span>':'')+'</td><td class="mono">'+esc(r.gstin||'—')+'</td><td class="r">'+inr(r.taxable)+'</td><td class="r">'+inr(r.igst)+'</td><td class="r">'+inr(r.cgst)+'</td><td class="r">'+inr(r.sgst)+'</td><td class="r">'+inr((r.rcmIgst||0)+(r.rcmCgst||0)+(r.rcmSgst||0))+'</td></tr>';}).join('')
+    +'</tbody>';
+  if(booksRows.length>300)t.insertAdjacentHTML('beforeend','<tbody><tr><td colspan="9" class="empty">Showing first 300 of '+booksRows.length+'.</td></tr></tbody>');
+}
+
+/* ============================ step 4: GSTR-2B input ============================ */
+var twoBRows=[];
+$('drop').addEventListener('click',function(){$('file2b').click();});
+$('drop').addEventListener('dragover',function(e){e.preventDefault();$('drop').classList.add('has');});
+$('drop').addEventListener('dragleave',function(){$('drop').classList.remove('has');});
+$('drop').addEventListener('drop',function(e){e.preventDefault();$('drop').classList.remove('has');if(e.dataTransfer.files[0])handle2b(e.dataTransfer.files[0]);});
+$('file2b').addEventListener('change',function(e){if(e.target.files[0])handle2b(e.target.files[0]);});
+function handle2b(file){
+  var fr=new FileReader();fr.onload=function(){
+    try{
+      if(/\.json$/i.test(file.name)){twoBRows=parse2bJson(JSON.parse(fr.result));}
+      else{twoBRows=parseCsv(fr.result);}
+      if(!twoBRows.length){setMsg('msg2b','No invoices found in that file. Check it’s a GSTR-2B JSON or the filled template.','bad');return;}
+      var tot=twoBRows.reduce(function(a,r){return a+r.igst+r.cgst+r.sgst;},0);
+      $('drop').classList.add('has');$('drop').innerHTML='✓ '+esc(file.name)+' — '+twoBRows.length+' invoices, ITC '+inr(tot);
+      setMsg('msg2b','Loaded '+twoBRows.length+' 2B invoices.','ok');$('btnReco').disabled=false;
+    }catch(err){setMsg('msg2b','Could not read that file: '+err.message,'bad');}
+  };fr.readAsText(file);
+}
+function num(x){var n=parseFloat(String(x==null?0:x).replace(/[, ]/g,''));return isNaN(n)?0:n;}
+function parse2bJson(j){
+  var out=[],d=(j&&j.data&&j.data.docdata)?j.data.docdata:(j&&j.docdata?j.docdata:j&&j.data?j.data:j);
+  function pushInv(ctin,trdnm,inv,sign,rcm){
+    var items=inv.items||inv.itms||[];var ig=0,cg=0,sg=0,tx=0;
+    if(items.length){items.forEach(function(it){var o=it.itm_det||it;ig+=num(o.igst);cg+=num(o.cgst);sg+=num(o.sgst);tx+=num(o.txval);});}
+    else{ig=num(inv.igst);cg=num(inv.cgst);sg=num(inv.sgst);tx=num(inv.txval);}
+    out.push({gstin:String(ctin||'').toUpperCase(),party:trdnm||'',invNo:String(inv.inum||inv.nt_num||'').trim(),invDate:inv.dt||inv.nt_dt||'',invoiceValue:num(inv.val),taxable:sign*tx,igst:sign*ig,cgst:sign*cg,sgst:sign*sg,rcm:(String(inv.rev||inv.rchrg||'').toUpperCase()==='Y')||!!rcm});
+  }
+  ['b2b','b2ba'].forEach(function(k){(d[k]||[]).forEach(function(s){(s.inv||[]).forEach(function(inv){pushInv(s.ctin,s.trdnm,inv,1,false);});});});
+  ['cdnr','cdnra'].forEach(function(k){(d[k]||[]).forEach(function(s){(s.nt||[]).forEach(function(nt){pushInv(s.ctin,s.trdnm,nt,(String(nt.ntty||'').toUpperCase()==='C'?-1:1),false);});});});
+  return out;
+}
+function parseCsv(text){
+  var lines=text.split(/\r?\n/).filter(function(l){return l.trim();});if(!lines.length)return [];
+  var head=lines[0].split(',').map(function(h){return h.trim().toLowerCase().replace(/[^a-z0-9]+/g,'');});
+  function col(row,names){for(var i=0;i<names.length;i++){var idx=head.indexOf(names[i]);if(idx>=0)return row[idx];}return '';}
+  var out=[];
+  for(var i=1;i<lines.length;i++){
+    var row=splitCsvLine(lines[i]);if(!row.length)continue;
+    var g=String(col(row,['gstin','gstn','ctin'])||'').toUpperCase().trim();
+    var invNo=String(col(row,['invoiceno','invno','invoicenumber','inum'])||'').trim();
+    if(!g&&!invNo)continue;
+    out.push({gstin:g,party:col(row,['party','partyname','tradename','trdnm'])||'',invNo:invNo,invDate:col(row,['invoicedate','date','dt'])||'',invoiceValue:num(col(row,['invoicevalue','val','value'])),taxable:num(col(row,['taxable','taxablevalue','txval'])),igst:num(col(row,['igst'])),cgst:num(col(row,['cgst'])),sgst:num(col(row,['sgst'])),rcm:/^y|^true|^1/i.test(String(col(row,['rcm','reversecharge','rev','rchrg'])||''))});
+  }
+  return out;
+}
+function splitCsvLine(line){var out=[],cur='',q=false;for(var i=0;i<line.length;i++){var c=line[i];if(c==='"'){if(q&&line[i+1]==='"'){cur+='"';i++;}else q=!q;}else if(c===','&&!q){out.push(cur);cur='';}else cur+=c;}out.push(cur);return out;}
+function downloadTemplate(){
+  var csv='gstin,party,invoice_no,invoice_date,invoice_value,taxable,igst,cgst,sgst,rcm\n07AABCU9603R1ZP,Sample Vendor Pvt Ltd,INV-001,01-04-2025,118000,100000,0,9000,9000,N\n';
+  dl('gstr2b-template.csv',new Blob([csv],{type:'text/csv'}));
+}
+function dl(name,blob){var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(function(){URL.revokeObjectURL(a.href);},1500);}
+
+/* ============================ step 5: reconcile ============================ */
+var report=null;
+var TAXTOL=1, TXVTOL=5;
+function normGstin(g){return String(g||'').toUpperCase().replace(/[^A-Z0-9]/g,'');}
+function normInv(x){return String(x||'').toUpperCase().replace(/[^A-Z0-9]/g,'');}
+function bTax(r){return {igst:r.igst+(r.rcmIgst||0),cgst:r.cgst+(r.rcmCgst||0),sgst:r.sgst+(r.rcmSgst||0)};}
+function reconcile(){
+  // index books rows by gstin|invcandidate
+  var idx={},used={};
+  booksRows.forEach(function(r,i){
+    var g=normGstin(r.gstin);
+    var cands=[r.supplierInvNo,r.voucherNo,r.ref].map(normInv).filter(Boolean);
+    cands.forEach(function(c){var key=g+'|'+c;(idx[key]||(idx[key]=[])).push(i);});
+  });
+  var matched=[],mismatch=[],only2b=[];
+  twoBRows.forEach(function(b){
+    var g=normGstin(b.gstin),key=g+'|'+normInv(b.invNo);
+    var list=idx[key]||[];var bi=-1;for(var k=0;k<list.length;k++){if(!used[list[k]]){bi=list[k];break;}}
+    if(bi<0){only2b.push(b);return;}
+    used[bi]=1;var br=booksRows[bi],bt=bTax(br);
+    var di=b.igst-bt.igst,dc=b.cgst-bt.cgst,ds=b.sgst-bt.sgst,dt=b.taxable-br.taxable;
+    var ok=Math.abs(di)<=TAXTOL&&Math.abs(dc)<=TAXTOL&&Math.abs(ds)<=TAXTOL&&Math.abs(dt)<=TXVTOL;
+    var rec={twoB:b,books:br,d:{igst:di,cgst:dc,sgst:ds,tax:dt}};
+    (ok?matched:mismatch).push(rec);
+  });
+  var onlyBooks=booksRows.filter(function(r,i){return !used[i];});
+  report={matched:matched,mismatch:mismatch,only2b:only2b,onlyBooks:onlyBooks};
+  renderReport();markStep(4,true);
+  $('card5').classList.remove('hidden');$('card5').scrollIntoView({behavior:'smooth'});
+}
+function itc2b(r){return r.igst+r.cgst+r.sgst;}
+function itcB(r){var t=bTax(r);return t.igst+t.cgst+t.sgst;}
+function renderReport(){
+  var m=report;
+  var b2bTot=twoBRows.reduce(function(a,r){return a+itc2b(r);},0);
+  var bkTot=booksRows.reduce(function(a,r){return a+itcB(r);},0);
+  var matTot=m.matched.reduce(function(a,r){return a+itc2b(r.twoB);},0);
+  var mmTot=m.mismatch.reduce(function(a,r){return a+(itc2b(r.twoB)-itcB(r.books));},0);
+  var o2Tot=m.only2b.reduce(function(a,r){return a+itc2b(r);},0);
+  var obTot=m.onlyBooks.reduce(function(a,r){return a+itcB(r);},0);
+  $('repSub').innerHTML=twoBRows.length+' invoices in 2B · '+booksRows.length+' in books · ITC 2B '+inr(b2bTot)+' vs books '+inr(bkTot);
+  var g=$('statGrid');
+  g.innerHTML=[
+    tile('good','Matched',m.matched.length+' inv',inr(matTot)+' ITC'),
+    tile('warnv','Mismatch',m.mismatch.length+' inv','net '+inr(mmTot)),
+    tile('badv','Only in 2B',m.only2b.length+' inv',inr(o2Tot)+' ITC'),
+    tile('badv','Only in books',m.onlyBooks.length+' inv',inr(obTot)+' ITC')
+  ].join('');
+  var html='';
+  html+=secMismatch(m.mismatch);
+  html+=secList('Only in GSTR-2B (in 2B, not in your books)',m.only2b,'2b');
+  html+=secList('Only in books (booked ITC not in 2B)',m.onlyBooks,'bk');
+  html+=secList('Matched',m.matched.map(function(r){return r.twoB;}),'2b');
+  $('repTables').innerHTML=html;
+}
+function tile(cls,k,v,s){return '<div class="statc '+cls+'"><div class="v">'+esc(v.split(' ')[0])+'</div><div class="k">'+esc(k)+'</div><div class="s">'+esc(s)+'</div></div>';}
+function secMismatch(rows){
+  if(!rows.length)return sec('Mismatched (matched invoice, different tax)','0');
+  var body=rows.map(function(r){var b=r.twoB,k=r.books,t=bTax(k);
+    return '<tr><td class="mono">'+esc(b.gstin)+'</td><td>'+esc(b.party||k.party)+'</td><td>'+esc(b.invNo)+'</td>'
+      +cell2(b.taxable,k.taxable)+cell2(b.igst,t.igst)+cell2(b.cgst,t.cgst)+cell2(b.sgst,t.sgst)+'</tr>';}).join('');
+  return sec('Mismatched (matched invoice, different tax)',String(rows.length),
+    '<thead><tr><th>GSTIN</th><th>Party</th><th>Invoice</th><th class="r">Taxable 2B / books</th><th class="r">IGST</th><th class="r">CGST</th><th class="r">SGST</th></tr></thead><tbody>'+body+'</tbody>');
+}
+function cell2(a,b){var d=Math.abs(a-b)>0.5;return '<td class="r'+(d?' neg':'')+'">'+inr(a)+' / '+inr(b)+'</td>';}
+function secList(title,rows,kind){
+  if(!rows.length)return sec(title,'0');
+  var body=rows.map(function(r){
+    var tv=kind==='2b'?r.taxable:r.taxable, ig=kind==='2b'?r.igst:(r.igst+(r.rcmIgst||0)),cg=kind==='2b'?r.cgst:(r.cgst+(r.rcmCgst||0)),sg=kind==='2b'?r.sgst:(r.sgst+(r.rcmSgst||0));
+    var no=kind==='2b'?r.invNo:(r.voucherNo||r.supplierInvNo);
+    return '<tr><td class="mono">'+esc(r.gstin||'—')+'</td><td>'+esc(r.party||'')+(r.rcm?' <span class="pill rcm">RCM</span>':'')+'</td><td>'+esc(no||'')+'</td><td>'+esc(r.invDate||r.date||'')+'</td><td class="r">'+inr(tv)+'</td><td class="r">'+inr(ig)+'</td><td class="r">'+inr(cg)+'</td><td class="r">'+inr(sg)+'</td></tr>';
+  }).join('');
+  return sec(title,String(rows.length),'<thead><tr><th>GSTIN</th><th>Party</th><th>Invoice</th><th>Date</th><th class="r">Taxable</th><th class="r">IGST</th><th class="r">CGST</th><th class="r">SGST</th></tr></thead><tbody>'+body+'</tbody>');
+}
+function sec(title,count,tbl){
+  return '<div class="repsec"><h3>'+esc(title)+' <span class="rc">'+count+'</span></h3>'+(tbl?'<div class="tblwrap"><table class="mtx">'+tbl+'</table></div>':'<div class="empty">None.</div>')+'</div>';
+}
+
+/* ============================ excel export ============================ */
+function exportXlsx(){
+  if(!report||typeof ExcelJS==='undefined'){alert('Report or Excel library not ready.');return;}
+  var wb=new ExcelJS.Workbook();
+  function sheet(name,cols,rows){var ws=wb.addWorksheet(name);ws.columns=cols;rows.forEach(function(r){ws.addRow(r);});ws.getRow(1).font={bold:true};}
+  sheet('Summary',[{header:'Category',key:'c',width:26},{header:'Invoices',key:'n',width:12},{header:'ITC',key:'i',width:18}],[
+    {c:'GSTR-2B total',n:twoBRows.length,i:twoBRows.reduce(function(a,r){return a+itc2b(r);},0)},
+    {c:'Books total',n:booksRows.length,i:booksRows.reduce(function(a,r){return a+itcB(r);},0)},
+    {c:'Matched',n:report.matched.length,i:report.matched.reduce(function(a,r){return a+itc2b(r.twoB);},0)},
+    {c:'Mismatch',n:report.mismatch.length,i:report.mismatch.reduce(function(a,r){return a+(itc2b(r.twoB)-itcB(r.books));},0)},
+    {c:'Only in 2B',n:report.only2b.length,i:report.only2b.reduce(function(a,r){return a+itc2b(r);},0)},
+    {c:'Only in books',n:report.onlyBooks.length,i:report.onlyBooks.reduce(function(a,r){return a+itcB(r);},0)}
+  ]);
+  var C2=[{header:'GSTIN',key:'g',width:20},{header:'Party',key:'p',width:30},{header:'Invoice',key:'no',width:18},{header:'Date',key:'d',width:12},{header:'Taxable',key:'tx',width:14},{header:'IGST',key:'i',width:12},{header:'CGST',key:'c',width:12},{header:'SGST',key:'s',width:12},{header:'RCM',key:'r',width:7}];
+  function r2b(r){return {g:r.gstin,p:r.party,no:r.invNo,d:r.invDate,tx:r.taxable,i:r.igst,c:r.cgst,s:r.sgst,r:r.rcm?'Y':''};}
+  function rbk(r){var t=bTax(r);return {g:r.gstin,p:r.party,no:r.voucherNo||r.supplierInvNo,d:r.date,tx:r.taxable,i:t.igst,c:t.cgst,s:t.sgst,r:r.rcm?'Y':''};}
+  sheet('Matched',C2,report.matched.map(function(r){return r2b(r.twoB);}));
+  var MM=[{header:'GSTIN',key:'g',width:20},{header:'Party',key:'p',width:28},{header:'Invoice',key:'no',width:16},{header:'Taxable 2B',key:'t2',width:13},{header:'Taxable books',key:'tb',width:14},{header:'IGST 2B',key:'i2',width:11},{header:'IGST books',key:'ib',width:12},{header:'CGST 2B',key:'c2',width:11},{header:'CGST books',key:'cb',width:12},{header:'SGST 2B',key:'s2',width:11},{header:'SGST books',key:'sb',width:12}];
+  sheet('Mismatch',MM,report.mismatch.map(function(r){var b=r.twoB,t=bTax(r.books);return {g:b.gstin,p:b.party||r.books.party,no:b.invNo,t2:b.taxable,tb:r.books.taxable,i2:b.igst,ib:t.igst,c2:b.cgst,cb:t.cgst,s2:b.sgst,sb:t.sgst};}));
+  sheet('Only in 2B',C2,report.only2b.map(r2b));
+  sheet('Only in books',C2,report.onlyBooks.map(rbk));
+  wb.xlsx.writeBuffer().then(function(buf){dl('itc-reconciliation.xlsx',new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));});
+}
+
+/* ============================ utils ============================ */
+function inr(n){n=Math.round((Number(n)||0)*100)/100;return n.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});}
+addEndpoint('http://localhost:9000');
+(function(){var t=new Date(),y=t.getMonth()>=3?t.getFullYear():t.getFullYear()-1;$('fromDate').value=y+'-04-01';$('toDate').value=t.toISOString().slice(0,10);})();
+checkConn();
+</script>
+</body>
+</html>
