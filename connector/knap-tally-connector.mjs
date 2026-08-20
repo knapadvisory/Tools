@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.41';
+const VERSION = '4.42';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2726,7 +2726,12 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
     const fromKey = from.getUTCFullYear() * 10000 + (from.getUTCMonth() + 1) * 100 + from.getUTCDate();
     const toKey = to.getUTCFullYear() * 10000 + (to.getUTCMonth() + 1) * 100 + to.getUTCDate();
     const rows = [];
-    const seen = new Set(), seenSig = new Set();
+    // GUID-only dedup: a numbered-voucher signature guard would wrongly drop
+    // distinct purchases from different suppliers that share an invoice/voucher
+    // number on the same day (common — many vendors number invoices 1, 100…),
+    // losing real ITC. The windowed ramp reads each date range once, so GUID
+    // dedup is sufficient.
+    const seen = new Set();
     dcProgress.phase = `ITC register — vouchers ${from.toISOString().slice(0, 10)} → ${to.toISOString().slice(0, 10)}…`;
     await readVouchersRamp(url, from, to, (xml) => {
       for (const block of xml.match(/<VOUCHER[\s>][\s\S]*?<\/VOUCHER>/gi) || []) {
@@ -2737,8 +2742,7 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
         if (seen.has(key)) continue; seen.add(key);
         const dk = dateKey(tag(block, 'DATE'));
         if (dk < fromKey || dk > toKey) continue;
-        const vno = tag(block, 'VOUCHERNUMBER'), vtype = tag(block, 'VOUCHERTYPENAME');
-        if (vno) { const vs = `${vtype}|${tag(block, 'DATE')}|${vno}`; if (seenSig.has(vs)) continue; seenSig.add(vs); }
+        const vno = tag(block, 'VOUCHERNUMBER');
         const party = tag(block, 'PARTYLEDGERNAME') || '';
         const entryBlocks = block.match(/<ALLLEDGERENTRIES\.LIST>[\s\S]*?<\/ALLLEDGERENTRIES\.LIST>/gi) || block.match(/<LEDGERENTRIES\.LIST>[\s\S]*?<\/LEDGERENTRIES\.LIST>/gi) || [];
         const tax = { igst: 0, cgst: 0, sgst: 0, rcm_igst: 0, rcm_cgst: 0, rcm_sgst: 0 };
