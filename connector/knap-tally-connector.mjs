@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.46';
+const VERSION = '4.47';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2818,6 +2818,43 @@ async function readProfitabilityForCompany(url, company, asOn) {
   } finally { state.settings.company = saved; }
 }
 
+// "Prepare P&L" — every P&L-relevant ledger with its closing amount and a
+// suggested classification, so the dashboard can lay them out for the reviewer
+// to confirm/re-tag. Reads the same non-freezing group leaves the P&L rail uses,
+// plus Stock-in-hand (opening/closing stock lives outside the P&L groups).
+const PL_LEDGER_GROUPS = [
+  { group: 'Sales Accounts', suggest: 'sales' },
+  { group: 'Direct Incomes', suggest: 'income' },
+  { group: 'Indirect Incomes', suggest: 'income' },
+  { group: 'Purchase Accounts', suggest: 'purchase' },
+  { group: 'Direct Expenses', suggest: 'direct_expense' },
+  { group: 'Indirect Expenses', suggest: 'indirect_expense' },
+  { group: 'Stock-in-hand', suggest: 'closing_stock' },
+];
+async function readPLLedgers(url, company, asOn) {
+  const saved = state.settings.company; state.settings.company = company || '';
+  try {
+    dcProgress.phase = `P&L ledgers — as on ${asOn.toISOString().slice(0, 10)}…`;
+    const groupByNorm = await groupTreeByNorm(url);
+    const seen = new Set();
+    const ledgers = [];
+    for (const { group, suggest } of PL_LEDGER_GROUPS) {
+      dcProgress.sub = group;
+      const { leaves } = await readGroupLeaves(url, group, asOn, groupByNorm);
+      for (const lf of leaves) {
+        const k = norm(lf.name);
+        if (seen.has(k)) continue; seen.add(k);
+        if (Math.abs(lf.balanceDr) < 0.005) continue;
+        // balanceDr is Dr-positive: expenses/purchase/stock positive, income/sales negative.
+        ledgers.push({ name: lf.name, group, suggest, amountDr: r2(lf.balanceDr), amount: r2(Math.abs(lf.balanceDr)) });
+      }
+    }
+    dcProgress.sub = '';
+    ledgers.sort((a, b) => b.amount - a.amount);
+    return { ledgers };
+  } finally { state.settings.company = saved; }
+}
+
 // ===========================================================================
 // AGEING & BILL-WISE (FIFO)  (page reports)
 // ---------------------------------------------------------------------------
@@ -4089,6 +4126,25 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && url.pathname === '/api/reco-progress') {
       json(res, 200, recoProgress);
+      return;
+    }
+
+    // "Prepare P&L" — list every P&L-relevant ledger with its amount + a
+    // suggested classification, for the dashboard's build-P&L tool.
+    if (req.method === 'POST' && url.pathname === '/api/pl/ledgers') {
+      if (dcProgress.active) { json(res, 409, { ok: false, error: 'A read is already running.' }); return; }
+      const body = JSON.parse(await readBody(req));
+      const asOn = body.asOn ? tallyDateOf(String(body.asOn).replace(/-/g, '')) : new Date();
+      if (!asOn) { json(res, 400, { ok: false, error: 'Bad asOn date.' }); return; }
+      dcCancel = false; dcProgress.active = true; dcProgress.startedAt = Date.now();
+      try {
+        const out = await readPLLedgers(String(body.url || state.settings.tallyUrl), String(body.company || ''), asOn);
+        dcProgress.active = false;
+        json(res, 200, { ok: true, version: VERSION, asOn: asOn.toISOString().slice(0, 10), ledgers: out.ledgers });
+      } catch (e) {
+        dcProgress.active = false;
+        json(res, 502, { ok: false, error: 'Could not read Tally: ' + String((e && e.message) || e) });
+      }
       return;
     }
 
