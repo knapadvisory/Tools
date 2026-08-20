@@ -514,16 +514,21 @@ function parse2bJson(j){
   var d=top.docdata||(j&&j.docdata)||top;
   var regn=String(top.gstin||j.gstin||'').toUpperCase();
   var period=String(top.rtnprd||top.fp||'').trim();
-  function pushInv(ctin,trdnm,inv,sign,isCN){
+  function pushInv(ctin,trdnm,inv,sign,isCN,isAmend){
     var items=inv.items||inv.itms||[];var ig=0,cg=0,sg=0,tx=0;
     if(items.length){items.forEach(function(it){var o=it.itm_det||it;ig+=num(o.igst);cg+=num(o.cgst);sg+=num(o.sgst);tx+=num(o.txval);});}
     else{ig=num(inv.igst);cg=num(inv.cgst);sg=num(inv.sgst);tx=num(inv.txval);}
     var itcavl=String(inv.itcavl||inv.itc_avl||(items[0]&&(items[0].itc_avl||items[0].itcavl))||'').toUpperCase();
     var rsn=String(inv.rsn||(items[0]&&items[0].rsn)||'').trim();
-    out.push({regn:regn,period:period,gstin:String(ctin||'').toUpperCase(),party:trdnm||'',invNo:String(inv.inum||inv.nt_num||'').trim(),invDate:inv.dt||inv.nt_dt||'',invoiceValue:num(inv.val),taxable:sign*tx,igst:sign*ig,cgst:sign*cg,sgst:sign*sg,rcm:(String(inv.rev||inv.rchrg||'').toUpperCase()==='Y'),isCN:!!isCN,itcBlocked:(itcavl==='N'),rsn:rsn});
+    out.push({regn:regn,period:period,gstin:String(ctin||'').toUpperCase(),party:trdnm||'',invNo:String(inv.inum||inv.nt_num||'').trim(),invDate:inv.dt||inv.nt_dt||'',invoiceValue:num(inv.val),taxable:sign*tx,igst:sign*ig,cgst:sign*cg,sgst:sign*sg,rcm:(String(inv.rev||inv.rchrg||'').toUpperCase()==='Y'),isCN:!!isCN,isAmend:!!isAmend,itcBlocked:(itcavl==='N'),rsn:rsn});
   }
-  ['b2b','b2ba'].forEach(function(k){(d[k]||[]).forEach(function(s){(s.inv||[]).forEach(function(inv){pushInv(s.ctin,s.trdnm,inv,1,false);});});});
-  ['cdnr','cdnra'].forEach(function(k){(d[k]||[]).forEach(function(s){(s.nt||[]).forEach(function(nt){pushInv(s.ctin,s.trdnm,nt,(String(nt.ntty||'').toUpperCase()==='C'?-1:1),true);});});});
+  // b2ba / cdnra are the AMENDMENT tables — the supplier revised a document
+  // already reported. Flag them so a revised invoice isn't mistaken for a plain
+  // mismatch; the reconciliation uses the amended (latest) figures.
+  (d.b2b||[]).forEach(function(s){(s.inv||[]).forEach(function(inv){pushInv(s.ctin,s.trdnm,inv,1,false,false);});});
+  (d.b2ba||[]).forEach(function(s){(s.inv||[]).forEach(function(inv){pushInv(s.ctin,s.trdnm,inv,1,false,true);});});
+  (d.cdnr||[]).forEach(function(s){(s.nt||[]).forEach(function(nt){pushInv(s.ctin,s.trdnm,nt,(String(nt.ntty||'').toUpperCase()==='C'?-1:1),true,false);});});
+  (d.cdnra||[]).forEach(function(s){(s.nt||[]).forEach(function(nt){pushInv(s.ctin,s.trdnm,nt,(String(nt.ntty||'').toUpperCase()==='C'?-1:1),true,true);});});
   return out;
 }
 function parseCsv(text){
@@ -578,6 +583,10 @@ function ymd(dt){var s=String(dt||'').trim();if(!s)return null;var m;
   if(m=s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/))return {y:+m[3],mo:+m[2]};
   return null;}
 function periodOf(dt){var d=ymd(dt);return d?(('0'+d.mo).slice(-2)+d.y):'';}
+// A 'MMYYYY' return period → a sortable YYYYMM number (0 when unparseable).
+function ymNumOfPeriod(p){p=String(p||'').replace(/\D/g,'');if(p.length!==6)return 0;var mm=+p.slice(0,2),yy=+p.slice(2);return (mm>=1&&mm<=12)?(yy*100+mm):0;}
+// A YYYYMM number → "Mon YYYY" for messages.
+function fmtYM(n){if(!n)return '?';var yy=Math.floor(n/100),mm=n%100;return (MONTHS[mm-1]||'?')+' '+yy;}
 function monthGap(a,b){var A=ymd(a),B=ymd(b);if(!A||!B)return '';return (A.y*12+A.mo)-(B.y*12+B.mo);}
 function bGst(r){var t=bTax(r);return r2(t.igst+t.cgst+t.sgst);}
 var MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -631,6 +640,7 @@ function buildRec(b,br){
     // are filterable in Excel without reading the Note.
     rec.remarks=tag?('not booked — '+tag):'not booked in tally';rec._cat='only2b';
     rec.note=(b.isCN?'Credit note ':'')+'In GSTR-2B but not found in your books'+(cov?(' — '+cov):' — this document does not appear against any of the selected input-GST ledgers for the period read.');
+    applyAmended(rec,b);
     applyItcBlocked(rec,b);
     return rec;
   }
@@ -674,6 +684,7 @@ function buildRec(b,br){
     rec.remarks='booked - amount mismatch 🚩 wrong registration';rec._cat='mismatch';
     rec.note='🚩 BOOKED UNDER THE WRONG REGISTRATION: this document belongs to '+b.regn+', but the matching voucher '+rec.vchBk+' is booked under '+ownReg+' — claim the ITC in the correct registration (the credit sits in the wrong GSTIN).';
   }
+  applyAmended(rec,b);
   applyItcBlocked(rec,b);
   return rec;
 }
@@ -681,6 +692,13 @@ function applyItcBlocked(rec,b){
   if(!b||!b.itcBlocked)return;
   rec.remarks+=' [ITC blocked]';
   rec.note+=' [ITC blocked in 2B'+(b.rsn?' — reason '+b.rsn:'')+': this credit is flagged not available (Sec 17(5) / POS), so do not claim it.]';
+}
+// b2ba / cdnra: the supplier revised a document already reported in an earlier
+// 2B. Mark it so a revised invoice reads as an amendment, not a plain mismatch.
+function applyAmended(rec,b){
+  if(!b||!b.isAmend)return;
+  rec.remarks+=' · amended';
+  rec.note+=' [Amendment in 2B'+(b.isCN?' (credit/debit note)':'')+': the supplier revised this document in a later return — reconcile against these revised figures, not the original.]';
 }
 function reconcile(){
   setCoverage();
@@ -722,17 +740,29 @@ function reconcile(){
     var rec=buildRec(b,br);
     (b.isCN?cn:recs).push(rec);
   });
+  // Latest 2B return period loaded — a books entry dated in or after it can't be
+  // confirmed yet (the 2B where it would land isn't in hand). A vendor reporting
+  // an invoice a cycle or two late is normal, not an ITC risk, so those aren't
+  // flagged as "not in 2B" — they're softened to "expected in a later 2B".
+  var maxTwoBYM=0;
+  twoBRows.forEach(function(b){var n=ymNumOfPeriod(b.period||periodOf(b.invDate));if(n>maxTwoBYM)maxTwoBYM=n;});
   // Books booked but not in 2B → their own records (2B side blank).
   booksRows.forEach(function(r,i){
     if(used[i])return;
     var bt=bTax(r);
+    var d=ymd(r.date),bookYM=d?(d.y*100+d.mo):0;
+    var later=!!(bookYM&&maxTwoBYM&&bookYM>=maxTwoBYM);
+    var ref=r.voucherNo||r.supplierInvNo||'';
     recs.push({regn2b:'',gstin2b:'',party2b:'',docNo:'',docDate:'',invVal:'',tax2b:'',igst2b:'',cgst2b:'',sgst2b:'',gst2b:'',rcm:r.rcm?'Yes':'',period:periodOf(r.date),
-      gstinChk:'—',nameChk:'—',taxChk:'',gstChk:'',vchChk:'—',spill:'',remarks:'booked, but not in 2B',
-      regnBk:r._ownGstin||(chosen&&chosen.gstin)||'',gstinBk:r.gstin||'',dateBk:r.date||'',partyBk:r.party||'',vchBk:r.voucherNo||r.supplierInvNo||'',
+      gstinChk:'—',nameChk:'—',taxChk:'',gstChk:'',vchChk:'—',spill:'',remarks:later?'booked — expected in a later 2B':'booked, but not in 2B',
+      regnBk:r._ownGstin||(chosen&&chosen.gstin)||'',gstinBk:r.gstin||'',dateBk:r.date||'',partyBk:r.party||'',vchBk:ref,
       igstBk:r2(bt.igst),cgstBk:r2(bt.cgst),sgstBk:r2(bt.sgst),gstBk:r2(bt.igst+bt.cgst+bt.sgst),taxBk:r2(r.taxable),
-      note:'Booked in your books ('+(r.voucherNo||r.supplierInvNo||'')+') but not found in the 2B uploaded — the supplier may not have filed it, or it is in a different period.',_cat:'onlybk',_bk:r,_isCN:false});
+      note:later
+        ? ('Booked in your books ('+ref+') dated '+(r.date||'?')+', in/after the latest 2B period you loaded ('+fmtYM(maxTwoBYM)+') — the supplier most likely reports it in a later GSTR-1, so it should surface in a later month’s 2B. Normal filing lag, not an ITC loss — only revisit if it is still missing near the Sec 16(4) cut-off (30 Nov after the FY).')
+        : ('Booked in your books ('+ref+') but not found in the 2B uploaded — the supplier may not have filed it, or it is in a different period.'),
+      _cat:'onlybk',_bk:r,_timingLater:later,_isCN:false});
   });
-  report={recs:recs,cn:cn};
+  report={recs:recs,cn:cn,maxTwoBYM:maxTwoBYM};
   renderReport();markStep(4,true);
   $('card5').classList.remove('hidden');$('card5').scrollIntoView({behavior:'smooth'});
 }
@@ -761,6 +791,8 @@ function renderReport(){
   var pi=by.only2b.filter(function(r){return r._periodIssue;}).length;
   if(pi)html+='<div class="repsec"><div class="conn-banner off" style="margin:0"><span class="cdot"></span><div><div class="ctitle">'+pi+' of the “not in books” documents fall outside the period you fetched</div><div class="csub">Their invoice dates are before/after '+esc(COV.from)+' → '+esc(COV.to)+', or in a month Tally returned no vouchers for (shown in red). Widen the fetch — Step&nbsp;2 dates, and Alt+F2 in Tally to open the right period/company — then reconcile again. Only the rest are genuinely unrecorded. In the Excel these are tagged in <b>remarks</b> (“not booked — before/after fetched period”, or “month not fetched”) — filter on them; the full reason is in each row’s Note.</div></div></div></div>';
   html+=secOnly('In GSTR-2B but NOT in your books',by.only2b,'2b');
+  var laterN=by.onlybk.filter(function(r){return r._timingLater;}).length;
+  if(laterN)html+='<div class="repsec"><div class="conn-banner wait" style="margin:0"><span class="cdot"></span><div><div class="ctitle">'+laterN+' of these are just waiting on the vendor’s next filing</div><div class="csub">They’re booked in/after the latest 2B period you loaded ('+esc(fmtYM(report.maxTwoBYM))+'), so the 2B where they’d appear isn’t in hand yet. A vendor filing GSTR-1 a cycle late is normal — these are tagged <b>“booked — expected in a later 2B”</b>, not treated as errors. Only revisit any that are still missing near the Sec&nbsp;16(4) cut-off (30 Nov after the FY).</div></div></div></div>';
   html+=secOnly('Booked in your books but NOT in 2B',by.onlybk,'bk');
   if(cn.length)html+=secOnly('Credit notes in 2B',cn.map(function(r){return r;}),'2b');
   html+=secBooked('Booked (matched)',by.matched);
@@ -832,7 +864,9 @@ function exportXlsx(){
                +'IF(ABS(Q'+rn+')>'+GSTTOL+',"booked - amount mismatch",'
                +'IF(ABS(P'+rn+')>MAX(10,ABS(G'+rn+')*0.005),"probable match — verify","booked")))';
         var blocked=!!(r._b&&r._b.itcBlocked);
-        row.getCell(20).value={formula:reg+(blocked?'&" [ITC blocked]"':''),result:r.remarks};// T remarks
+        var amended=!!(r._b&&r._b.isAmend);
+        // Keep the suffix order identical to buildRec: base → · amended → [ITC blocked].
+        row.getCell(20).value={formula:reg+(amended?'&" · amended"':'')+(blocked?'&" [ITC blocked]"':''),result:r.remarks};// T remarks
       }
       // ---- band tints on the body
       for(var ci=1;ci<=RECO_HDR.length;ci++){row.getCell(ci).fill={type:'pattern',pattern:'solid',fgColor:{argb:bandOf(ci).cell}};}
