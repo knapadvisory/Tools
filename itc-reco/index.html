@@ -296,16 +296,16 @@ function renderCompanies(){
     var box=document.createElement('div');box.className='cmp-ep';
     var head='<div class="eph"><span class="u">'+esc(ep.url)+'</span><span class="st '+(ep.ok?'ok':'bad')+'">'+(ep.ok?((ep.companies||[]).length+' open'):('✕ '+esc(ep.error||'unreachable')))+'</span></div>';
     var rows='';(ep.companies||[]).forEach(function(c){
-      var name=(typeof c==='string')?c:c.name;var gst=(c.gstins||[]).join(', ');
-      rows+='<label class="cmp"><input type="radio" name="cmp" onchange="pickCompany(this)" data-url="'+esc(ep.url)+'" data-name="'+esc(name)+'">'
+      var name=(typeof c==='string')?c:c.name;var gstins=(typeof c==='string')?[]:(c.gstins||[]);var gst=gstins.join(', ');
+      rows+='<label class="cmp"><input type="radio" name="cmp" onchange="pickCompany(this)" data-url="'+esc(ep.url)+'" data-name="'+esc(name)+'" data-gstin="'+esc(gstins[0]||'')+'">'
         +'<span><span class="nm">'+esc(name)+'</span>'+(gst?' <span class="gs">'+esc(gst)+'</span>':'')+'</span></label>';
     });
     box.innerHTML=head+(rows||'<div class="empty">No company open on this port.</div>');
     wrap.appendChild(box);
   });
 }
-var chosen=null; // {url, company}
-function pickCompany(r){chosen={url:r.getAttribute('data-url'),company:r.getAttribute('data-name')};loadLedgers();}
+var chosen=null; // {url, company, gstin}
+function pickCompany(r){chosen={url:r.getAttribute('data-url'),company:r.getAttribute('data-name'),gstin:r.getAttribute('data-gstin')||''};loadLedgers();}
 
 /* ============================ step 2: ledgers ============================ */
 var ledgers=[]; // [{name,parent}]
@@ -463,7 +463,9 @@ function parse2bJson(j){
     var items=inv.items||inv.itms||[];var ig=0,cg=0,sg=0,tx=0;
     if(items.length){items.forEach(function(it){var o=it.itm_det||it;ig+=num(o.igst);cg+=num(o.cgst);sg+=num(o.sgst);tx+=num(o.txval);});}
     else{ig=num(inv.igst);cg=num(inv.cgst);sg=num(inv.sgst);tx=num(inv.txval);}
-    out.push({regn:regn,period:period,gstin:String(ctin||'').toUpperCase(),party:trdnm||'',invNo:String(inv.inum||inv.nt_num||'').trim(),invDate:inv.dt||inv.nt_dt||'',invoiceValue:num(inv.val),taxable:sign*tx,igst:sign*ig,cgst:sign*cg,sgst:sign*sg,rcm:(String(inv.rev||inv.rchrg||'').toUpperCase()==='Y'),isCN:!!isCN});
+    var itcavl=String(inv.itcavl||inv.itc_avl||(items[0]&&(items[0].itc_avl||items[0].itcavl))||'').toUpperCase();
+    var rsn=String(inv.rsn||(items[0]&&items[0].rsn)||'').trim();
+    out.push({regn:regn,period:period,gstin:String(ctin||'').toUpperCase(),party:trdnm||'',invNo:String(inv.inum||inv.nt_num||'').trim(),invDate:inv.dt||inv.nt_dt||'',invoiceValue:num(inv.val),taxable:sign*tx,igst:sign*ig,cgst:sign*cg,sgst:sign*sg,rcm:(String(inv.rev||inv.rchrg||'').toUpperCase()==='Y'),isCN:!!isCN,itcBlocked:(itcavl==='N'),rsn:rsn});
   }
   ['b2b','b2ba'].forEach(function(k){(d[k]||[]).forEach(function(s){(s.inv||[]).forEach(function(inv){pushInv(s.ctin,s.trdnm,inv,1,false);});});});
   ['cdnr','cdnra'].forEach(function(k){(d[k]||[]).forEach(function(s){(s.nt||[]).forEach(function(nt){pushInv(s.ctin,s.trdnm,nt,(String(nt.ntty||'').toUpperCase()==='C'?-1:1),true);});});});
@@ -479,7 +481,9 @@ function parseCsv(text){
     var g=String(col(row,['gstin','gstn','ctin'])||'').toUpperCase().trim();
     var invNo=String(col(row,['invoiceno','invno','invoicenumber','inum'])||'').trim();
     if(!g&&!invNo)continue;
-    out.push({regn:'',period:'',gstin:g,party:col(row,['party','partyname','tradename','trdnm'])||'',invNo:invNo,invDate:col(row,['invoicedate','date','dt'])||'',invoiceValue:num(col(row,['invoicevalue','val','value'])),taxable:num(col(row,['taxable','taxablevalue','txval'])),igst:num(col(row,['igst'])),cgst:num(col(row,['cgst'])),sgst:num(col(row,['sgst'])),rcm:/^y|^true|^1/i.test(String(col(row,['rcm','reversecharge','rev','rchrg'])||'')),isCN:false});
+    var av=String(col(row,['itcavl','itcavailable'])||'').toUpperCase();
+    var blk=/^n/.test(av)||/^y|^true|^1/i.test(String(col(row,['itcblocked','blocked'])||''));
+    out.push({regn:'',period:'',gstin:g,party:col(row,['party','partyname','tradename','trdnm'])||'',invNo:invNo,invDate:col(row,['invoicedate','date','dt'])||'',invoiceValue:num(col(row,['invoicevalue','val','value'])),taxable:num(col(row,['taxable','taxablevalue','txval'])),igst:num(col(row,['igst'])),cgst:num(col(row,['cgst'])),sgst:num(col(row,['sgst'])),rcm:/^y|^true|^1/i.test(String(col(row,['rcm','reversecharge','rev','rchrg'])||'')),isCN:false,itcBlocked:blk,rsn:String(col(row,['rsn','reason'])||'')});
   }
   return out;
 }
@@ -556,6 +560,7 @@ function buildRec(b,br){
     var cov=coverageNote(b.invDate);
     rec._periodIssue=!!cov;
     rec.note=(b.isCN?'Credit note ':'')+'In GSTR-2B but not found in your books'+(cov?(' — '+cov):' — this document does not appear against any of the selected input-GST ledgers for the period read.');
+    applyItcBlocked(rec,b);
     return rec;
   }
   var bt=bTax(br);
@@ -590,7 +595,20 @@ function buildRec(b,br){
   if(typeof rec.spill==='number'&&rec.spill!==0){
     rec.note+=' Booked '+Math.abs(rec.spill)+' month(s) '+(rec.spill>0?'earlier':'later')+' than the 2B period.';
   }
+  // Wrong registration: the invoice matched, but it's booked under a different
+  // one of your GSTINs than the 2B it appears in.
+  rec.regnBk=(chosen&&chosen.gstin)?chosen.gstin:rec.regnBk;
+  if(b.regn&&chosen&&chosen.gstin&&normGstin(b.regn)!==normGstin(chosen.gstin)){
+    rec.remarks='booked - amount mismatch 🚩 wrong registration';rec._cat='mismatch';
+    rec.note='🚩 BOOKED UNDER THE WRONG REGISTRATION: this document belongs to '+b.regn+', but the matching voucher '+rec.vchBk+' is booked under '+chosen.gstin+' — claim the ITC in the correct registration (the credit sits in the wrong GSTIN).';
+  }
+  applyItcBlocked(rec,b);
   return rec;
+}
+function applyItcBlocked(rec,b){
+  if(!b||!b.itcBlocked)return;
+  rec.remarks+=' [ITC blocked]';
+  rec.note+=' [ITC blocked in 2B'+(b.rsn?' — reason '+b.rsn:'')+': this credit is flagged not available (Sec 17(5) / POS), so do not claim it.]';
 }
 function reconcile(){
   setCoverage();
@@ -638,7 +656,7 @@ function reconcile(){
     var bt=bTax(r);
     recs.push({regn2b:'',gstin2b:'',party2b:'',docNo:'',docDate:'',invVal:'',tax2b:'',igst2b:'',cgst2b:'',sgst2b:'',gst2b:'',rcm:r.rcm?'Yes':'',period:periodOf(r.date),
       gstinChk:'—',nameChk:'—',taxChk:'',gstChk:'',vchChk:'—',spill:'',remarks:'booked, but not in 2B',
-      regnBk:'',gstinBk:r.gstin||'',dateBk:r.date||'',partyBk:r.party||'',vchBk:r.voucherNo||r.supplierInvNo||'',
+      regnBk:(chosen&&chosen.gstin)||'',gstinBk:r.gstin||'',dateBk:r.date||'',partyBk:r.party||'',vchBk:r.voucherNo||r.supplierInvNo||'',
       igstBk:r2(bt.igst),cgstBk:r2(bt.cgst),sgstBk:r2(bt.sgst),gstBk:r2(bt.igst+bt.cgst+bt.sgst),taxBk:r2(r.taxable),
       note:'Booked in your books ('+(r.voucherNo||r.supplierInvNo||'')+') but not found in the 2B uploaded — the supplier may not have filed it, or it is in a different period.',_cat:'onlybk',_bk:r,_isCN:false});
   });
@@ -654,7 +672,10 @@ function renderReport(){
   var by=groupBy(report.recs), cn=report.cn;
   var b2bTot=sumF(report.recs.filter(function(r){return r._cat!=='onlybk';}),function(r){return r.gst2b;});
   var bkTot=booksRows.reduce(function(a,r){return a+bGst(r);},0);
-  $('repSub').innerHTML=(report.recs.filter(function(r){return r._cat!=='onlybk';}).length)+' 2B docs · '+booksRows.length+' books invoices'+(cn.length?' · '+cn.length+' credit notes':'')+' · ITC 2B '+inr(b2bTot)+' vs books '+inr(bkTot);
+  var blocked=report.recs.concat(cn).filter(function(r){return String(r.remarks).indexOf('[ITC blocked]')>=0;}).length;
+  var wrongReg=report.recs.filter(function(r){return String(r.remarks).indexOf('wrong registration')>=0;}).length;
+  $('repSub').innerHTML=(report.recs.filter(function(r){return r._cat!=='onlybk';}).length)+' 2B docs · '+booksRows.length+' books invoices'+(cn.length?' · '+cn.length+' credit notes':'')+' · ITC 2B '+inr(b2bTot)+' vs books '+inr(bkTot)
+    +(wrongReg?' · <b style="color:var(--bad)">🚩 '+wrongReg+' wrong-registration</b>':'')+(blocked?' · <b style="color:var(--warn)">'+blocked+' ITC-blocked</b>':'');
   $('statGrid').innerHTML=[
     tile('good','Booked (matched)',by.matched.length,inr(sumF(by.matched,function(r){return r.gst2b;}))+' GST'),
     tile('warnv','Amount mismatch',by.mismatch.length,'GST diff '+inr(sumF(by.mismatch,function(r){return r.gstChk;}))),
