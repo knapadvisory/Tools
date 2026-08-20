@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.47';
+const VERSION = '4.48';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2855,6 +2855,34 @@ async function readPLLedgers(url, company, asOn) {
   } finally { state.settings.company = saved; }
 }
 
+// Party ledger statement: opening (as at `from`), every voucher leg on this
+// party between `from` and `to` (Dr-positive → invoices/debits, Cr → receipts/
+// credits), and the running closing. Powers the receivables/payables drill-down.
+async function readPartyStatement(url, company, party, from, to) {
+  const saved = state.settings.company; state.settings.company = company || '';
+  try {
+    const masters = parseLedgerMasters(await askTallyFast(url, LEDGER_MASTERS_REQUEST(), 180000));
+    // resolve the party name case-insensitively
+    const pname = Object.keys(masters).find((n) => norm(n) === norm(party)) || party;
+    const openingFY = r2((masters[pname] && masters[pname].openingDr) || 0);
+    const fyStart = fyStartOf(to);
+    const readFrom = fyStart < from ? fyStart : from;
+    const { moves } = await readAgeMovements(url, readFrom, to, new Set([pname]), { firstWin: 5, attemptMs: 90000 });
+    const all = (moves[pname] || []).slice().sort((a, b) => (a.date && b.date ? a.date - b.date : 0));
+    const fromKey = from.getTime(), toKey = to.getTime();
+    let opening = openingFY, entries = [], closing = openingFY;
+    for (const m of all) {
+      const t = m.date ? m.date.getTime() : 0;
+      closing = r2(closing + m.dr);
+      if (t < fromKey) { opening = r2(opening + m.dr); continue; }
+      if (t > toKey) continue;
+      entries.push({ date: m.date ? m.date.toISOString().slice(0, 10) : null, ref: m.ref, vtype: m.vtype || '',
+        debit: m.dr > 0 ? r2(m.dr) : 0, credit: m.dr < 0 ? r2(-m.dr) : 0 });
+    }
+    return { party: pname, opening, entries, closing };
+  } finally { state.settings.company = saved; }
+}
+
 // ===========================================================================
 // AGEING & BILL-WISE (FIFO)  (page reports)
 // ---------------------------------------------------------------------------
@@ -4141,6 +4169,27 @@ const server = http.createServer(async (req, res) => {
         const out = await readPLLedgers(String(body.url || state.settings.tallyUrl), String(body.company || ''), asOn);
         dcProgress.active = false;
         json(res, 200, { ok: true, version: VERSION, asOn: asOn.toISOString().slice(0, 10), ledgers: out.ledgers });
+      } catch (e) {
+        dcProgress.active = false;
+        json(res, 502, { ok: false, error: 'Could not read Tally: ' + String((e && e.message) || e) });
+      }
+      return;
+    }
+
+    // Party ledger statement (receivables/payables drill-down).
+    if (req.method === 'POST' && url.pathname === '/api/party/statement') {
+      if (dcProgress.active) { json(res, 409, { ok: false, error: 'A read is already running.' }); return; }
+      const body = JSON.parse(await readBody(req));
+      const party = String(body.party || '').trim();
+      const from = tallyDateOf(String(body.from || '').replace(/-/g, ''));
+      const to = tallyDateOf(String(body.to || '').replace(/-/g, ''));
+      if (!party) { json(res, 400, { ok: false, error: 'party is required.' }); return; }
+      if (!from || !to || from > to) { json(res, 400, { ok: false, error: 'Bad period.' }); return; }
+      dcCancel = false; dcProgress.active = true; dcProgress.startedAt = Date.now();
+      try {
+        const st = await readPartyStatement(String(body.url || state.settings.tallyUrl), String(body.company || ''), party, from, to);
+        dcProgress.active = false;
+        json(res, 200, { ok: true, version: VERSION, from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10), ...st });
       } catch (e) {
         dcProgress.active = false;
         json(res, 502, { ok: false, error: 'Could not read Tally: ' + String((e && e.message) || e) });
