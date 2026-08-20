@@ -300,7 +300,7 @@ function renderCompanies(){
     var head='<div class="eph"><span class="u">'+esc(ep.url)+'</span><span class="st '+(ep.ok?'ok':'bad')+'">'+(ep.ok?((ep.companies||[]).length+' open'):('✕ '+esc(ep.error||'unreachable')))+'</span></div>';
     var rows='';(ep.companies||[]).forEach(function(c){
       var name=(typeof c==='string')?c:c.name;var gstins=(typeof c==='string')?[]:(c.gstins||[]);var gst=gstins.join(', ');
-      rows+='<label class="cmp"><input type="checkbox" class="cmpChk" onchange="toggleCompany()" data-url="'+esc(ep.url)+'" data-name="'+esc(name)+'" data-gstin="'+esc(gstins[0]||'')+'">'
+      rows+='<label class="cmp"><input type="checkbox" class="cmpChk" onchange="toggleCompany()" data-url="'+esc(ep.url)+'" data-name="'+esc(name)+'" data-gstin="'+esc(gstins[0]||'')+'" data-gstins="'+esc(gstins.join(','))+'">'
         +'<span><span class="nm">'+esc(name)+'</span>'+(gst?' <span class="gs">'+esc(gst)+'</span>':'')+'</span></label>';
     });
     box.innerHTML=head+(rows||'<div class="empty">No company open on this port.</div>');
@@ -312,7 +312,8 @@ var chosenList=[]; // [{url, company, gstin}]
 var chosen=null;   // first selected (compat)
 function toggleCompany(){
   chosenList=Array.prototype.map.call(document.querySelectorAll('.cmpChk:checked'),function(c){
-    return {url:c.getAttribute('data-url'),company:c.getAttribute('data-name'),gstin:c.getAttribute('data-gstin')||''};
+    return {url:c.getAttribute('data-url'),company:c.getAttribute('data-name'),gstin:c.getAttribute('data-gstin')||'',
+      gstins:(c.getAttribute('data-gstins')||'').split(',').map(function(s){return s.trim();}).filter(Boolean)};
   });
   chosen=chosenList[0]||null;
   var btn=$('btnPickCompanies');if(btn)btn.style.display=chosenList.length?'':'none';
@@ -441,8 +442,21 @@ function showBooks(j){
     +totalRow
     +booksRows.slice(0,300).map(function(r){return '<tr><td>'+esc(r.date||'—')+'</td><td>'+esc(r.voucherNo||'')+(r.supplierInvNo&&r.supplierInvNo!==r.voucherNo?' <span class="lp mono" style="color:var(--faint)">/ '+esc(r.supplierInvNo)+'</span>':'')+'</td><td>'+esc(r.party||'')+(r.rcm?' <span class="pill rcm">RCM</span>':'')+'</td><td class="mono">'+esc(r.gstin||'—')+'</td><td class="r">'+inr(r.taxable)+'</td><td class="r">'+inr(r.igst)+'</td><td class="r">'+inr(r.cgst)+'</td><td class="r">'+inr(r.sgst)+'</td><td class="r">'+inr((r.rcmIgst||0)+(r.rcmCgst||0)+(r.rcmSgst||0))+'</td></tr>';}).join('')
     +'</tbody>';
+  // Multi-registration health check: if a single picked company declares several
+  // GST registrations (one PAN, many state GSTINs) but the books split into fewer
+  // distinct registrations, Tally did not stamp the per-voucher registration
+  // (CMPGSTIN) — so everything collapsed into one bucket and per-GSTIN matching
+  // won't work. Surface it loudly rather than silently mis-reconciling.
+  var expReg={};chosenList.forEach(function(c){(c.gstins||[]).forEach(function(g){if(g)expReg[g.toUpperCase()]=1;});});
+  var expN=Object.keys(expReg).length,gotN=regKeys.filter(function(k){return k&&k!=='—';}).length;
+  var warn='';
+  if(chosenList.length===1&&expN>1&&gotN<expN){
+    warn='<div class="msg bad" style="margin-top:6px">⚠ This company has <b>'+expN+' GST registrations</b> ('+Object.keys(expReg).join(', ')+') but the fetched vouchers split into only <b>'+gotN+'</b>. Tally is not stamping each voucher with its own registration (CMPGSTIN), so per-GSTIN matching can’t work. Tell KNAP so the connector can read the registration a different way.</div>';
+  } else if(expN>1&&gotN>=expN){
+    warn='<div class="msg ok" style="margin-top:6px">✓ Per-voucher registration detected — books split across '+gotN+' registrations ('+regKeys.filter(function(k){return k&&k!=='—';}).join(', ')+'). Each will be matched within its own GSTIN.</div>';
+  }
   $('booksNote').innerHTML=(booksRows.length>300?'Showing first 300 of '+booksRows.length+' — the totals row and Download cover all. ':'')
-    +'Compare these totals with your Input IGST/CGST/SGST ledger <b>period movement</b> (closing − opening) to confirm the fetch is complete.';
+    +'Compare these totals with your Input IGST/CGST/SGST ledger <b>period movement</b> (closing − opening) to confirm the fetch is complete.'+warn;
 }
 function csvcell(s){s=String(s==null?'':s);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}
 function downloadBooks(){
