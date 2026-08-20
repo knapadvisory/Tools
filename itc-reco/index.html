@@ -599,6 +599,18 @@ function coverageNote(dt){
   if(!COV.set[ym])return '🛑 Tally returned no vouchers dated '+ml+' (the fetch covered '+COV.from+' → '+COV.to+') — check the period/company are open in Tally and re-fetch.';
   return '';
 }
+// Short, filterable tag for the remarks column so the period-coverage cases can
+// be told apart from genuinely-unrecorded documents in the Excel (the full
+// reason stays in the Note). '' = the document really is missing from books.
+function coverageTag(dt){
+  if(!COV)return '';
+  var d=ymd(dt);if(!d)return '';
+  var ym=d.y*100+d.mo;
+  if(COV.fromYM&&ym<COV.fromYM)return 'before fetched period';
+  if(COV.toYM&&ym>COV.toYM)return 'after fetched period';
+  if(!COV.set[ym])return 'month not fetched';
+  return '';
+}
 
 // Build the reference-style reconciliation record for a 2B doc `b` and its
 // matched books row `br` (or null when unmatched).
@@ -611,9 +623,13 @@ function buildRec(b,br){
     regnBk:'',gstinBk:'',dateBk:'',partyBk:'',vchBk:'',igstBk:'',cgstBk:'',sgstBk:'',gstBk:'',taxBk:'',
     note:'',_cat:'',_b:b,_bk:br,_isCN:!!b.isCN};
   if(!br){
-    rec.remarks='not booked in tally';rec._cat='only2b';
-    var cov=coverageNote(b.invDate);
+    var cov=coverageNote(b.invDate),tag=coverageTag(b.invDate);
     rec._periodIssue=!!cov;
+    // Distinguish, in the remarks column itself, a document that only looks
+    // missing because its date is outside the fetch window (or in a month Tally
+    // returned nothing for) from one that is genuinely unrecorded — so the two
+    // are filterable in Excel without reading the Note.
+    rec.remarks=tag?('not booked — '+tag):'not booked in tally';rec._cat='only2b';
     rec.note=(b.isCN?'Credit note ':'')+'In GSTR-2B but not found in your books'+(cov?(' — '+cov):' — this document does not appear against any of the selected input-GST ledgers for the period read.');
     applyItcBlocked(rec,b);
     return rec;
@@ -743,7 +759,7 @@ function renderReport(){
   html+=secMM('Amount mismatch — matched invoice, GST or split differs',by.mismatch);
   html+=secMM('Probable match — verify',by.probable);
   var pi=by.only2b.filter(function(r){return r._periodIssue;}).length;
-  if(pi)html+='<div class="repsec"><div class="conn-banner off" style="margin:0"><span class="cdot"></span><div><div class="ctitle">'+pi+' of the “not in books” documents fall outside the period you fetched</div><div class="csub">Their invoice dates are before/after '+esc(COV.from)+' → '+esc(COV.to)+', or in a month Tally returned no vouchers for (shown in red). Widen the fetch — Step&nbsp;2 dates, and Alt+F2 in Tally to open the right period/company — then reconcile again. Only the rest are genuinely unrecorded. Each row’s reason is in its Note (Excel).</div></div></div></div>';
+  if(pi)html+='<div class="repsec"><div class="conn-banner off" style="margin:0"><span class="cdot"></span><div><div class="ctitle">'+pi+' of the “not in books” documents fall outside the period you fetched</div><div class="csub">Their invoice dates are before/after '+esc(COV.from)+' → '+esc(COV.to)+', or in a month Tally returned no vouchers for (shown in red). Widen the fetch — Step&nbsp;2 dates, and Alt+F2 in Tally to open the right period/company — then reconcile again. Only the rest are genuinely unrecorded. In the Excel these are tagged in <b>remarks</b> (“not booked — before/after fetched period”, or “month not fetched”) — filter on them; the full reason is in each row’s Note.</div></div></div></div>';
   html+=secOnly('In GSTR-2B but NOT in your books',by.only2b,'2b');
   html+=secOnly('Booked in your books but NOT in 2B',by.onlybk,'bk');
   if(cn.length)html+=secOnly('Credit notes in 2B',cn.map(function(r){return r;}),'2b');
