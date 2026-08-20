@@ -159,7 +159,7 @@
   <!-- STEP 1 -->
   <div class="card" id="card1">
     <h2>1 · Connect to Tally</h2>
-    <div class="sub">Keep each company on the <b>Gateway of Tally</b> (not inside a report). Add a line per Tally port (9000, 9001…), then scan. <b>Tick all the registrations you want to reconcile</b> — books are pulled from each and matched within its own GSTIN.</div>
+    <div class="sub">Keep each company on the <b>Gateway of Tally</b> (not inside a report). Add a line per Tally port (9000, 9001…), then scan. <b>Tick all the companies you want to reconcile</b> — books are pulled from each and matched within its own GSTIN. If one company holds <b>several GST registrations</b> under one PAN (a shared Input-GST ledger with entries for all of them), just tick that one company — each voucher's own registration is read from Tally and split out automatically.</div>
     <div id="epList"></div>
     <div class="row" style="margin-top:10px">
       <button class="btn ghost sm" onclick="addEndpoint('')">+ Add port</button>
@@ -412,7 +412,12 @@ function fetchItc(){
     fetch(API+'/api/itc/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url:c.url,company:c.company,from:from,to:to,taxLedgers:sel})})
       .then(function(r){return r.json();}).then(function(j){
         if(!j.ok){errs.push((c.company||'company')+': '+(j.error||'error'));next();return;}
-        (j.rows||[]).forEach(function(row){row._ownGstin=c.gstin||'';row._company=c.company||'';booksRows.push(row);});
+        // Which of OUR registrations booked this voucher. For a company that
+        // holds several GST registrations under one PAN, each voucher carries
+        // its own registration (row.ownGstin from Tally's CMPGSTIN) and a shared
+        // Input-GST ledger mixes all of them — so the per-voucher value wins.
+        // Fall back to the picked company's GSTIN (separate-company setup).
+        (j.rows||[]).forEach(function(row){row._ownGstin=(row.ownGstin||c.gstin||'').toUpperCase();row._company=c.company||'';booksRows.push(row);});
         next();
       }).catch(function(e){errs.push((c.company||'company')+': '+e.message);next();});
   })();

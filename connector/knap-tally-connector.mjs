@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.42';
+const VERSION = '4.43';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -429,7 +429,8 @@ function dcVoucherRequest(from, to) {
     <TYPE>Voucher</TYPE>
     <FETCH>DATE</FETCH><FETCH>GUID</FETCH><FETCH>VOUCHERTYPENAME</FETCH><FETCH>VOUCHERNUMBER</FETCH>
     <FETCH>PARTYLEDGERNAME</FETCH><FETCH>ISCANCELLED</FETCH><FETCH>ISOPTIONAL</FETCH>
-    <FETCH>ALLLEDGERENTRIES.LIST</FETCH>
+    <FETCH>PARTYGSTIN</FETCH><FETCH>CMPGSTIN</FETCH><FETCH>GSTREGISTRATION</FETCH>
+    <FETCH>REFERENCE</FETCH><FETCH>ALLLEDGERENTRIES.LIST</FETCH>
    </COLLECTION>
   </TDLMESSAGE></TDL>
  </DESC></BODY>
@@ -2760,6 +2761,16 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
         if (!touchesTax) continue;                         // not an ITC voucher
         const m = masters[party] || {};
         const gstin = String(m.gstin || tag(block, 'PARTYGSTIN') || '').toUpperCase();
+        // Which of OUR registrations booked this voucher. A single Tally company
+        // can hold several GST registrations (one PAN, many state GSTINs), and a
+        // shared Input-IGST/CGST/SGST ledger then carries entries for all of
+        // them mixed together. CMPGSTIN is stamped per voucher with the
+        // registration that voucher belongs to — so the tool can split the
+        // books by registration and match each against its own GSTR-2B (and
+        // flag a purchase booked under the wrong registration). GSTREGISTRATION
+        // (the registration's user-given name) is kept for diagnostics/fallback.
+        const ownGstin = String((tag(block, 'CMPGSTIN').match(GSTIN_RE) || [''])[0] || '').toUpperCase();
+        const ownRegnName = tag(block, 'GSTREGISTRATION') || '';
         const supInv = tag(block, 'SUPPLIERINVOICENO') || tag(block, 'REFERENCE') || tag(block, 'BASICBUYERREFNO') || '';
         const ref = tag(block, 'REFERENCE') || '';
         const vd = parseTallyFieldDate(tag(block, 'DATE'));
@@ -2767,7 +2778,7 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
         rows.push({
           date: vd ? vd.toISOString().slice(0, 10) : null,
           voucherNo: vno || '', supplierInvNo: supInv, ref,
-          party, gstin, taxable: r2(taxable),
+          party, gstin, ownGstin, ownRegnName, taxable: r2(taxable),
           igst: r2(tax.igst), cgst: r2(tax.cgst), sgst: r2(tax.sgst),
           rcmIgst: r2(tax.rcm_igst), rcmCgst: r2(tax.rcm_cgst), rcmSgst: r2(tax.rcm_sgst),
           rcm: rcmAbs > 0.005,
@@ -4023,7 +4034,10 @@ const server = http.createServer(async (req, res) => {
       try {
         const one = await readItcRegister(String(body.url || state.settings.tallyUrl), String(body.company || ''), from, to, taxLedgers);
         dcProgress.active = false;
-        json(res, 200, { ok: true, version: VERSION, from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10), rows: one.rows });
+        // Distinct own-registrations seen in this company's vouchers, so the
+        // tool can tell the user a single company holds several GST registrations.
+        const registrations = [...new Set(one.rows.map((r) => r.ownGstin).filter(Boolean))].sort();
+        json(res, 200, { ok: true, version: VERSION, from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10), rows: one.rows, registrations });
       } catch (e) {
         dcProgress.active = false;
         const msg = /AGEING_TOO_DENSE/.test(String((e && e.message) || e))
