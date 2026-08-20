@@ -521,6 +521,25 @@ function ymd(dt){var s=String(dt||'').trim();if(!s)return null;var m;
 function periodOf(dt){var d=ymd(dt);return d?(('0'+d.mo).slice(-2)+d.y):'';}
 function monthGap(a,b){var A=ymd(a),B=ymd(b);if(!A||!B)return '';return (A.y*12+A.mo)-(B.y*12+B.mo);}
 function bGst(r){var t=bTax(r);return r2(t.igst+t.cgst+t.sgst);}
+var MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+// Period coverage: which months the books read actually covered, and the fetch
+// window — so a 2B doc "not in books" whose date is outside that window (or in a
+// month Tally returned nothing for) is flagged as a period gap, not unbooked.
+var COV=null;
+function setCoverage(){
+  var set={};booksRows.forEach(function(r){var d=ymd(r.date);if(d)set[d.y*100+d.mo]=1;});
+  var f=ymd(lastBooksMeta.from),t=ymd(lastBooksMeta.to);
+  COV={set:set,fromYM:f?f.y*100+f.mo:null,toYM:t?t.y*100+t.mo:null,from:lastBooksMeta.from||'',to:lastBooksMeta.to||''};
+}
+function coverageNote(dt){
+  if(!COV)return '';
+  var d=ymd(dt);if(!d)return '';
+  var ym=d.y*100+d.mo, ml=MONTHS[d.mo-1]+' '+d.y;
+  if(COV.fromYM&&ym<COV.fromYM)return '🛑 dated '+ml+', BEFORE the books period fetched ('+COV.from+' → '+COV.to+') — re-fetch from an earlier "From" date to include it.';
+  if(COV.toYM&&ym>COV.toYM)return '🛑 dated '+ml+', AFTER the books period fetched ('+COV.from+' → '+COV.to+') — extend the "To" date and re-fetch.';
+  if(!COV.set[ym])return '🛑 Tally returned no vouchers dated '+ml+' (the fetch covered '+COV.from+' → '+COV.to+') — check the period/company are open in Tally and re-fetch.';
+  return '';
+}
 
 // Build the reference-style reconciliation record for a 2B doc `b` and its
 // matched books row `br` (or null when unmatched).
@@ -534,7 +553,9 @@ function buildRec(b,br){
     note:'',_cat:'',_b:b,_bk:br,_isCN:!!b.isCN};
   if(!br){
     rec.remarks='not booked in tally';rec._cat='only2b';
-    rec.note=(b.isCN?'Credit note ':'')+'In GSTR-2B but not found in your books — this document does not appear against any of the selected input-GST ledgers for the period read.';
+    var cov=coverageNote(b.invDate);
+    rec._periodIssue=!!cov;
+    rec.note=(b.isCN?'Credit note ':'')+'In GSTR-2B but not found in your books'+(cov?(' — '+cov):' — this document does not appear against any of the selected input-GST ledgers for the period read.');
     return rec;
   }
   var bt=bTax(br);
@@ -574,6 +595,7 @@ function buildRec(b,br){
   return rec;
 }
 function reconcile(){
+  setCoverage();
   var n=booksRows.length,used=new Array(n).fill(false);
   var invIdx={},gstinIdx={},gstAmtIdx={};
   booksRows.forEach(function(r,i){
@@ -641,6 +663,8 @@ function renderReport(){
   var html='';
   html+=secMM('Amount mismatch — matched invoice, GST or split differs',by.mismatch);
   html+=secMM('Probable match — verify',by.probable);
+  var pi=by.only2b.filter(function(r){return r._periodIssue;}).length;
+  if(pi)html+='<div class="repsec"><div class="conn-banner off" style="margin:0"><span class="cdot"></span><div><div class="ctitle">'+pi+' of the “not in books” documents fall outside the period you fetched</div><div class="csub">Their invoice dates are before/after '+esc(COV.from)+' → '+esc(COV.to)+', or in a month Tally returned no vouchers for (shown in red). Widen the fetch — Step&nbsp;2 dates, and Alt+F2 in Tally to open the right period/company — then reconcile again. Only the rest are genuinely unrecorded. Each row’s reason is in its Note (Excel).</div></div></div></div>';
   html+=secOnly('In GSTR-2B but NOT in your books',by.only2b,'2b');
   html+=secOnly('Booked in your books but NOT in 2B',by.onlybk,'bk');
   if(cn.length)html+=secOnly('Credit notes in 2B',cn.map(function(r){return r;}),'2b');
@@ -663,7 +687,8 @@ function secOnly(title,recs,side){
   var body=recs.map(function(r){
     var g=side==='2b'?r.gstin2b:r.gstinBk, p=side==='2b'?(r.party2b||r.partyBk):r.partyBk, no=side==='2b'?r.docNo:r.vchBk, dt=side==='2b'?r.docDate:r.dateBk,
         tx=side==='2b'?r.tax2b:r.taxBk, ig=side==='2b'?r.igst2b:r.igstBk, cg=side==='2b'?r.cgst2b:r.cgstBk, sg=side==='2b'?r.sgst2b:r.sgstBk;
-    return '<tr><td class="mono">'+esc(g||'—')+'</td><td>'+esc(p||'')+(r.rcm?' <span class="pill rcm">RCM</span>':'')+'</td><td>'+esc(no||'')+'</td><td style="white-space:nowrap">'+esc((''+dt).slice(0,10))+'</td><td class="r">'+inr(tx)+'</td><td class="r">'+inr(ig)+'</td><td class="r">'+inr(cg)+'</td><td class="r">'+inr(sg)+'</td></tr>';
+    var dcls=(side==='2b'&&r._periodIssue)?' class="neg"':'';
+    return '<tr><td class="mono">'+esc(g||'—')+'</td><td>'+esc(p||'')+(r.rcm?' <span class="pill rcm">RCM</span>':'')+'</td><td>'+esc(no||'')+'</td><td'+dcls+' style="white-space:nowrap" title="'+esc(r.note||'')+'">'+esc((''+dt).slice(0,10))+'</td><td class="r">'+inr(tx)+'</td><td class="r">'+inr(ig)+'</td><td class="r">'+inr(cg)+'</td><td class="r">'+inr(sg)+'</td></tr>';
   }).join('');
   return sec(title,String(recs.length),'<thead><tr><th>GSTIN</th><th>Party</th><th>Doc / Vch</th><th>Date</th><th class="r">Taxable</th><th class="r">IGST</th><th class="r">CGST</th><th class="r">SGST</th></tr></thead><tbody>'+body+'</tbody>');
 }
