@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.39';
+const VERSION = '4.40';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2612,6 +2612,63 @@ async function readGroupLeaves(url, group, asOn, groupByNorm) {
   return { total: r2(leaves.reduce((s, lf) => r2(s + lf.balanceDr), 0)), leaves };
 }
 
+// Sales register — customer-wise + bill-wise, voucher level. A "sales voucher"
+// is ANY voucher that nets a credit to a Sales-Accounts-group ledger — robust to
+// custom voucher-type names (GST Sales, Export Sales, …), and it reconciles to
+// the Sales Accounts movement, i.e. the SAME figure the monthly totals use.
+//   taxable = net posted to Sales ledgers (Cr-positive; a sales return debits and
+//             nets down, exactly like the group closing)
+//   gross   = the party ledger's amount on the voucher (invoice value incl. taxes)
+// Voucher-dense books that can't be read line-by-line throw AGEING_TOO_DENSE via
+// the fail-fast ramp, so Tally is never frozen — the caller then omits the detail.
+async function readSalesRegister(url, asOn, groupByNorm) {
+  const { leaves: salesLeaves } = await readGroupLeaves(url, 'Sales Accounts', asOn, groupByNorm);
+  const salesSet = new Set(salesLeaves.map((lf) => norm(lf.name)));
+  if (!salesSet.size) return { customers: [], invoices: [], netTotal: 0, grossTotal: 0 };
+  const masters = parseLedgerMasters(await askTallyFast(url, LEDGER_MASTERS_REQUEST(), 180000));
+  const fyStart = fyStartOf(asOn);
+  const toKey = asOn.getUTCFullYear() * 10000 + (asOn.getUTCMonth() + 1) * 100 + asOn.getUTCDate();
+  const custMap = new Map();
+  const invoices = [];
+  const seen = new Set(), seenSig = new Set();
+  dcProgress.phase = `Sales register — vouchers ${fyStart.toISOString().slice(0, 10)} → ${asOn.toISOString().slice(0, 10)}…`;
+  await readVouchersRamp(url, fyStart, asOn, (xml) => {
+    for (const block of xml.match(/<VOUCHER[\s>][\s\S]*?<\/VOUCHER>/gi) || []) {
+      if (/(^|>)\s*Yes\s*<\/ISCANCELLED>/i.test(block.match(/<ISCANCELLED>[\s\S]*?<\/ISCANCELLED>/i)?.[0] ?? '')) continue;
+      if (/<ISOPTIONAL>\s*Yes/i.test(block)) continue;
+      let key = tag(block, 'GUID');
+      if (!key) key = `${tag(block, 'VOUCHERTYPENAME')}|${tag(block, 'DATE')}|${tag(block, 'VOUCHERNUMBER')}|${tag(block, 'PARTYLEDGERNAME')}`;
+      if (seen.has(key)) continue; seen.add(key);
+      if (toKey && dateKey(tag(block, 'DATE')) > toKey) continue;
+      const vno = tag(block, 'VOUCHERNUMBER'), vtype = tag(block, 'VOUCHERTYPENAME');
+      if (vno) { const vs = `${vtype}|${tag(block, 'DATE')}|${vno}`; if (seenSig.has(vs)) continue; seenSig.add(vs); }
+      const entryBlocks = block.match(/<ALLLEDGERENTRIES\.LIST>[\s\S]*?<\/ALLLEDGERENTRIES\.LIST>/gi) || block.match(/<LEDGERENTRIES\.LIST>[\s\S]*?<\/LEDGERENTRIES\.LIST>/gi) || [];
+      let net = 0;
+      for (const e of entryBlocks) {
+        const nm = tag(e, 'LEDGERNAME'); if (!nm || !salesSet.has(norm(nm))) continue;
+        const rawAmt = toNum(tag(e, 'AMOUNT'));
+        const dp = tag(e, 'ISDEEMEDPOSITIVE');
+        const sign = dp ? (/yes/i.test(dp) ? 1 : -1) : (rawAmt < 0 ? 1 : -1);   // Dr-positive
+        net = r2(net - r2(sign * Math.abs(rawAmt)));                            // income = Cr-positive
+      }
+      if (Math.abs(net) < 0.005) continue;                                     // not a sales voucher
+      const party = tag(block, 'PARTYLEDGERNAME') || '(cash / unnamed)';
+      let gross = 0;
+      for (const e of entryBlocks) { const nm = tag(e, 'LEDGERNAME'); if (nm && norm(nm) === norm(party)) gross = r2(gross + Math.abs(toNum(tag(e, 'AMOUNT')))); }
+      const vd = parseTallyFieldDate(tag(block, 'DATE'));
+      invoices.push({ date: vd ? vd.toISOString().slice(0, 10) : null, no: vno || '', party, taxable: net, gross: r2(gross) || net });
+      const k = norm(party), m = masters[party] || {};
+      if (!custMap.has(k)) custMap.set(k, { name: party, gstin: m.gstin || '', invoices: 0, taxable: 0, gross: 0 });
+      const c = custMap.get(k); c.invoices += 1; c.taxable = r2(c.taxable + net); c.gross = r2(c.gross + (r2(gross) || net));
+    }
+  }, null, { firstWin: 3, attemptMs: 90000, failFast: true });
+  const customers = [...custMap.values()].sort((a, b) => Math.abs(b.taxable) - Math.abs(a.taxable));
+  invoices.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  const netTotal = r2(customers.reduce((s, c) => r2(s + c.taxable), 0));
+  const grossTotal = r2(invoices.reduce((s, i) => r2(s + i.gross), 0));
+  return { customers, invoices, netTotal, grossTotal };
+}
+
 async function readSalesForCompany(url, company, asOn) {
   const saved = state.settings.company; state.settings.company = company || '';
   try {
@@ -2632,7 +2689,24 @@ async function readSalesForCompany(url, company, asOn) {
       prevCum = cum;
     }
     dcProgress.sub = '';
-    return { total: prevCum, monthly };   // total = FY-to-date sales at asOn
+    // Customer-wise + bill-wise register. Never blocks the headline totals: a
+    // too-dense book (or any read error) just omits the detail.
+    const out = { total: prevCum, monthly };   // total = FY-to-date sales at asOn
+    let register = null;
+    try { register = await readSalesRegister(url, asOn, groupByNorm); }
+    catch (e) {
+      const msg = String((e && e.message) || e);
+      out.registerNote = /AGEING_TOO_DENSE/.test(msg) ? 'too-dense' : 'error';
+      if (out.registerNote === 'error') out.registerError = msg;
+    }
+    if (register && register.customers) {
+      out.customers = register.customers;
+      out.invoices = register.invoices;
+      out.grossTotal = register.grossTotal;
+      out.registerNet = register.netTotal;   // should tie to `total`; gap surfaced in the UI
+    }
+    dcProgress.phase = '';
+    return out;
   } finally { state.settings.company = saved; }
 }
 
