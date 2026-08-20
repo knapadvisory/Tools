@@ -159,7 +159,7 @@
   <!-- STEP 1 -->
   <div class="card" id="card1">
     <h2>1 · Connect to Tally</h2>
-    <div class="sub">Keep each company on the <b>Gateway of Tally</b> (not inside a report). Add a line per Tally port (9000, 9001…), then scan.</div>
+    <div class="sub">Keep each company on the <b>Gateway of Tally</b> (not inside a report). Add a line per Tally port (9000, 9001…), then scan. <b>Tick all the registrations you want to reconcile</b> — books are pulled from each and matched within its own GSTIN.</div>
     <div id="epList"></div>
     <div class="row" style="margin-top:10px">
       <button class="btn ghost sm" onclick="addEndpoint('')">+ Add port</button>
@@ -167,6 +167,9 @@
     </div>
     <div class="msg" id="msgScan"></div>
     <div id="cmpList"></div>
+    <div class="row" style="margin-top:12px">
+      <button class="btn primary" id="btnPickCompanies" style="display:none" onclick="proceedCompanies()">Use selected companies →</button>
+    </div>
   </div>
 
   <!-- STEP 2 -->
@@ -297,15 +300,24 @@ function renderCompanies(){
     var head='<div class="eph"><span class="u">'+esc(ep.url)+'</span><span class="st '+(ep.ok?'ok':'bad')+'">'+(ep.ok?((ep.companies||[]).length+' open'):('✕ '+esc(ep.error||'unreachable')))+'</span></div>';
     var rows='';(ep.companies||[]).forEach(function(c){
       var name=(typeof c==='string')?c:c.name;var gstins=(typeof c==='string')?[]:(c.gstins||[]);var gst=gstins.join(', ');
-      rows+='<label class="cmp"><input type="radio" name="cmp" onchange="pickCompany(this)" data-url="'+esc(ep.url)+'" data-name="'+esc(name)+'" data-gstin="'+esc(gstins[0]||'')+'">'
+      rows+='<label class="cmp"><input type="checkbox" class="cmpChk" onchange="toggleCompany()" data-url="'+esc(ep.url)+'" data-name="'+esc(name)+'" data-gstin="'+esc(gstins[0]||'')+'">'
         +'<span><span class="nm">'+esc(name)+'</span>'+(gst?' <span class="gs">'+esc(gst)+'</span>':'')+'</span></label>';
     });
     box.innerHTML=head+(rows||'<div class="empty">No company open on this port.</div>');
     wrap.appendChild(box);
   });
+  toggleCompany();
 }
-var chosen=null; // {url, company, gstin}
-function pickCompany(r){chosen={url:r.getAttribute('data-url'),company:r.getAttribute('data-name'),gstin:r.getAttribute('data-gstin')||''};loadLedgers();}
+var chosenList=[]; // [{url, company, gstin}]
+var chosen=null;   // first selected (compat)
+function toggleCompany(){
+  chosenList=Array.prototype.map.call(document.querySelectorAll('.cmpChk:checked'),function(c){
+    return {url:c.getAttribute('data-url'),company:c.getAttribute('data-name'),gstin:c.getAttribute('data-gstin')||''};
+  });
+  chosen=chosenList[0]||null;
+  var btn=$('btnPickCompanies');if(btn)btn.style.display=chosenList.length?'':'none';
+}
+function proceedCompanies(){ if(!chosenList.length){setMsg('msgScan','Tick at least one company.','bad');return;} loadLedgers(); }
 
 /* ============================ step 2: ledgers ============================ */
 var ledgers=[]; // [{name,parent}]
@@ -313,15 +325,23 @@ var kinds={}; // norm(name) -> kind
 var KIND_OPTS=[['','—'],['igst','IGST'],['cgst','CGST'],['sgst','SGST'],['rcm_igst','RCM IGST'],['rcm_cgst','RCM CGST'],['rcm_sgst','RCM SGST']];
 function loadLedgers(){
   $('card2').classList.remove('hidden');markStep(1,true);
-  setMsg('msgLed','Reading ledgers of '+chosen.company+'…','');
-  fetch(API+'/api/itc/ledgers',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(chosen)})
-    .then(function(r){return r.json();}).then(function(j){
-      if(!j.ok){setMsg('msgLed',j.error||'Could not read ledgers.','bad');return;}
-      ledgers=j.ledgers||[];setMsg('msgLed',ledgers.length+' ledgers','ok');
-      // preselect likely input-GST ledgers by name
+  setMsg('msgLed','Reading ledgers of '+chosenList.length+' company(ies)…','');
+  var byName={},i=0;
+  (function next(){
+    if(i>=chosenList.length){
+      ledgers=Object.keys(byName).map(function(k){return byName[k];}).sort(function(a,b){return a.name.localeCompare(b.name);});
+      setMsg('msgLed',ledgers.length+' ledgers across '+chosenList.length+' company(ies)','ok');
       ledgers.forEach(function(L){var g=guessKind(L.name);if(g)kinds[nk(L.name)]=g;});
       renderLedgers();renderPicked();
-    }).catch(function(e){setMsg('msgLed','Could not reach the connector: '+e.message,'bad');});
+      return;
+    }
+    var c=chosenList[i++];
+    fetch(API+'/api/itc/ledgers',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url:c.url,company:c.company})})
+      .then(function(r){return r.json();}).then(function(j){
+        (j.ledgers||[]).forEach(function(L){var k=nk(L.name);if(!byName[k])byName[k]={name:L.name,parent:L.parent||''};});
+        next();
+      }).catch(function(){next();});
+  })();
 }
 function nk(s){return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'');}
 function guessKind(name){
@@ -374,15 +394,28 @@ function fetchItc(){
   var from=$('fromDate').value,to=$('toDate').value;
   if(!from||!to){setMsg('msgFetch','Set the from and to dates.','bad');return;}
   $('btnFetch').disabled=true;setMsg('msgFetch','','');
-  $('fetchProg').style.display='';$('fetchLine').style.display='';$('fetchBar').style.width='15%';
+  $('fetchProg').style.display='';$('fetchLine').style.display='';$('fetchBar').style.width='8%';
+  booksRows=[];var i=0,errs=[];
   pollFetch();
-  fetch(API+'/api/itc/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url:chosen.url,company:chosen.company,from:from,to:to,taxLedgers:sel})})
-    .then(function(r){return r.json();}).then(function(j){
+  (function next(){
+    if(i>=chosenList.length){
       if(POLL){clearInterval(POLL);POLL=null;}$('btnFetch').disabled=false;$('fetchProg').style.display='none';$('fetchLine').style.display='none';
-      if(!j.ok){setMsg('msgFetch',j.error||'Could not read ITC.','bad');return;}
-      booksRows=j.rows||[];showBooks(j);markStep(2,true);
+      if(!booksRows.length&&errs.length){setMsg('msgFetch','Could not read ITC — '+errs.join('; '),'bad');return;}
+      if(errs.length)setMsg('msgFetch','Fetched '+booksRows.length+' invoices. Some companies errored: '+errs.join('; '),'warn');
+      showBooks({from:from,to:to});markStep(2,true);
       $('card4').classList.remove('hidden');markStep(3,true);
-    }).catch(function(e){if(POLL){clearInterval(POLL);POLL=null;}$('btnFetch').disabled=false;$('fetchProg').style.display='none';$('fetchLine').style.display='none';setMsg('msgFetch','Could not reach the connector: '+e.message,'bad');});
+      return;
+    }
+    var c=chosenList[i++];
+    $('fetchLine').textContent='Reading '+(c.company||'')+' ('+i+'/'+chosenList.length+')…';
+    $('fetchBar').style.width=Math.round(8+(i/chosenList.length)*82)+'%';
+    fetch(API+'/api/itc/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url:c.url,company:c.company,from:from,to:to,taxLedgers:sel})})
+      .then(function(r){return r.json();}).then(function(j){
+        if(!j.ok){errs.push((c.company||'company')+': '+(j.error||'error'));next();return;}
+        (j.rows||[]).forEach(function(row){row._ownGstin=c.gstin||'';row._company=c.company||'';booksRows.push(row);});
+        next();
+      }).catch(function(e){errs.push((c.company||'company')+': '+e.message);next();});
+  })();
 }
 function pollFetch(){POLL=setInterval(function(){fetch(API+'/api/dc/progress').then(function(r){return r.json();}).then(function(p){if(p&&p.phase){$('fetchLine').textContent=(p.phase||'')+' '+(p.sub||'');var pc=p.monthsTotal?Math.min(95,Math.round(p.monthsDone/p.monthsTotal*90)+10):40;$('fetchBar').style.width=pc+'%';}}).catch(function(){});},700);}
 function tsum(r){return r.igst+r.cgst+r.sgst+(r.rcmIgst||0)+(r.rcmCgst||0)+(r.rcmSgst||0);}
@@ -393,7 +426,10 @@ function showBooks(j){
   var T={tax:0,ig:0,cg:0,sg:0,rcm:0};
   booksRows.forEach(function(r){T.tax+=r.taxable;T.ig+=r.igst;T.cg+=r.cgst;T.sg+=r.sgst;T.rcm+=(r.rcmIgst||0)+(r.rcmCgst||0)+(r.rcmSgst||0);});
   var totItc=T.ig+T.cg+T.sg+T.rcm;
-  $('booksSub').innerHTML=booksRows.length+' invoices · '+j.from+' → '+j.to+' · total ITC <b>'+inr(totItc)+'</b> (regular + RCM, net of reversals)';
+  var byReg={};booksRows.forEach(function(r){var k=r._ownGstin||'—';byReg[k]=(byReg[k]||0)+1;});
+  var regKeys=Object.keys(byReg);
+  var regNote=regKeys.length>1?(' · '+regKeys.map(function(k){return byReg[k]+' in '+k;}).join(' · ')):'';
+  $('booksSub').innerHTML=booksRows.length+' invoices · '+j.from+' → '+j.to+' · total ITC <b>'+inr(totItc)+'</b> (regular + RCM, net of reversals)'+regNote;
   var totalRow='<tr class="cgrp"><td colspan="4"><b>Total — all '+booksRows.length+' invoices</b></td><td class="r"><b>'+inr(T.tax)+'</b></td><td class="r"><b>'+inr(T.ig)+'</b></td><td class="r"><b>'+inr(T.cg)+'</b></td><td class="r"><b>'+inr(T.sg)+'</b></td><td class="r"><b>'+inr(T.rcm)+'</b></td></tr>';
   var t=$('booksTbl');
   t.innerHTML='<thead><tr><th>Date</th><th>Voucher / Supp. inv.</th><th>Party</th><th>GSTIN</th><th class="r">Taxable</th><th class="r">IGST</th><th class="r">CGST</th><th class="r">SGST</th><th class="r">RCM</th></tr></thead><tbody>'
@@ -406,9 +442,9 @@ function showBooks(j){
 function csvcell(s){s=String(s==null?'':s);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}
 function downloadBooks(){
   if(!booksRows.length){alert('No books rows to download.');return;}
-  var head=['Date','Voucher No','Supplier Inv No','Ref','Party','GSTIN','Taxable','IGST','CGST','SGST','RCM IGST','RCM CGST','RCM SGST','RCM'];
+  var head=['Regn','Date','Voucher No','Supplier Inv No','Ref','Party','GSTIN','Taxable','IGST','CGST','SGST','RCM IGST','RCM CGST','RCM SGST','RCM'];
   var lines=[head.join(',')];
-  booksRows.forEach(function(r){lines.push([r.date||'',csvcell(r.voucherNo),csvcell(r.supplierInvNo),csvcell(r.ref),csvcell(r.party),r.gstin||'',r.taxable,r.igst,r.cgst,r.sgst,r.rcmIgst||0,r.rcmCgst||0,r.rcmSgst||0,r.rcm?'Y':''].join(','));});
+  booksRows.forEach(function(r){lines.push([r._ownGstin||'',r.date||'',csvcell(r.voucherNo),csvcell(r.supplierInvNo),csvcell(r.ref),csvcell(r.party),r.gstin||'',r.taxable,r.igst,r.cgst,r.sgst,r.rcmIgst||0,r.rcmCgst||0,r.rcmSgst||0,r.rcm?'Y':''].join(','));});
   dl('books-itc-'+(lastBooksMeta.from||'')+'_'+(lastBooksMeta.to||'')+'.csv',new Blob([lines.join('\n')],{type:'text/csv'}));
 }
 
@@ -597,10 +633,11 @@ function buildRec(b,br){
   }
   // Wrong registration: the invoice matched, but it's booked under a different
   // one of your GSTINs than the 2B it appears in.
-  rec.regnBk=(chosen&&chosen.gstin)?chosen.gstin:rec.regnBk;
-  if(b.regn&&chosen&&chosen.gstin&&normGstin(b.regn)!==normGstin(chosen.gstin)){
+  var ownReg=br._ownGstin||(chosen&&chosen.gstin)||'';
+  if(ownReg)rec.regnBk=ownReg;
+  if(b.regn&&ownReg&&normGstin(b.regn)!==normGstin(ownReg)){
     rec.remarks='booked - amount mismatch 🚩 wrong registration';rec._cat='mismatch';
-    rec.note='🚩 BOOKED UNDER THE WRONG REGISTRATION: this document belongs to '+b.regn+', but the matching voucher '+rec.vchBk+' is booked under '+chosen.gstin+' — claim the ITC in the correct registration (the credit sits in the wrong GSTIN).';
+    rec.note='🚩 BOOKED UNDER THE WRONG REGISTRATION: this document belongs to '+b.regn+', but the matching voucher '+rec.vchBk+' is booked under '+ownReg+' — claim the ITC in the correct registration (the credit sits in the wrong GSTIN).';
   }
   applyItcBlocked(rec,b);
   return rec;
@@ -633,12 +670,12 @@ function reconcile(){
       var dg=Math.abs(bg-bGst(r)),gstClose=dg<=2,gstNear=dg<=50;
       var dt=Math.abs((b.taxable||0)-(r.taxable||0)),taxClose=dt<=Math.max(10,Math.abs(b.taxable||0)*0.005);
       var ns=nameScore(b.party,r.party),nameStrong=ns>=0.5;
+      var breg=normGstin(b.regn||''),oreg=normGstin(r._ownGstin||''),sameReg=!!(breg&&oreg&&breg===oreg);
       var accept=im>=2||(im>=1&&(gstNear||nameStrong))||(gstEq&&gstNear)||(nameStrong&&gstClose);
       if(!accept)return;
-      // Rank by AMOUNT tie first (same GSTIN, GST ties, taxable ties), THEN the
-      // invoice number — a matching amount is a stronger signal than a matching
-      // invoice number (short numbers like 1/100 collide across suppliers).
-      var key=[gstEq?1:0,gstClose?1:0,taxClose?1:0,im,ns,-dg,-dt];
+      // Rank: SAME registration first (so a 06 invoice takes its 06 book, not an
+      // identical 37 one), then amount-tie (GST, taxable), then invoice number.
+      var key=[sameReg?1:0,gstEq?1:0,gstClose?1:0,taxClose?1:0,im,ns,-dg,-dt];
       if(best<0||cmpKey(key,bestKey)>0){best=i;bestKey=key;}
     });
     return best;
@@ -656,7 +693,7 @@ function reconcile(){
     var bt=bTax(r);
     recs.push({regn2b:'',gstin2b:'',party2b:'',docNo:'',docDate:'',invVal:'',tax2b:'',igst2b:'',cgst2b:'',sgst2b:'',gst2b:'',rcm:r.rcm?'Yes':'',period:periodOf(r.date),
       gstinChk:'—',nameChk:'—',taxChk:'',gstChk:'',vchChk:'—',spill:'',remarks:'booked, but not in 2B',
-      regnBk:(chosen&&chosen.gstin)||'',gstinBk:r.gstin||'',dateBk:r.date||'',partyBk:r.party||'',vchBk:r.voucherNo||r.supplierInvNo||'',
+      regnBk:r._ownGstin||(chosen&&chosen.gstin)||'',gstinBk:r.gstin||'',dateBk:r.date||'',partyBk:r.party||'',vchBk:r.voucherNo||r.supplierInvNo||'',
       igstBk:r2(bt.igst),cgstBk:r2(bt.cgst),sgstBk:r2(bt.sgst),gstBk:r2(bt.igst+bt.cgst+bt.sgst),taxBk:r2(r.taxable),
       note:'Booked in your books ('+(r.voucherNo||r.supplierInvNo||'')+') but not found in the 2B uploaded — the supplier may not have filed it, or it is in a different period.',_cat:'onlybk',_bk:r,_isCN:false});
   });
