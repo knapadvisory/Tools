@@ -229,10 +229,18 @@
           <div class="csub" id="connSub">The KNAP connector runs on the computer where Tally Prime is installed.</div>
         </div>
         <div class="cact">
+          <button class="btn ghost" id="btnScan">🔎 Scan companies</button>
           <button class="btn ghost" id="btnTest">🔧 Test connection</button>
           <button class="btn ghost" id="btnUpd">⟳ Update</button>
           <button class="btn ghost" id="btnRel">🔌 Release Tally</button>
         </div>
+      </div>
+
+      <!-- company picker — appears after a scan; choose which open company to read -->
+      <div class="period-row hidden" id="coPickRow" style="border-top:1px solid var(--border);margin-top:0;padding-top:12px">
+        <span class="pl">Company</span>
+        <select id="coPick" class="chip mono" style="min-width:280px"></select>
+        <span class="msg" id="coPickMsg" style="margin:0"></span>
       </div>
 
       <div class="books hidden" id="books">
@@ -378,7 +386,9 @@ function checkConn(){
       return;
     }
     banner('wait','Connected — detecting the company…','Connector v'+connVer+' is talking to Tally on this computer.');
-    detectCompany();
+    // Scan the open companies so a specific one can be picked; scanCompanies()
+    // runs detectCompany() once it knows the pick (or the single open company).
+    if(parseFloat(connVer)>=4.45){ scanCompanies(); } else { detectCompany(); }
   }).catch(function(){
     setPill('off','connector not found');
     banner('off','Connector not found on this PC','Install the KNAP connector, then reload. <a href="/connector/Install-Tally-Connector.bat" download>Download installer</a>');
@@ -425,8 +435,32 @@ function fyLabels(toIso){
   return {cur:'FY '+s(y)+'-'+s(y+1), pri:'FY '+s(y-1)+'-'+s(y), curYr:y};
 }
 
+// Which company to read from. '' = whatever is open in Tally (single-company
+// default). A scan lets the user pick a specific one when several are open, so
+// the wrong company's books can't be built by accident.
+var pickedCompany='';
+var coQS=function(){ return pickedCompany?('?company='+encodeURIComponent(pickedCompany)):''; };
+function scanCompanies(){
+  var btn=document.getElementById('btnScan'); if(btn){btn.disabled=true;btn.textContent='⏳ Scanning…';}
+  fetch(API+'/api/dc/companies',{method:'POST',headers:{'content-type':'application/json'},body:'{}'})
+    .then(function(r){return r.json();}).then(function(j){
+      if(btn){btn.disabled=false;btn.textContent='🔎 Scan companies';}
+      var list=[];(j.endpoints||[]).forEach(function(ep){(ep.companies||[]).forEach(function(c){
+        list.push({name:(typeof c==='string')?c:c.name, gstin:(typeof c==='string')?'':((c.gstins||[])[0]||'')});
+      });});
+      var sel=document.getElementById('coPick'),row=document.getElementById('coPickRow'),msg=document.getElementById('coPickMsg');
+      if(!list.length){ if(row)row.classList.remove('hidden'); if(msg){msg.className='msg warn';msg.textContent='No company open — open one on the Gateway of Tally, then scan again.';} if(sel)sel.innerHTML=''; return; }
+      if(sel){ sel.innerHTML=list.map(function(c){return '<option value="'+c.name.replace(/"/g,'&quot;')+'">'+cleanCoName(c.name)+(c.gstin?(' · '+c.gstin):'')+'</option>';}).join(''); }
+      // keep the current pick if it's still open, else default to the first
+      var keep=pickedCompany&&list.some(function(c){return c.name===pickedCompany;});
+      pickedCompany=keep?pickedCompany:list[0].name; if(sel)sel.value=pickedCompany;
+      if(row)row.classList.remove('hidden');
+      if(msg){msg.className='msg';msg.textContent=list.length>1?(list.length+' companies open — pick which one to read.'):'1 company open.';}
+      detectCompany();
+    }).catch(function(){ if(btn){btn.disabled=false;btn.textContent='🔎 Scan companies';} });
+}
 function detectCompany(){
-  fetch(API+'/api/fin/company').then(function(r){return r.json();}).then(function(c){
+  fetch(API+'/api/fin/company'+coQS()).then(function(r){return r.json();}).then(function(c){
     if(!c.ok){ banner('wait','Connected — set the period and read','Could not auto-detect the company; enter the period manually.'); return; }
     company=c;
     if(c.start) document.getElementById('periodFrom').value=c.start;
@@ -447,17 +481,20 @@ function detectCompany(){
     document.getElementById('books').classList.remove('hidden');
     banner('','Tally connected — ready to read','Connector v'+(c.version||connVer)+' is talking to Tally on this computer. Books are open and responding.');
     // counts are a heavier read — fetch them in the background so the name is instant
-    fetch(API+'/api/fin/counts').then(function(r){return r.json();}).then(function(k){
+    fetch(API+'/api/fin/counts'+coQS()).then(function(r){return r.json();}).then(function(k){
       document.getElementById('bkLed').textContent=(k.ledgerCount!=null?k.ledgerCount:'—')+(k.groupCount!=null?(' across '+k.groupCount+' groups'):'');
     }).catch(function(){ document.getElementById('bkLed').textContent='—'; });
   }).catch(function(){ banner('wait','Connected — set the period and read','Enter the period and press Read from Tally.'); });
 }
 
+document.getElementById('btnScan').onclick=scanCompanies;
+document.getElementById('coPick').onchange=function(){ pickedCompany=this.value||''; detectCompany(); };
+
 /* ================= diagnostic ================= */
 document.getElementById('btnTest').onclick=function(){
   var btn=this, out=document.getElementById('diagOut');
   btn.disabled=true; out.style.display='block'; out.textContent='Running connection test — company period, the ledger list and one month of vouchers…';
-  fetch(API+'/api/fin/diag',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({})}).then(function(r){return r.json();}).then(function(j){
+  fetch(API+'/api/fin/diag',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({company:pickedCompany})}).then(function(r){return r.json();}).then(function(j){
     btn.disabled=false; var d=j.diag||{};
     function block(x){ if(!x) return '(no result)'; return (x.ok?'✅ OK':'❌ FAILED')+'  ·  '+x.ms+' ms'+(x.ok?('  ·  '+x.length+' chars'):('  ·  '+(x.error||'')))+'\n'+(x.sample?('--- first part of Tally\'s reply ---\n'+x.sample):''); }
     var vs=d.B_voucherSummary, vsTxt='(not run)';
@@ -551,7 +588,7 @@ function doRead(){
   var btn=document.getElementById('readBtn'); btn.disabled=true;
   document.getElementById('msgTally').textContent='⏳ Reading the trial balance — keep Tally open on the Gateway…';
   var poll=setInterval(function(){ fetch(API+'/api/fin/progress').then(function(r){return r.json();}).then(function(p){ if(p.active) document.getElementById('msgTally').textContent='⏳ '+p.phase; }).catch(function(){}); },1400);
-  fetch(API+'/api/fin/trialbalance',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({from:from,to:to})})
+  fetch(API+'/api/fin/trialbalance',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({from:from,to:to,company:pickedCompany})})
     .then(function(r){return r.json();}).then(function(j){
       clearInterval(poll); btn.disabled=false;
       if(!j.ok){ document.getElementById('msgTally').innerHTML='<span class="msg bad">'+(j.error||'Failed — is Tally open?')+'</span>'; return; }

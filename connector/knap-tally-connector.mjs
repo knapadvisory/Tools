@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.44';
+const VERSION = '4.45';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -3311,6 +3311,11 @@ const server = http.createServer(async (req, res) => {
     // fill the name/period/entity instantly. Ledger + group COUNTS are a
     // separate call (/api/fin/counts) so nothing heavy delays the name.
     if (req.method === 'GET' && url.pathname === '/api/fin/company') {
+      // Optional ?company= scopes the read to a chosen company (finprep's
+      // scan-and-pick); absent, it's the open company. Save/restore so the
+      // selection never leaks into an unrelated later read.
+      const co = url.searchParams.get('company');
+      const saved = state.settings.company; if (co != null) state.settings.company = co;
       try {
         const c = parseCompany(await askTallyFast(state.settings.tallyUrl, FIN_COMPANY_REQUEST(), 15000));
         json(res, 200, {
@@ -3322,15 +3327,18 @@ const server = http.createServer(async (req, res) => {
         });
       } catch (e) {
         json(res, 200, { ok: false, error: String((e && e.message) || e) });
-      }
+      } finally { state.settings.company = saved; }
       return;
     }
     // Cheap stored-only counts (group tree + ledger list) for the books grid —
     // best-effort, fetched in the background so they never hold up the name.
     if (req.method === 'GET' && url.pathname === '/api/fin/counts') {
+      const co = url.searchParams.get('company');
+      const saved = state.settings.company; if (co != null) state.settings.company = co;
       let groupCount = null, ledgerCount = null;
       try { groupCount = Object.keys(parseGroups(await askTallyFast(state.settings.tallyUrl, GROUPS_REQUEST(), 20000))).length; } catch { /* */ }
       try { ledgerCount = Object.keys(parseLedgerMasters(await askTallyFast(state.settings.tallyUrl, LEDGER_MASTERS_REQUEST(), 25000))).length; } catch { /* */ }
+      state.settings.company = saved;
       json(res, 200, { ok: true, groupCount, ledgerCount });
       return;
     }
@@ -3358,6 +3366,9 @@ const server = http.createServer(async (req, res) => {
     // ClosingBalance collection is known-slow), returning exactly what Tally
     // replies so we can pick the working method and parse its real structure.
     if (req.method === 'POST' && url.pathname === '/api/fin/diag') {
+      const diagBody = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
+      const diagSaved = state.settings.company;
+      if (diagBody.company !== undefined) state.settings.company = String(diagBody.company || '').trim();
       const probe = async (label, body, ms = 20000, sampleLen = 2200) => {
         const t0 = Date.now();
         try {
@@ -3424,6 +3435,7 @@ const server = http.createServer(async (req, res) => {
         B_oneMonthVouchers: vProbe,
         B_voucherSummary: vSummary,
       };
+      state.settings.company = diagSaved;
       json(res, 200, { ok: true, diag: out });
       return;
     }
@@ -3434,6 +3446,10 @@ const server = http.createServer(async (req, res) => {
       const from = tallyDateOf(String(body.from || body.priorAsOn || '').replace(/-/g, ''));
       if (!to || !from) { json(res, 400, { ok: false, error: 'Set both period dates.' }); return; }
       if (from > to) { json(res, 400, { ok: false, error: 'Period-from is after period-to.' }); return; }
+      // Scope the whole read to the picked company (finprep scan-and-pick);
+      // blank = the open company. Restored in finally so it never leaks.
+      const tbSavedCompany = state.settings.company;
+      if (body.company !== undefined) state.settings.company = String(body.company || '').trim();
       finProgress.active = true; finProgress.steps = 3; finProgress.step = 1;
       try {
         // 1) Group tree + ledger masters — both stored-only reads, fast, never
@@ -3514,7 +3530,7 @@ const server = http.createServer(async (req, res) => {
           ? 'Tally stopped responding while reading vouchers. Keep Tally on the Gateway (not inside a report) and try again. If it keeps failing, use “Release Tally”, then retry a shorter period.'
           : 'Could not read Tally: ' + String((e && e.message) || e);
         json(res, 502, { ok: false, error: msg });
-      }
+      } finally { state.settings.company = tbSavedCompany; }
       return;
     }
 
