@@ -766,14 +766,51 @@ function secBooked(title,recs){
 /* ============================ excel export (reference layout) ============================ */
 var RECO_HDR=['Regn (your GSTIN)','GSTIN (2B)','Party (2B)','Doc No','Doc Date','Invoice Value','Taxable (2B)','IGST (2B)','CGST (2B)','SGST (2B)','GST (2B)','RCM','Period','GSTIN check','name check','taxable check','GST check','voucher check','spillover (mth)','remarks','Regn (books)','GSTIN (books)','Date (books)','Particulars (books)','Vch / Bill No','IGST (books)','CGST (books)','SGST (books)','GST as per Books','Taxable (books)','Note'];
 function recToRow(r){return [r.regn2b,r.gstin2b,r.party2b,r.docNo,(''+r.docDate).slice(0,10),r.invVal,r.tax2b,r.igst2b,r.cgst2b,r.sgst2b,r.gst2b,r.rcm,r.period,r.gstinChk,r.nameChk,r.taxChk,r.gstChk,r.vchChk,r.spill,r.remarks,r.regnBk,r.gstinBk,(''+r.dateBk).slice(0,10),r.partyBk,r.vchBk,r.igstBk,r.cgstBk,r.sgstBk,r.gstBk,r.taxBk,r.note];}
+function colLetter(n){var s='';while(n>0){var m=(n-1)%26;s=String.fromCharCode(65+m)+s;n=(n-m-1)/26;}return s;}
+// Three colour bands, like the HTML sheet: the 2B side, the reconciliation
+// columns in the middle, and the books side — so it reads at a glance which
+// figure came from where.
+var BAND_2B={hdr:'FF2E75B6',cell:'FFDDEBF7'},   // blue   — from GSTR-2B
+    BAND_RC={hdr:'FFBF8F00',cell:'FFFFF2CC'},   // amber  — reconciliation checks
+    BAND_BK={hdr:'FF548235',cell:'FFE2EFDA'};   // green  — from the books
+// column index (1-based) → band. 1..13 = 2B, 14..20 = checks, 21..31 = books.
+function bandOf(ci){return ci<=13?BAND_2B:(ci<=20?BAND_RC:BAND_BK);}
+var AMT_COLS=[6,7,8,9,10,11,16,17,26,27,28,29,30]; // #,##0.00
 function exportXlsx(){
   if(!report||typeof ExcelJS==='undefined'){alert('Report or Excel library not ready.');return;}
   var wb=new ExcelJS.Workbook();
   function sheet(name,rows){
     var ws=wb.addWorksheet(name);
-    ws.addRow(RECO_HDR); ws.getRow(1).font={bold:true};
-    rows.forEach(function(r){ws.addRow(recToRow(r));});
+    // header — bold white on the band colour
+    var hr=ws.addRow(RECO_HDR);
+    for(var ci=1;ci<=RECO_HDR.length;ci++){var c=hr.getCell(ci);var b=bandOf(ci);
+      c.font={bold:true,color:{argb:'FFFFFFFF'}};c.alignment={vertical:'middle',wrapText:true};
+      c.fill={type:'pattern',pattern:'solid',fgColor:{argb:b.hdr}};}
+    rows.forEach(function(r){
+      var row=ws.addRow(recToRow(r)),rn=row.number;
+      var hasBoth=!!(r._b&&r._bk);
+      // ---- live formulas: change any figure and the checks + remarks recompute
+      if(r._b) row.getCell(11).value={formula:'SUM(H'+rn+':J'+rn+')',result:r.gst2b};        // K  GST (2B)
+      if(r._bk) row.getCell(29).value={formula:'SUM(Z'+rn+':AB'+rn+')',result:r.gstBk};      // AC GST as per Books
+      if(hasBoth){
+        row.getCell(14).value={formula:'IF(OR(B'+rn+'="",V'+rn+'=""),"—",UPPER(TRIM(B'+rn+'))=UPPER(TRIM(V'+rn+')))',result:r.gstinChk}; // N GSTIN check
+        row.getCell(16).value={formula:'G'+rn+'-AD'+rn,result:r.taxChk};                     // P taxable check
+        row.getCell(17).value={formula:'K'+rn+'-AC'+rn,result:r.gstChk};                     // Q GST check
+        // T remarks — wrong-registration wins, else amount/tax tolerance, else booked;
+        // [ITC blocked] stays appended (a 2B flag, not an arithmetic result).
+        var reg='IF(AND(A'+rn+'<>"",U'+rn+'<>"",UPPER(TRIM(A'+rn+'))<>UPPER(TRIM(U'+rn+'))),"booked - amount mismatch 🚩 wrong registration",'
+               +'IF(ABS(Q'+rn+')>'+GSTTOL+',"booked - amount mismatch",'
+               +'IF(ABS(P'+rn+')>MAX(10,ABS(G'+rn+')*0.005),"probable match — verify","booked")))';
+        var blocked=!!(r._b&&r._b.itcBlocked);
+        row.getCell(20).value={formula:reg+(blocked?'&" [ITC blocked]"':''),result:r.remarks};// T remarks
+      }
+      // ---- band tints on the body
+      for(var ci=1;ci<=RECO_HDR.length;ci++){row.getCell(ci).fill={type:'pattern',pattern:'solid',fgColor:{argb:bandOf(ci).cell}};}
+    });
     ws.columns.forEach(function(c,i){c.width=[16,17,26,16,12,13,13,11,11,11,12,6,11,10,10,11,10,11,10,20,16,17,12,26,16,11,11,11,13,13,60][i]||12;});
+    AMT_COLS.forEach(function(ci){ws.getColumn(ci).numFmt='#,##0.00';});
+    ws.getColumn(19).numFmt='0'; // spillover (mth)
+    ws.views=[{state:'frozen',ySplit:1,xSplit:0}];
   }
   // reconciled: matched, mismatch, probable, only-2b first, then only-books
   var order={matched:0,mismatch:1,probable:2,only2b:3,onlybk:4};
