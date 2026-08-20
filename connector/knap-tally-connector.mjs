@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.40';
+const VERSION = '4.41';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2710,6 +2710,71 @@ async function readSalesForCompany(url, company, asOn) {
   } finally { state.settings.company = saved; }
 }
 
+// ITC / purchase register — invoice-wise, for GSTR-2B reconciliation. Given the
+// input-GST ledgers the user picked (kind ∈ igst|cgst|sgst|rcm_igst|rcm_cgst|
+// rcm_sgst), reads every voucher over [from,to] that touches one of them and
+// returns per invoice: date, voucher no + supplier-invoice-no + ref (matched on
+// any of these against 2B), party + GSTIN, taxable base, and the tax split. The
+// taxable base is the non-tax, non-party debit (the purchase/expense leg).
+// Voucher-dense books fail fast (never freeze Tally).
+async function readItcRegister(url, company, from, to, taxLedgers) {
+  const saved = state.settings.company; state.settings.company = company || '';
+  try {
+    const masters = parseLedgerMasters(await askTallyFast(url, LEDGER_MASTERS_REQUEST(), 180000));
+    const kindOf = new Map();
+    for (const t of taxLedgers) if (t && t.name && t.kind) kindOf.set(norm(t.name), t.kind);
+    const fromKey = from.getUTCFullYear() * 10000 + (from.getUTCMonth() + 1) * 100 + from.getUTCDate();
+    const toKey = to.getUTCFullYear() * 10000 + (to.getUTCMonth() + 1) * 100 + to.getUTCDate();
+    const rows = [];
+    const seen = new Set(), seenSig = new Set();
+    dcProgress.phase = `ITC register — vouchers ${from.toISOString().slice(0, 10)} → ${to.toISOString().slice(0, 10)}…`;
+    await readVouchersRamp(url, from, to, (xml) => {
+      for (const block of xml.match(/<VOUCHER[\s>][\s\S]*?<\/VOUCHER>/gi) || []) {
+        if (/(^|>)\s*Yes\s*<\/ISCANCELLED>/i.test(block.match(/<ISCANCELLED>[\s\S]*?<\/ISCANCELLED>/i)?.[0] ?? '')) continue;
+        if (/<ISOPTIONAL>\s*Yes/i.test(block)) continue;
+        let key = tag(block, 'GUID');
+        if (!key) key = `${tag(block, 'VOUCHERTYPENAME')}|${tag(block, 'DATE')}|${tag(block, 'VOUCHERNUMBER')}|${tag(block, 'PARTYLEDGERNAME')}`;
+        if (seen.has(key)) continue; seen.add(key);
+        const dk = dateKey(tag(block, 'DATE'));
+        if (dk < fromKey || dk > toKey) continue;
+        const vno = tag(block, 'VOUCHERNUMBER'), vtype = tag(block, 'VOUCHERTYPENAME');
+        if (vno) { const vs = `${vtype}|${tag(block, 'DATE')}|${vno}`; if (seenSig.has(vs)) continue; seenSig.add(vs); }
+        const party = tag(block, 'PARTYLEDGERNAME') || '';
+        const entryBlocks = block.match(/<ALLLEDGERENTRIES\.LIST>[\s\S]*?<\/ALLLEDGERENTRIES\.LIST>/gi) || block.match(/<LEDGERENTRIES\.LIST>[\s\S]*?<\/LEDGERENTRIES\.LIST>/gi) || [];
+        const tax = { igst: 0, cgst: 0, sgst: 0, rcm_igst: 0, rcm_cgst: 0, rcm_sgst: 0 };
+        let touchesTax = false, taxable = 0;
+        for (const e of entryBlocks) {
+          const nm = tag(e, 'LEDGERNAME'); if (!nm) continue;
+          const rawAmt = toNum(tag(e, 'AMOUNT'));
+          const dp = tag(e, 'ISDEEMEDPOSITIVE');
+          const dr = r2((dp ? (/yes/i.test(dp) ? 1 : -1) : (rawAmt < 0 ? 1 : -1)) * Math.abs(rawAmt)); // Dr-positive
+          const k = kindOf.get(norm(nm));
+          if (k) { tax[k] = r2(tax[k] + dr); touchesTax = true; }
+          else if (party && norm(nm) === norm(party)) { /* party leg = invoice value */ }
+          else taxable = r2(taxable + dr);                 // purchase / expense base
+        }
+        if (!touchesTax) continue;                         // not an ITC voucher
+        const m = masters[party] || {};
+        const gstin = String(m.gstin || tag(block, 'PARTYGSTIN') || '').toUpperCase();
+        const supInv = tag(block, 'SUPPLIERINVOICENO') || tag(block, 'REFERENCE') || tag(block, 'BASICBUYERREFNO') || '';
+        const ref = tag(block, 'REFERENCE') || '';
+        const vd = parseTallyFieldDate(tag(block, 'DATE'));
+        const rcmAbs = Math.abs(tax.rcm_igst) + Math.abs(tax.rcm_cgst) + Math.abs(tax.rcm_sgst);
+        rows.push({
+          date: vd ? vd.toISOString().slice(0, 10) : null,
+          voucherNo: vno || '', supplierInvNo: supInv, ref,
+          party, gstin, taxable: r2(taxable),
+          igst: r2(tax.igst), cgst: r2(tax.cgst), sgst: r2(tax.sgst),
+          rcmIgst: r2(tax.rcm_igst), rcmCgst: r2(tax.rcm_cgst), rcmSgst: r2(tax.rcm_sgst),
+          rcm: rcmAbs > 0.005,
+        });
+      }
+    }, null, { firstWin: 3, attemptMs: 90000, failFast: true });
+    rows.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    return { rows };
+  } finally { state.settings.company = saved; }
+}
+
 async function readProfitabilityForCompany(url, company, asOn) {
   const saved = state.settings.company; state.settings.company = company || '';
   try {
@@ -3906,6 +3971,61 @@ const server = http.createServer(async (req, res) => {
         json(res, 200, wantTypes ? { ok: true, types: list } : { ok: true, ledgers: list });
       } catch (e) {
         json(res, 200, { ok: false, error: String(e.message || e), ledgers: [], types: [] });
+      }
+      return;
+    }
+
+    // ITC reco — list a chosen company's ledgers (for the input-GST selection).
+    if (req.method === 'POST' && url.pathname === '/api/itc/ledgers') {
+      const body = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
+      const turl = String(body.url || state.settings.tallyUrl);
+      const savedU = state.settings.tallyUrl, savedC = state.settings.company;
+      try {
+        state.settings.tallyUrl = turl; state.settings.company = String(body.company || '');
+        const collect =
+          '<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE>' +
+          '<ID>G2bNames</ID></HEADER><BODY><DESC><STATICVARIABLES>' +
+          '<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>' + svCompany() + '</STATICVARIABLES>' +
+          '<TDL><TDLMESSAGE><COLLECTION NAME="G2bNames" ISMODIFY="No"><TYPE>Ledger</TYPE>' +
+          '<NATIVEMETHOD>Name</NATIVEMETHOD><NATIVEMETHOD>Parent</NATIVEMETHOD></COLLECTION></TDLMESSAGE></TDL></DESC></BODY></ENVELOPE>';
+        const r = await fetch(turl, { method: 'POST', body: collect, headers: { 'content-type': 'text/xml' }, signal: AbortSignal.timeout(25000) });
+        const text = await r.text();
+        const ledgers = [];
+        for (const m of text.matchAll(/<LEDGER NAME="([^"]*)"[\s\S]*?<\/LEDGER>/gi)) {
+          const name = decodeXml(m[1] || ''); if (!name) continue;
+          const parent = decodeXml((m[0].match(/<PARENT>([\s\S]*?)<\/PARENT>/i)?.[1] || '').trim());
+          ledgers.push({ name, parent });
+        }
+        ledgers.sort((a, b) => a.name.localeCompare(b.name));
+        json(res, 200, { ok: true, ledgers });
+      } catch (e) {
+        json(res, 200, { ok: false, error: String((e && e.message) || e), ledgers: [] });
+      } finally {
+        state.settings.tallyUrl = savedU; state.settings.company = savedC;
+      }
+      return;
+    }
+    // ITC reco — invoice-wise purchase/ITC register for the selected input ledgers.
+    if (req.method === 'POST' && url.pathname === '/api/itc/register') {
+      if (dcProgress.active) { json(res, 409, { ok: false, error: 'A read is already running.' }); return; }
+      const body = JSON.parse(await readBody(req));
+      const from = tallyDateOf(String(body.from || '').replace(/-/g, ''));
+      const to = tallyDateOf(String(body.to || '').replace(/-/g, ''));
+      const taxLedgers = Array.isArray(body.taxLedgers) ? body.taxLedgers.filter((t) => t && t.name && t.kind) : [];
+      if (!from || !to) { json(res, 400, { ok: false, error: 'Set the from and to dates.' }); return; }
+      if (!taxLedgers.length) { json(res, 400, { ok: false, error: 'Select at least one input-GST ledger.' }); return; }
+      dcCancel = false;
+      dcProgress.active = true; dcProgress.done = 0; dcProgress.total = 1; dcProgress.phase = 'Starting…'; dcProgress.sub = ''; dcProgress.startedAt = Date.now();
+      try {
+        const one = await readItcRegister(String(body.url || state.settings.tallyUrl), String(body.company || ''), from, to, taxLedgers);
+        dcProgress.active = false;
+        json(res, 200, { ok: true, version: VERSION, from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10), rows: one.rows });
+      } catch (e) {
+        dcProgress.active = false;
+        const msg = /AGEING_TOO_DENSE/.test(String((e && e.message) || e))
+          ? 'This company has too many vouchers to read invoice-by-invoice. Try a shorter period.'
+          : ('Could not read Tally: ' + String((e && e.message) || e));
+        json(res, 502, { ok: false, error: msg });
       }
       return;
     }
