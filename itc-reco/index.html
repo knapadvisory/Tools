@@ -205,25 +205,30 @@
 
   <!-- STEP 3 summary -->
   <div class="card hidden" id="card3">
-    <h2>3 · Books ITC fetched</h2>
-    <div class="sub" id="booksSub"></div>
+    <div class="row" style="justify-content:space-between;align-items:flex-start">
+      <div><h2>3 · Books ITC fetched</h2><div class="sub" id="booksSub"></div></div>
+      <button class="btn ghost sm" onclick="downloadBooks()">⬇ Download books ITC</button>
+    </div>
     <div class="tblwrap"><table class="mtx" id="booksTbl"></table></div>
+    <p class="lbl" id="booksNote" style="margin-top:8px"></p>
   </div>
 
   <!-- STEP 4 -->
   <div class="card hidden" id="card4">
     <h2>4 · Add your GSTR-2B</h2>
-    <div class="sub">Upload the <b>GSTR-2B JSON</b> from the GST portal, or a filled CSV template. Nothing is uploaded anywhere — parsed in your browser.</div>
+    <div class="sub">Upload the <b>GSTR-2B JSON</b>(s) from the GST portal — you can add <b>several months</b> — or a filled CSV template. Nothing is uploaded anywhere; parsed in your browser.</div>
     <div class="row" style="margin-bottom:10px">
       <button class="btn ghost sm" onclick="downloadTemplate()">⬇ CSV template</button>
       <span class="lbl">Reverse-charge invoices in 2B are matched against your RCM ledgers.</span>
     </div>
-    <div class="drop" id="drop">Drop the GSTR-2B <b>.json</b> or template <b>.csv</b> here, or click to choose.
-      <input type="file" id="file2b" accept=".json,.csv" style="display:none">
+    <div class="drop" id="drop">Drop your GSTR-2B <b>.json</b> file(s) or template <b>.csv</b> here, or click to choose. Add as many months as you need.
+      <input type="file" id="file2b" accept=".json,.csv" multiple style="display:none">
     </div>
+    <div id="filesLoaded" class="picked" style="margin-top:10px"></div>
     <div class="msg" id="msg2b"></div>
     <div class="row" style="margin-top:12px">
       <button class="btn primary" id="btnReco" onclick="reconcile()" disabled>RECONCILE →</button>
+      <button class="btn ghost sm" id="btnClear2b" onclick="clear2b()" style="display:none">Clear 2B files</button>
     </div>
   </div>
 
@@ -381,36 +386,72 @@ function fetchItc(){
 }
 function pollFetch(){POLL=setInterval(function(){fetch(API+'/api/dc/progress').then(function(r){return r.json();}).then(function(p){if(p&&p.phase){$('fetchLine').textContent=(p.phase||'')+' '+(p.sub||'');var pc=p.monthsTotal?Math.min(95,Math.round(p.monthsDone/p.monthsTotal*90)+10):40;$('fetchBar').style.width=pc+'%';}}).catch(function(){});},700);}
 function tsum(r){return r.igst+r.cgst+r.sgst+(r.rcmIgst||0)+(r.rcmCgst||0)+(r.rcmSgst||0);}
+var lastBooksMeta={from:'',to:''};
 function showBooks(j){
+  lastBooksMeta={from:j.from||'',to:j.to||''};
   $('card3').classList.remove('hidden');
-  var tot=booksRows.reduce(function(a,r){return a+tsum(r);},0);
-  $('booksSub').innerHTML=booksRows.length+' invoices · '+j.from+' → '+j.to+' · total ITC <b>'+inr(tot)+'</b> (regular + RCM, net of reversals)';
+  var T={tax:0,ig:0,cg:0,sg:0,rcm:0};
+  booksRows.forEach(function(r){T.tax+=r.taxable;T.ig+=r.igst;T.cg+=r.cgst;T.sg+=r.sgst;T.rcm+=(r.rcmIgst||0)+(r.rcmCgst||0)+(r.rcmSgst||0);});
+  var totItc=T.ig+T.cg+T.sg+T.rcm;
+  $('booksSub').innerHTML=booksRows.length+' invoices · '+j.from+' → '+j.to+' · total ITC <b>'+inr(totItc)+'</b> (regular + RCM, net of reversals)';
+  var totalRow='<tr class="cgrp"><td colspan="4"><b>Total — all '+booksRows.length+' invoices</b></td><td class="r"><b>'+inr(T.tax)+'</b></td><td class="r"><b>'+inr(T.ig)+'</b></td><td class="r"><b>'+inr(T.cg)+'</b></td><td class="r"><b>'+inr(T.sg)+'</b></td><td class="r"><b>'+inr(T.rcm)+'</b></td></tr>';
   var t=$('booksTbl');
   t.innerHTML='<thead><tr><th>Date</th><th>Voucher / Supp. inv.</th><th>Party</th><th>GSTIN</th><th class="r">Taxable</th><th class="r">IGST</th><th class="r">CGST</th><th class="r">SGST</th><th class="r">RCM</th></tr></thead><tbody>'
+    +totalRow
     +booksRows.slice(0,300).map(function(r){return '<tr><td>'+esc(r.date||'—')+'</td><td>'+esc(r.voucherNo||'')+(r.supplierInvNo&&r.supplierInvNo!==r.voucherNo?' <span class="lp mono" style="color:var(--faint)">/ '+esc(r.supplierInvNo)+'</span>':'')+'</td><td>'+esc(r.party||'')+(r.rcm?' <span class="pill rcm">RCM</span>':'')+'</td><td class="mono">'+esc(r.gstin||'—')+'</td><td class="r">'+inr(r.taxable)+'</td><td class="r">'+inr(r.igst)+'</td><td class="r">'+inr(r.cgst)+'</td><td class="r">'+inr(r.sgst)+'</td><td class="r">'+inr((r.rcmIgst||0)+(r.rcmCgst||0)+(r.rcmSgst||0))+'</td></tr>';}).join('')
     +'</tbody>';
-  if(booksRows.length>300)t.insertAdjacentHTML('beforeend','<tbody><tr><td colspan="9" class="empty">Showing first 300 of '+booksRows.length+'.</td></tr></tbody>');
+  $('booksNote').innerHTML=(booksRows.length>300?'Showing first 300 of '+booksRows.length+' — the totals row and Download cover all. ':'')
+    +'Compare these totals with your Input IGST/CGST/SGST ledger <b>period movement</b> (closing − opening) to confirm the fetch is complete.';
+}
+function csvcell(s){s=String(s==null?'':s);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}
+function downloadBooks(){
+  if(!booksRows.length){alert('No books rows to download.');return;}
+  var head=['Date','Voucher No','Supplier Inv No','Ref','Party','GSTIN','Taxable','IGST','CGST','SGST','RCM IGST','RCM CGST','RCM SGST','RCM'];
+  var lines=[head.join(',')];
+  booksRows.forEach(function(r){lines.push([r.date||'',csvcell(r.voucherNo),csvcell(r.supplierInvNo),csvcell(r.ref),csvcell(r.party),r.gstin||'',r.taxable,r.igst,r.cgst,r.sgst,r.rcmIgst||0,r.rcmCgst||0,r.rcmSgst||0,r.rcm?'Y':''].join(','));});
+  dl('books-itc-'+(lastBooksMeta.from||'')+'_'+(lastBooksMeta.to||'')+'.csv',new Blob([lines.join('\n')],{type:'text/csv'}));
 }
 
 /* ============================ step 4: GSTR-2B input ============================ */
-var twoBRows=[];
+var twoBRows=[], loadedFiles=[];
+var DROP_HTML='Drop your GSTR-2B <b>.json</b> file(s) or template <b>.csv</b> here, or click to choose. Add as many months as you need.';
 $('drop').addEventListener('click',function(){$('file2b').click();});
 $('drop').addEventListener('dragover',function(e){e.preventDefault();$('drop').classList.add('has');});
-$('drop').addEventListener('dragleave',function(){$('drop').classList.remove('has');});
-$('drop').addEventListener('drop',function(e){e.preventDefault();$('drop').classList.remove('has');if(e.dataTransfer.files[0])handle2b(e.dataTransfer.files[0]);});
-$('file2b').addEventListener('change',function(e){if(e.target.files[0])handle2b(e.target.files[0]);});
-function handle2b(file){
-  var fr=new FileReader();fr.onload=function(){
-    try{
-      if(/\.json$/i.test(file.name)){twoBRows=parse2bJson(JSON.parse(fr.result));}
-      else{twoBRows=parseCsv(fr.result);}
-      if(!twoBRows.length){setMsg('msg2b','No invoices found in that file. Check it’s a GSTR-2B JSON or the filled template.','bad');return;}
-      var tot=twoBRows.reduce(function(a,r){return a+r.igst+r.cgst+r.sgst;},0);
-      $('drop').classList.add('has');$('drop').innerHTML='✓ '+esc(file.name)+' — '+twoBRows.length+' invoices, ITC '+inr(tot);
-      setMsg('msg2b','Loaded '+twoBRows.length+' 2B invoices.','ok');$('btnReco').disabled=false;
-    }catch(err){setMsg('msg2b','Could not read that file: '+err.message,'bad');}
-  };fr.readAsText(file);
+$('drop').addEventListener('dragleave',function(){if(!loadedFiles.length)$('drop').classList.remove('has');});
+$('drop').addEventListener('drop',function(e){e.preventDefault();handleFiles(e.dataTransfer.files);});
+$('file2b').addEventListener('change',function(e){handleFiles(e.target.files);e.target.value='';});
+function handleFiles(files){
+  if(!files||!files.length)return;
+  var arr=Array.prototype.slice.call(files),i=0;
+  (function next(){
+    if(i>=arr.length){renderFiles();return;}
+    var file=arr[i++],fr=new FileReader();
+    fr.onload=function(){
+      try{
+        var rows=/\.json$/i.test(file.name)?parse2bJson(JSON.parse(fr.result)):parseCsv(fr.result);
+        loadedFiles.push({name:file.name,count:rows.length,rows:rows});
+      }catch(err){loadedFiles.push({name:file.name,count:0,rows:[],error:err.message});}
+      next();
+    };
+    fr.readAsText(file);
+  })();
 }
+function rebuild2b(){twoBRows=[];loadedFiles.forEach(function(f){if(f.rows)twoBRows=twoBRows.concat(f.rows);});}
+function renderFiles(){
+  rebuild2b();
+  var c=$('filesLoaded');
+  c.innerHTML=loadedFiles.map(function(f,idx){return '<span class="pchip">'+(f.error?'⚠ ':'✓ ')+esc(f.name)+' <span class="k">'+(f.error?'error':(f.count+' inv'))+'</span> <a href="#" onclick="removeFile('+idx+');return false" style="margin-left:5px;color:var(--bad)">✕</a></span>';}).join('');
+  var tot=twoBRows.reduce(function(a,r){return a+r.igst+r.cgst+r.sgst;},0);
+  if(loadedFiles.length){
+    $('drop').classList.add('has');
+    $('drop').innerHTML=loadedFiles.length+' file(s) · '+twoBRows.length+' invoices · ITC '+inr(tot)+' <div class="lbl" style="margin-top:4px">click to add more months</div>';
+    setMsg('msg2b','Loaded '+twoBRows.length+' 2B invoices across '+loadedFiles.length+' file(s).', twoBRows.length?'ok':'warn');
+  }else{ $('drop').classList.remove('has'); $('drop').innerHTML=DROP_HTML; setMsg('msg2b','',''); }
+  $('btnReco').disabled=twoBRows.length===0;
+  $('btnClear2b').style.display=loadedFiles.length?'':'none';
+}
+function removeFile(idx){loadedFiles.splice(idx,1);renderFiles();}
+function clear2b(){loadedFiles=[];renderFiles();}
 function num(x){var n=parseFloat(String(x==null?0:x).replace(/[, ]/g,''));return isNaN(n)?0:n;}
 function parse2bJson(j){
   var out=[],d=(j&&j.data&&j.data.docdata)?j.data.docdata:(j&&j.docdata?j.docdata:j&&j.data?j.data:j);
@@ -451,24 +492,59 @@ var TAXTOL=1, TXVTOL=5;
 function normGstin(g){return String(g||'').toUpperCase().replace(/[^A-Z0-9]/g,'');}
 function normInv(x){return String(x||'').toUpperCase().replace(/[^A-Z0-9]/g,'');}
 function bTax(r){return {igst:r.igst+(r.rcmIgst||0),cgst:r.cgst+(r.rcmCgst||0),sgst:r.sgst+(r.rcmSgst||0)};}
+function bGstTotal(r){var t=bTax(r);return t.igst+t.cgst+t.sgst;}
+function uniq(a){var s={},o=[];a.forEach(function(x){if(x&&!s[x]){s[x]=1;o.push(x);}});return o;}
+function invCands(r){return uniq([r.supplierInvNo,r.voucherNo,r.ref].map(normInv)).filter(function(x){return x.length>=2;});}
+// Invoice-number similarity: 3 exact, 2 one is a suffix of the other (len≥3 —
+// catches "100" ↔ "26-27/100"), 1 one contains the other (len≥5), else 0.
+function invMatch(a,b){
+  if(!a||!b)return 0;
+  if(a===b)return 3;
+  var mn=Math.min(a.length,b.length);
+  if(mn>=3&&(a.slice(-mn)===b.slice(-mn)))return 2;
+  if(mn>=5&&(a.indexOf(b)>=0||b.indexOf(a)>=0))return 1;
+  return 0;
+}
+var STOP=/\b(PVT|PRIVATE|LTD|LIMITED|LLP|AND|THE|MS|CO|COMPANY|ENTERPRISES?|ENTERPRISE|INDUSTR\w*|TRADERS?|TRADING|CORPORATION|CORP|STEEL|SALES|CENTRE|CENTER)\b/g;
+function nameToks(s){return uniq(String(s||'').toUpperCase().replace(STOP,' ').replace(/[^A-Z0-9 ]/g,' ').split(/\s+/).filter(function(t){return t.length>=3;}));}
+function nameScore(a,b){var A=nameToks(a),B={};nameToks(b).forEach(function(t){B[t]=1;});if(!A.length)return 0;var m=0;A.forEach(function(t){if(B[t])m++;});return m/A.length;}
 function reconcile(){
-  // index books rows by gstin|invcandidate
-  var idx={},used={};
+  var n=booksRows.length,used=new Array(n).fill(false);
+  var invIdx={},gstinIdx={},gstAmtIdx={};
   booksRows.forEach(function(r,i){
-    var g=normGstin(r.gstin);
-    var cands=[r.supplierInvNo,r.voucherNo,r.ref].map(normInv).filter(Boolean);
-    cands.forEach(function(c){var key=g+'|'+c;(idx[key]||(idx[key]=[])).push(i);});
+    invCands(r).forEach(function(c){(invIdx[c]||(invIdx[c]=[])).push(i);});
+    var g=normGstin(r.gstin);if(g)(gstinIdx[g]||(gstinIdx[g]=[])).push(i);
+    var a=Math.round(bGstTotal(r));(gstAmtIdx[a]||(gstAmtIdx[a]=[])).push(i);
   });
+  function findMatch(b){
+    var bInv=normInv(b.invNo),g=normGstin(b.gstin),bg=b.igst+b.cgst+b.sgst;
+    var pool={};
+    function add(list){(list||[]).forEach(function(i){if(!used[i])pool[i]=1;});}
+    add(invIdx[bInv]); if(g)add(gstinIdx[g]); add(gstAmtIdx[Math.round(bg)]);
+    var best=-1,bestKey=null;
+    Object.keys(pool).forEach(function(ks){
+      var i=+ks,r=booksRows[i];
+      var im=0;invCands(r).forEach(function(c){im=Math.max(im,invMatch(bInv,c));});
+      var rg=normGstin(r.gstin), gstEq=!!(g&&rg&&g===rg);
+      var dg=Math.abs(bg-bGstTotal(r)), gstClose=dg<=2, gstNear=dg<=50;
+      var ns=nameScore(b.party,r.party), nameStrong=ns>=0.5;
+      var accept = im>=2 || (im>=1&&(gstNear||nameStrong)) || (gstEq&&gstNear) || (nameStrong&&gstClose);
+      if(!accept)return;
+      // rank: prefer better invoice, then gstin, then closer amount, then name
+      var key=[im, gstEq?1:0, gstClose?1:0, -dg, ns];
+      if(best<0||cmpKey(key,bestKey)>0){best=i;bestKey=key;}
+    });
+    return best;
+  }
+  function cmpKey(a,b){for(var i=0;i<a.length;i++){if(a[i]!==b[i])return a[i]>b[i]?1:-1;}return 0;}
   var matched=[],mismatch=[],only2b=[];
   twoBRows.forEach(function(b){
-    var g=normGstin(b.gstin),key=g+'|'+normInv(b.invNo);
-    var list=idx[key]||[];var bi=-1;for(var k=0;k<list.length;k++){if(!used[list[k]]){bi=list[k];break;}}
+    var bi=findMatch(b);
     if(bi<0){only2b.push(b);return;}
-    used[bi]=1;var br=booksRows[bi],bt=bTax(br);
+    used[bi]=true;var br=booksRows[bi],bt=bTax(br);
     var di=b.igst-bt.igst,dc=b.cgst-bt.cgst,ds=b.sgst-bt.sgst,dt=b.taxable-br.taxable;
-    var ok=Math.abs(di)<=TAXTOL&&Math.abs(dc)<=TAXTOL&&Math.abs(ds)<=TAXTOL&&Math.abs(dt)<=TXVTOL;
-    var rec={twoB:b,books:br,d:{igst:di,cgst:dc,sgst:ds,tax:dt}};
-    (ok?matched:mismatch).push(rec);
+    var ok=Math.abs(di)<=TAXTOL&&Math.abs(dc)<=TAXTOL&&Math.abs(ds)<=TAXTOL;
+    (ok?matched:mismatch).push({twoB:b,books:br,d:{igst:di,cgst:dc,sgst:ds,tax:dt}});
   });
   var onlyBooks=booksRows.filter(function(r,i){return !used[i];});
   report={matched:matched,mismatch:mismatch,only2b:only2b,onlyBooks:onlyBooks};
