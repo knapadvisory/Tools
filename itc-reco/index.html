@@ -62,7 +62,7 @@
   .step.active{background:var(--green-soft)} .step.active .num{background:var(--green);color:#fff} .step.active .lbl{color:var(--green-ink)}
   @media (max-width:820px){.stepper{grid-template-columns:1fr 1fr}.step{border-bottom:1px solid var(--border)}}
   .card{background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:0 1px 2px var(--shadow);padding:20px 22px;margin-bottom:16px}
-  .card.hidden{display:none}
+  .card.hidden,.hidden{display:none}
   .card h2{font-size:15.5px;font-weight:700;margin-bottom:3px}
   .card .sub{color:var(--muted);font-size:12.5px;margin-bottom:10px}
   .btn{display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:13px;font-weight:600;padding:9px 16px;border-radius:10px;border:1px solid var(--border-2);background:var(--surface-2);color:var(--text);cursor:pointer;transition:.12s}
@@ -103,6 +103,9 @@
   .picked{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}
   .pchip{font-size:11.5px;background:var(--green-soft);border:1px solid var(--green-line);color:var(--green-ink);border-radius:999px;padding:4px 11px;font-weight:600}
   .pchip .k{opacity:.7;font-weight:700}
+  .confirmed{background:var(--green-soft);border:1px solid var(--green-line);border-radius:12px;padding:14px 16px}
+  .confirmed .ctitle2{font-weight:700;color:var(--green-ink);font-size:13.5px;margin-bottom:8px}
+  .confirmed .cchips{display:flex;flex-wrap:wrap;gap:7px}
   /* file drop */
   .drop{border:1.5px dashed var(--border-2);border-radius:12px;padding:22px;text-align:center;color:var(--muted);font-size:13px;background:var(--surface-2);cursor:pointer}
   .drop:hover{border-color:var(--green);color:var(--green)} .drop.has{border-style:solid;border-color:var(--green-line);background:var(--green-soft);color:var(--green-ink)}
@@ -169,21 +172,35 @@
   <!-- STEP 2 -->
   <div class="card hidden" id="card2">
     <h2>2 · Pick the input-GST ledgers</h2>
-    <div class="sub">Tick the tax you claim ITC through and tag each as IGST / CGST / SGST — and separately if it’s a <b>reverse-charge (RCM)</b> ledger. Ledger names vary company to company, so you choose. Debits = ITC availed, credits = reversals; both are netted.</div>
-    <div class="ledtools">
-      <input type="text" id="ledSearch" placeholder="Search ledgers…" oninput="renderLedgers()">
-      <span class="msg" id="msgLed" style="margin:0"></span>
+    <div class="sub">Tag each <b>input</b> ledger you claim ITC through as IGST / CGST / SGST — and use the RCM options for reverse-charge ledgers. Likely input ledgers are pre-tagged, but check them: <b>output/liability and rate ledgers are NOT auto-selected</b> — only ones named “Input…”. Debits = ITC availed, credits = reversals (both netted). Then <b>Confirm</b>.</div>
+
+    <div id="ledPickArea">
+      <div class="ledtools">
+        <input type="text" id="ledSearch" placeholder="Search ledgers…" oninput="renderLedgers()">
+        <span class="msg" id="msgLed" style="margin:0"></span>
+      </div>
+      <div class="ledwrap" id="ledWrap"></div>
+      <div class="picked" id="pickedChips"></div>
+      <div class="row" style="margin-top:14px">
+        <button class="btn ghost sm" onclick="clearLedgers()">Clear all</button>
+        <button class="btn primary" id="btnConfirm" onclick="confirmLedgers()">Confirm input ledgers →</button>
+      </div>
     </div>
-    <div class="ledwrap" id="ledWrap"></div>
-    <div class="picked" id="pickedChips"></div>
-    <div class="row" style="margin-top:14px">
-      <label class="lbl">From <input type="date" id="fromDate"></label>
-      <label class="lbl">To <input type="date" id="toDate"></label>
-      <button class="btn primary" id="btnFetch" onclick="fetchItc()">Fetch books ITC →</button>
+
+    <div id="confirmBlock" class="hidden">
+      <div class="confirmed" id="confirmSummary"></div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn ghost sm" onclick="editLedgers()">✎ Edit ledger selection</button>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <label class="lbl">From <input type="date" id="fromDate"></label>
+        <label class="lbl">To <input type="date" id="toDate"></label>
+        <button class="btn primary" id="btnFetch" onclick="fetchItc()">Fetch books ITC →</button>
+      </div>
+      <div class="prog" id="fetchProg" style="display:none"><i id="fetchBar"></i></div>
+      <div class="prog-line" id="fetchLine" style="display:none"></div>
+      <div class="msg" id="msgFetch"></div>
     </div>
-    <div class="prog" id="fetchProg" style="display:none"><i id="fetchBar"></i></div>
-    <div class="prog-line" id="fetchLine" style="display:none"></div>
-    <div class="msg" id="msgFetch"></div>
   </div>
 
   <!-- STEP 3 summary -->
@@ -303,7 +320,9 @@ function loadLedgers(){
 }
 function nk(s){return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'');}
 function guessKind(name){
-  var n=name.toLowerCase();if(n.indexOf('input')<0&&n.indexOf('itc')<0&&!/gst/.test(n))return '';
+  var n=name.toLowerCase();
+  if(/output|payable|liab/.test(n))return '';          // never output / liability ledgers
+  if(!(/\binput\b/.test(n)||/\bitc\b/.test(n)))return '';// only clearly-INPUT ledgers auto-suggest; rest you pick
   var rcm=/rcm|reverse/.test(n);
   if(/igst/.test(n))return rcm?'rcm_igst':'igst';
   if(/cgst/.test(n))return rcm?'rcm_cgst':'cgst';
@@ -327,10 +346,20 @@ function renderLedgers(){
 }
 function setKind(sel){var name=sel.getAttribute('data-n'),k=sel.value;if(k)kinds[nk(name)]=k;else delete kinds[nk(name)];renderLedgers();renderPicked();}
 function selectedLedgers(){return ledgers.filter(function(L){return kinds[nk(L.name)];}).map(function(L){return {name:L.name,kind:kinds[nk(L.name)]};});}
+function chipHtml(s){return '<span class="pchip">'+esc(s.name)+' <span class="k">'+s.kind.replace('_',' ').toUpperCase()+'</span></span>';}
 function renderPicked(){
   var sel=selectedLedgers();var c=$('pickedChips');
-  c.innerHTML=sel.length?sel.map(function(s){return '<span class="pchip">'+esc(s.name)+' <span class="k">'+s.kind.replace('_',' ').toUpperCase()+'</span></span>';}).join(''):'<span class="lbl">No input ledgers selected yet.</span>';
+  c.innerHTML=sel.length?('<span class="lbl" style="margin-right:4px">'+sel.length+' selected:</span>'+sel.map(chipHtml).join('')):'<span class="lbl">No input ledgers selected yet — set a ledger’s dropdown to tag it.</span>';
 }
+function clearLedgers(){kinds={};renderLedgers();renderPicked();}
+function confirmLedgers(){
+  var sel=selectedLedgers();
+  if(!sel.length){setMsg('msgLed','Select at least one input-GST ledger first — set its dropdown to IGST/CGST/SGST (or an RCM option).','bad');return;}
+  $('ledPickArea').classList.add('hidden');
+  $('confirmBlock').classList.remove('hidden');
+  $('confirmSummary').innerHTML='<div class="ctitle2">✓ '+sel.length+' input ledger'+(sel.length>1?'s':'')+' confirmed</div><div class="cchips">'+sel.map(chipHtml).join('')+'</div>';
+}
+function editLedgers(){$('confirmBlock').classList.add('hidden');$('ledPickArea').classList.remove('hidden');}
 
 /* ============================ step 3: fetch books ITC ============================ */
 var booksRows=[];
