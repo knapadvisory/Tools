@@ -576,18 +576,16 @@ function buildRec(b,br){
   if(gstOff){
     rec.remarks='booked - amount mismatch';rec._cat='mismatch';
     rec.note='Purchase '+rec.vchBk+': GST in the books ₹'+inr(rec.gstBk)+' vs ₹'+inr(rec.gst2b)+' in 2B — differs by ₹'+inr(Math.abs(rec.gstChk))+'.';
-  } else if(headMix){
-    rec.remarks='booked - amount mismatch';rec._cat='mismatch';
-    rec.note='Purchase '+rec.vchBk+': total GST matches but the split differs — 2B IGST/CGST/SGST '+inr(rec.igst2b)+'/'+inr(rec.cgst2b)+'/'+inr(rec.sgst2b)+' vs books '+inr(rec.igstBk)+'/'+inr(rec.cgstBk)+'/'+inr(rec.sgstBk)+' (check place of supply).';
   } else if(taxOff){
     rec.remarks='probable match — verify';rec._cat='probable';
     rec.note='Purchase '+rec.vchBk+' ('+rec.partyBk+'): GST matches but books taxable ₹'+inr(rec.taxBk)+' vs ₹'+inr(rec.tax2b)+' in 2B — verify.';
-  } else if(im<3){
-    rec.remarks='probable match — verify';rec._cat='probable';
-    rec.note='Matched by GSTIN + amount — the books voucher '+rec.vchBk+' differs from the 2B document no. '+rec.docNo+'; verify it is the same invoice.';
   } else {
+    // GST and taxable both tie → booked, even if the invoice number differs
+    // (books often use an internal voucher number, not the supplier's invoice).
     rec.remarks='booked';rec._cat='matched';
     rec.note='Matched purchase '+rec.vchBk+' ('+rec.partyBk+').';
+    if(headMix)rec.note+=' Note: split differs — 2B IGST/CGST/SGST '+inr(rec.igst2b)+'/'+inr(rec.cgst2b)+'/'+inr(rec.sgst2b)+' vs books '+inr(rec.igstBk)+'/'+inr(rec.cgstBk)+'/'+inr(rec.sgstBk)+' (same total — check place of supply).';
+    else if(im<2)rec.note+=' (Matched by amount — books voucher '+rec.vchBk+' vs 2B doc '+rec.docNo+'.)';
   }
   if(typeof rec.spill==='number'&&rec.spill!==0){
     rec.note+=' Booked '+Math.abs(rec.spill)+' month(s) '+(rec.spill>0?'earlier':'later')+' than the 2B period.';
@@ -615,10 +613,14 @@ function reconcile(){
       var im=0;invCands(r).forEach(function(c){im=Math.max(im,invMatch(bInv,c));});
       var rg=normGstin(r.gstin),gstEq=!!(g&&rg&&g===rg);
       var dg=Math.abs(bg-bGst(r)),gstClose=dg<=2,gstNear=dg<=50;
+      var dt=Math.abs((b.taxable||0)-(r.taxable||0)),taxClose=dt<=Math.max(10,Math.abs(b.taxable||0)*0.005);
       var ns=nameScore(b.party,r.party),nameStrong=ns>=0.5;
       var accept=im>=2||(im>=1&&(gstNear||nameStrong))||(gstEq&&gstNear)||(nameStrong&&gstClose);
       if(!accept)return;
-      var key=[im,gstEq?1:0,gstClose?1:0,-dg,ns];
+      // Rank by AMOUNT tie first (same GSTIN, GST ties, taxable ties), THEN the
+      // invoice number — a matching amount is a stronger signal than a matching
+      // invoice number (short numbers like 1/100 collide across suppliers).
+      var key=[gstEq?1:0,gstClose?1:0,taxClose?1:0,im,ns,-dg,-dt];
       if(best<0||cmpKey(key,bestKey)>0){best=i;bestKey=key;}
     });
     return best;
