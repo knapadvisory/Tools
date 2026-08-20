@@ -7,69 +7,40 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧮</text></svg>">
 <script src="/session.js" defer></script>
 <script src="/gstr2b/exceljs.js" defer></script>
+<link rel="stylesheet" href="/cockpit.css">
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  :root {
-    --accent: #4f46e5; --accent-hover: #4338ca; --on-accent: #fff;
-    --bg: #f4f5f8; --surface: #ffffff; --surface-2: #f5f6f9; --border: #e4e6ec;
-    --text: #1d1c1d; --muted: #6b7280; --shadow: rgba(20,25,45,.08);
-    --ok: #16a34a; --ok-soft: #e7f6ec; --warn: #d97706; --warn-soft: #fbf4dc;
-    --bad: #dc2626; --bad-soft: #fdecec;
-    --header-bg: #1e1b4b; --header-text: rgba(255,255,255,.85);
-  }
-  body { background: var(--bg); color: var(--text); font: 14.5px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; min-height: 100vh; }
-  a { color: var(--accent); text-decoration: none; }
-  .site-head { background: var(--header-bg); color: var(--header-text); }
-  .site-head-inner { max-width: 1100px; margin: 0 auto; padding: 13px 24px; display: flex; align-items: center; gap: 14px; }
-  .brand { font-weight: 700; font-size: 16.5px; color: #fff; }
-  .back { margin-left: auto; color: var(--header-text); font-size: 13px; padding: 6px 12px; border-radius: 8px; }
-  .back:hover { background: rgba(255,255,255,.1); }
-  main { max-width: 1100px; margin: 0 auto; padding: 26px 24px 60px; }
-  h1 { font-size: 21px; letter-spacing: -.01em; }
-  .lede { color: var(--muted); font-size: 13px; margin: 6px 0 20px; max-width: 760px; }
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 1px 2px var(--shadow); padding: 18px 20px; margin-bottom: 16px; }
-  .card h2 { font-size: 15px; margin-bottom: 10px; }
-  .stepno { display: inline-flex; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 12px; font-weight: 700; align-items: center; justify-content: center; margin-right: 8px; }
-  .drop { border: 2px dashed var(--border); border-radius: 12px; padding: 26px 18px; text-align: center; cursor: pointer; transition: border-color .15s; }
-  .drop:hover, .drop.over { border-color: var(--accent); }
-  .drop .big { font-weight: 700; }
-  .drop .hint { color: var(--muted); font-size: 12.5px; margin-top: 4px; }
-  .kv { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 12px; font-size: 13px; }
-  .kv b { display: block; font-size: 12px; color: var(--muted); font-weight: 600; }
-  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
-  input[type=text], input[type=date], select { font: inherit; padding: 8px 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text); }
-  input.small { width: 130px; } input.tiny { width: 90px; }
-  .btn { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 13.5px; font-weight: 600; padding: 9px 16px; border-radius: 9px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); cursor: pointer; }
-  .btn:hover { border-color: var(--accent); }
-  .btn:disabled { opacity: .55; cursor: default; }
-  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .btn.primary:hover:not(:disabled) { background: var(--accent-hover); }
-  .btn.go { background: #0e7490; border-color: #0e7490; color: #fff; box-shadow: 0 2px 8px rgba(14,116,144,.3); }
-  .msg { font-size: 13px; margin-top: 10px; color: var(--muted); }
-  .msg.ok { color: var(--ok); } .msg.bad { color: var(--bad); }
-  table { width: 100%; border-collapse: collapse; font-size: 12.8px; margin-top: 12px; }
-  th { text-align: left; font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); border-bottom: 1px solid var(--border); padding: 6px 8px; }
-  td { padding: 6px 8px; border-bottom: 1px solid var(--surface-2); vertical-align: top; }
-  td.r, th.r { text-align: right; }
-  .pill { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 999px; }
-  .pill.ok { background: var(--ok-soft); color: var(--ok); }
-  .pill.watch { background: var(--warn-soft); color: var(--warn); }
-  .pill.flag { background: var(--bad-soft); color: var(--bad); }
-  .stats { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
-  .stat { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 16px; }
-  .stat .n { font-size: 19px; font-weight: 700; } .stat .l { font-size: 11.5px; color: var(--muted); }
-  .hidden { display: none; }
-  .maprow input { margin: 0; }
-  .sug { color: var(--accent); font-size: 12px; cursor: pointer; }
-  footer { border-top: 1px solid var(--border); margin-top: 40px; padding: 18px 24px; text-align: center; font-size: 12.5px; color: var(--muted); }
+  /* Tool-specific styles only — the shared cockpit skin (/cockpit.css) provides
+     the header, cards, buttons, inputs, tables, pills and green theme. */
+  :root{ --accent:var(--green); --accent-hover:var(--green-2); --on-accent:#fff; }
+  .card h2{ margin-bottom:10px; }
+  .stepno{ display:inline-flex; width:22px; height:22px; border-radius:50%; background:var(--green); color:#fff; font-size:12px; font-weight:700; align-items:center; justify-content:center; margin-right:8px; }
+  .drop .big{ font-weight:700; color:var(--text); } .drop .hint{ color:var(--muted); font-size:12.5px; margin-top:4px; }
+  .kv{ display:flex; gap:22px; flex-wrap:wrap; margin-top:12px; font-size:13px; }
+  .kv b{ display:block; font-size:12px; color:var(--muted); font-weight:600; }
+  input.small{ width:150px; } input.tiny{ width:90px; }
+  .btn.go{ background:var(--green); border-color:var(--green); color:#fff; }
+  .btn.go:hover:not(:disabled){ background:var(--green-2); color:#fff; }
+  table{ width:100%; border-collapse:collapse; font-size:12.8px; margin-top:12px; }
+  th{ text-align:left; font-size:11.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--faint); border-bottom:1px solid var(--border); padding:6px 8px; }
+  td{ padding:6px 8px; border-bottom:1px solid var(--surface-2); vertical-align:top; }
+  td.r, th.r{ text-align:right; font-family:var(--mono); }
+  .pill.watch{ background:var(--warn-soft); color:var(--warn); }
+  .pill.flag{ background:var(--bad-soft); color:var(--bad); }
+  .stats{ display:flex; gap:12px; flex-wrap:wrap; margin-top:12px; }
+  .stat{ background:var(--surface-2); border:1px solid var(--border); border-radius:10px; padding:10px 16px; }
+  .stat .n{ font-size:19px; font-weight:700; font-family:var(--mono); } .stat .l{ font-size:11.5px; color:var(--muted); }
+  .maprow input{ margin:0; }
+  .sug{ color:var(--green); font-size:12px; cursor:pointer; }
 </style>
 </head>
 <body>
 <header class="site-head"><div class="site-head-inner">
-  <span class="brand">🧮 TDS × 26AS Reconciler</span>
+  <span class="brand"><span class="g"></span> TDS × 26AS Reconciler</span>
   <a class="back" href="/">← All tools</a>
-  <button type="button" onclick="releaseTally()" style="font:inherit;font-size:12.5px;font-weight:600;padding:6px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.35);background:transparent;color:#fff;cursor:pointer" title="Free Tally for normal use — stops any in-progress read so you don't have to close Tally from Task Manager">🔌 Release Tally</button>
-  <button type="button" id="conn-upd" onclick="updateConnector()" style="font:inherit;font-size:12.5px;font-weight:600;padding:6px 12px;border-radius:8px;border:1px solid rgba(255,255,255,.35);background:transparent;color:#fff;cursor:pointer" title="Fetch the newest connector from the server right now">⟳ Update connector</button>
+  <span class="spacer"></span>
+  <span class="conn-pill" id="connPill"><span class="dot"></span><span id="connPillText">checking connector…</span></span>
+  <button type="button" class="sess-out" onclick="releaseTally()" title="Free Tally for normal use — stops any in-progress read">🔌 Release Tally</button>
+  <button type="button" class="sess-out" id="conn-upd" onclick="updateConnector()" title="Fetch the newest connector from the server right now">⟳ Update connector</button>
 </div></header>
 
 <main>
@@ -212,18 +183,21 @@ var r2=function(n){ return Math.round(n*100)/100; };
 var raw26=[], header26=null, bookEntries=[], tdsMap={}, recResult=[], connVer='', lastParties=null;
 
 /* ================= connector ================= */
+function setPill(state,txt){var p=document.getElementById('connPill');if(!p)return;p.className='conn-pill '+(state||'');document.getElementById('connPillText').textContent=txt;}
 function checkConn(){
   fetch(API+'/health',{signal:AbortSignal.timeout(3000)}).then(function(r){return r.json();}).then(function(h){
     connVer=h.version||'';
     document.getElementById('tally-dot').style.background='var(--ok)';
     document.getElementById('tally-status').textContent='connector v'+connVer;
     document.getElementById('conn-ver').textContent='· connector v'+connVer;
+    setPill('on','connector v'+connVer+' · connected');
     if(parseFloat(connVer)<2.6){ document.getElementById('msgTally').innerHTML='This tool needs connector <b>v2.6+</b> — press ⟳ Update connector.'; }
     fetch(API+'/api/tds/data').then(function(r){return r.json();}).then(function(d){ tdsMap=d.map||{}; }).catch(function(){});
     if(parseFloat(connVer)>=4.46) scanTdsCompanies();   // populate the company picker
   }).catch(function(){
     document.getElementById('tally-dot').style.background='var(--bad)';
     document.getElementById('tally-status').innerHTML='connector not found — <a href="/connector/Install-Tally-Connector.bat" download>install it</a> (once) on this PC';
+    setPill('off','connector not found');
   });
 }
 checkConn();

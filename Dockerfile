@@ -15,7 +15,7 @@ RUN npm ci --omit=dev
 
 COPY server.js ./
 COPY parser/ ./parser/
-COPY index.html gate.html session.js ./
+COPY index.html gate.html session.js cockpit.css ./
 COPY fee-parser/ ./fee-parser/
 COPY gstr2b/ ./gstr2b/
 COPY audit/ ./audit/

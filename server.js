@@ -197,6 +197,7 @@ app.get('/healthz', (_req, res) => res.type('text').send('ok'));
 
 app.get('/', (_req, res) => res.set(NO_CACHE).sendFile(path.join(__dirname, 'index.html')));
 app.get('/session.js', (_req, res) => res.set(NO_CACHE).sendFile(path.join(__dirname, 'session.js')));
+app.get('/cockpit.css', (_req, res) => res.set(NO_CACHE).type('css').sendFile(path.join(__dirname, 'cockpit.css')));
 
 app.use('/fee-parser', express.static(path.join(__dirname, 'fee-parser'), {
   setHeaders: (res) => res.set(NO_CACHE),
