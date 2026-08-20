@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.43';
+const VERSION = '4.44';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2534,13 +2534,16 @@ async function readCashForCompany(url, company, asOn) {
 }
 
 // Push one rail's figure-set to the configured dashboard as a draft snapshot.
-async function pushRailToDashboard(rail, data, asOn) {
+// `src` = { company, gstin } names the Tally company these figures were read
+// from, so the dashboard can show the source and refuse the wrong company.
+async function pushRailToDashboard(rail, data, asOn, src) {
   const base = String((state.cockpit && state.cockpit.url) || '').replace(/\/+$/, '');
   const key = String((state.cockpit && state.cockpit.key) || '');
   const res = await fetch(base + '/api/tally/snapshot', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-tally-key': key },
-    body: JSON.stringify({ asOf: asOn.toISOString().slice(0, 10), rail, data }),
+    body: JSON.stringify({ asOf: asOn.toISOString().slice(0, 10), rail, data,
+      sourceCompany: (src && src.company) || '', sourceGstin: (src && src.gstin) || '' }),
   });
   let body = {};
   try { body = await res.json(); } catch { /* */ }
@@ -3837,36 +3840,48 @@ const server = http.createServer(async (req, res) => {
       if (!asOn) { json(res, 400, { ok: false, error: 'Bad asOn date.' }); return; }
       const rails = Array.isArray(body.rails) && body.rails.length ? body.rails : ['cash'];
       const tallyUrl = state.settings.tallyUrl;
+      // Resolve which Tally company these figures actually come from, and its
+      // GSTIN, so the dashboard can show the source and block the wrong company.
+      // If no company was named, and exactly one is open, that one is the source.
+      let sourceCompany = company, sourceGstin = '';
+      try {
+        const comps = parseCompanies(await tallyFetch(tallyUrl, COMPANY_REQUEST(), 30000));
+        let match = null;
+        if (company) match = comps.find((c) => c.name === company) || comps.find((c) => norm(c.name) === norm(company));
+        else if (comps.length === 1) { match = comps[0]; sourceCompany = comps[0].name; }
+        if (match) sourceGstin = (match.gstins || [])[0] || '';
+      } catch { /* company list unavailable — push without GSTIN */ }
+      const src = { company: sourceCompany, gstin: sourceGstin };
       dcCancel = false; dcProgress.active = true; dcProgress.startedAt = Date.now();
       const results = [];
       try {
         for (const rail of rails) {
           if (rail === 'cash') {
             const cash = await readCashForCompany(tallyUrl, company, asOn);
-            const push = await pushRailToDashboard('cash', cash, asOn);
+            const push = await pushRailToDashboard('cash', cash, asOn, src);
             results.push({ rail, accounts: cash.accounts.length, flow: cash.flow.length, push });
           } else if (rail === 'receivables') {
             const rec = await readReceivablesForCompany(tallyUrl, company, asOn);
-            const push = await pushRailToDashboard('receivables', rec, asOn);
+            const push = await pushRailToDashboard('receivables', rec, asOn, src);
             results.push({ rail, parties: rec.parties.length, total: rec.total, ageingMethod: rec.ageingMethod, push });
           } else if (rail === 'payables') {
             const pay = await readPayablesForCompany(tallyUrl, company, asOn);
-            const push = await pushRailToDashboard('payables', pay, asOn);
+            const push = await pushRailToDashboard('payables', pay, asOn, src);
             results.push({ rail, parties: pay.parties.length, total: pay.total, ageingMethod: pay.ageingMethod, push });
           } else if (rail === 'sales') {
             const sales = await readSalesForCompany(tallyUrl, company, asOn);
-            const push = await pushRailToDashboard('sales', sales, asOn);
+            const push = await pushRailToDashboard('sales', sales, asOn, src);
             results.push({ rail, total: sales.total, months: sales.monthly.length, push });
           } else if (rail === 'profitability') {
             const prof = await readProfitabilityForCompany(tallyUrl, company, asOn);
-            const push = await pushRailToDashboard('profitability', prof, asOn);
+            const push = await pushRailToDashboard('profitability', prof, asOn, src);
             results.push({ rail, revenue: prof.revenue, netProfit: prof.netProfit, push });
           } else {
             results.push({ rail, error: 'rail not supported yet' });
           }
         }
         dcProgress.active = false;
-        json(res, 200, { ok: true, asOf: asOn.toISOString().slice(0, 10), company, results });
+        json(res, 200, { ok: true, asOf: asOn.toISOString().slice(0, 10), company: sourceCompany, sourceCompany, sourceGstin, results });
       } catch (e) {
         dcProgress.active = false;
         const msg = /timed out|timeout|abort|released/i.test(String((e && e.message) || e))
