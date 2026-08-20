@@ -454,15 +454,19 @@ function removeFile(idx){loadedFiles.splice(idx,1);renderFiles();}
 function clear2b(){loadedFiles=[];renderFiles();}
 function num(x){var n=parseFloat(String(x==null?0:x).replace(/[, ]/g,''));return isNaN(n)?0:n;}
 function parse2bJson(j){
-  var out=[],d=(j&&j.data&&j.data.docdata)?j.data.docdata:(j&&j.docdata?j.docdata:j&&j.data?j.data:j);
-  function pushInv(ctin,trdnm,inv,sign,rcm){
+  var out=[];
+  var top=(j&&j.data)?j.data:(j||{});
+  var d=top.docdata||(j&&j.docdata)||top;
+  var regn=String(top.gstin||j.gstin||'').toUpperCase();
+  var period=String(top.rtnprd||top.fp||'').trim();
+  function pushInv(ctin,trdnm,inv,sign,isCN){
     var items=inv.items||inv.itms||[];var ig=0,cg=0,sg=0,tx=0;
     if(items.length){items.forEach(function(it){var o=it.itm_det||it;ig+=num(o.igst);cg+=num(o.cgst);sg+=num(o.sgst);tx+=num(o.txval);});}
     else{ig=num(inv.igst);cg=num(inv.cgst);sg=num(inv.sgst);tx=num(inv.txval);}
-    out.push({gstin:String(ctin||'').toUpperCase(),party:trdnm||'',invNo:String(inv.inum||inv.nt_num||'').trim(),invDate:inv.dt||inv.nt_dt||'',invoiceValue:num(inv.val),taxable:sign*tx,igst:sign*ig,cgst:sign*cg,sgst:sign*sg,rcm:(String(inv.rev||inv.rchrg||'').toUpperCase()==='Y')||!!rcm});
+    out.push({regn:regn,period:period,gstin:String(ctin||'').toUpperCase(),party:trdnm||'',invNo:String(inv.inum||inv.nt_num||'').trim(),invDate:inv.dt||inv.nt_dt||'',invoiceValue:num(inv.val),taxable:sign*tx,igst:sign*ig,cgst:sign*cg,sgst:sign*sg,rcm:(String(inv.rev||inv.rchrg||'').toUpperCase()==='Y'),isCN:!!isCN});
   }
   ['b2b','b2ba'].forEach(function(k){(d[k]||[]).forEach(function(s){(s.inv||[]).forEach(function(inv){pushInv(s.ctin,s.trdnm,inv,1,false);});});});
-  ['cdnr','cdnra'].forEach(function(k){(d[k]||[]).forEach(function(s){(s.nt||[]).forEach(function(nt){pushInv(s.ctin,s.trdnm,nt,(String(nt.ntty||'').toUpperCase()==='C'?-1:1),false);});});});
+  ['cdnr','cdnra'].forEach(function(k){(d[k]||[]).forEach(function(s){(s.nt||[]).forEach(function(nt){pushInv(s.ctin,s.trdnm,nt,(String(nt.ntty||'').toUpperCase()==='C'?-1:1),true);});});});
   return out;
 }
 function parseCsv(text){
@@ -475,7 +479,7 @@ function parseCsv(text){
     var g=String(col(row,['gstin','gstn','ctin'])||'').toUpperCase().trim();
     var invNo=String(col(row,['invoiceno','invno','invoicenumber','inum'])||'').trim();
     if(!g&&!invNo)continue;
-    out.push({gstin:g,party:col(row,['party','partyname','tradename','trdnm'])||'',invNo:invNo,invDate:col(row,['invoicedate','date','dt'])||'',invoiceValue:num(col(row,['invoicevalue','val','value'])),taxable:num(col(row,['taxable','taxablevalue','txval'])),igst:num(col(row,['igst'])),cgst:num(col(row,['cgst'])),sgst:num(col(row,['sgst'])),rcm:/^y|^true|^1/i.test(String(col(row,['rcm','reversecharge','rev','rchrg'])||''))});
+    out.push({regn:'',period:'',gstin:g,party:col(row,['party','partyname','tradename','trdnm'])||'',invNo:invNo,invDate:col(row,['invoicedate','date','dt'])||'',invoiceValue:num(col(row,['invoicevalue','val','value'])),taxable:num(col(row,['taxable','taxablevalue','txval'])),igst:num(col(row,['igst'])),cgst:num(col(row,['cgst'])),sgst:num(col(row,['sgst'])),rcm:/^y|^true|^1/i.test(String(col(row,['rcm','reversecharge','rev','rchrg'])||'')),isCN:false});
   }
   return out;
 }
@@ -508,118 +512,184 @@ function invMatch(a,b){
 var STOP=/\b(PVT|PRIVATE|LTD|LIMITED|LLP|AND|THE|MS|CO|COMPANY|ENTERPRISES?|ENTERPRISE|INDUSTR\w*|TRADERS?|TRADING|CORPORATION|CORP|STEEL|SALES|CENTRE|CENTER)\b/g;
 function nameToks(s){return uniq(String(s||'').toUpperCase().replace(STOP,' ').replace(/[^A-Z0-9 ]/g,' ').split(/\s+/).filter(function(t){return t.length>=3;}));}
 function nameScore(a,b){var A=nameToks(a),B={};nameToks(b).forEach(function(t){B[t]=1;});if(!A.length)return 0;var m=0;A.forEach(function(t){if(B[t])m++;});return m/A.length;}
+var GSTTOL=1;
+function r2(n){return Math.round((Number(n)||0)*100)/100;}
+function ymd(dt){var s=String(dt||'').trim();if(!s)return null;var m;
+  if(m=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/))return {y:+m[1],mo:+m[2]};
+  if(m=s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})/))return {y:+m[3],mo:+m[2]};
+  return null;}
+function periodOf(dt){var d=ymd(dt);return d?(('0'+d.mo).slice(-2)+d.y):'';}
+function monthGap(a,b){var A=ymd(a),B=ymd(b);if(!A||!B)return '';return (A.y*12+A.mo)-(B.y*12+B.mo);}
+function bGst(r){var t=bTax(r);return r2(t.igst+t.cgst+t.sgst);}
+
+// Build the reference-style reconciliation record for a 2B doc `b` and its
+// matched books row `br` (or null when unmatched).
+function buildRec(b,br){
+  var g=normGstin(b.gstin), bg2=b.igst+b.cgst+b.sgst;
+  var rec={regn2b:b.regn||'',gstin2b:b.gstin||'',party2b:b.party||'',docNo:b.invNo||'',docDate:b.invDate||'',
+    invVal:b.invoiceValue||0,tax2b:r2(b.taxable),igst2b:r2(b.igst),cgst2b:r2(b.cgst),sgst2b:r2(b.sgst),gst2b:r2(bg2),
+    rcm:b.rcm?'Yes':'',period:b.period||periodOf(b.invDate),
+    gstinChk:'—',nameChk:'—',taxChk:'',gstChk:'',vchChk:'—',spill:'',remarks:'',
+    regnBk:'',gstinBk:'',dateBk:'',partyBk:'',vchBk:'',igstBk:'',cgstBk:'',sgstBk:'',gstBk:'',taxBk:'',
+    note:'',_cat:'',_b:b,_bk:br,_isCN:!!b.isCN};
+  if(!br){
+    rec.remarks='not booked in tally';rec._cat='only2b';
+    rec.note=(b.isCN?'Credit note ':'')+'In GSTR-2B but not found in your books — this document does not appear against any of the selected input-GST ledgers for the period read.';
+    return rec;
+  }
+  var bt=bTax(br);
+  rec.regnBk='';rec.gstinBk=br.gstin||'';rec.dateBk=br.date||'';rec.partyBk=br.party||'';rec.vchBk=br.voucherNo||br.supplierInvNo||'';
+  rec.igstBk=r2(bt.igst);rec.cgstBk=r2(bt.cgst);rec.sgstBk=r2(bt.sgst);rec.gstBk=r2(bt.igst+bt.cgst+bt.sgst);rec.taxBk=r2(br.taxable);
+  var rg=normGstin(br.gstin);
+  rec.gstinChk=(g&&rg)?(g===rg):'—';
+  rec.nameChk=(b.party&&br.party)?(nameScore(b.party,br.party)>=0.5):'—';
+  rec.taxChk=r2(rec.tax2b-rec.taxBk);
+  rec.gstChk=r2(rec.gst2b-rec.gstBk);
+  var im=0;invCands(br).forEach(function(c){im=Math.max(im,invMatch(normInv(b.invNo),c));});
+  rec.vchChk=im>=3;
+  rec.spill=monthGap(b.invDate,br.date);
+  var gstOff=Math.abs(rec.gstChk)>GSTTOL;
+  var taxTol=Math.max(10,Math.abs(rec.tax2b)*0.005);
+  var taxOff=Math.abs(rec.taxChk)>taxTol;
+  var headMix=(Math.abs(rec.igst2b-rec.igstBk)>GSTTOL||Math.abs(rec.cgst2b-rec.cgstBk)>GSTTOL||Math.abs(rec.sgst2b-rec.sgstBk)>GSTTOL);
+  if(gstOff){
+    rec.remarks='booked - amount mismatch';rec._cat='mismatch';
+    rec.note='Purchase '+rec.vchBk+': GST in the books ₹'+inr(rec.gstBk)+' vs ₹'+inr(rec.gst2b)+' in 2B — differs by ₹'+inr(Math.abs(rec.gstChk))+'.';
+  } else if(headMix){
+    rec.remarks='booked - amount mismatch';rec._cat='mismatch';
+    rec.note='Purchase '+rec.vchBk+': total GST matches but the split differs — 2B IGST/CGST/SGST '+inr(rec.igst2b)+'/'+inr(rec.cgst2b)+'/'+inr(rec.sgst2b)+' vs books '+inr(rec.igstBk)+'/'+inr(rec.cgstBk)+'/'+inr(rec.sgstBk)+' (check place of supply).';
+  } else if(taxOff){
+    rec.remarks='probable match — verify';rec._cat='probable';
+    rec.note='Purchase '+rec.vchBk+' ('+rec.partyBk+'): GST matches but books taxable ₹'+inr(rec.taxBk)+' vs ₹'+inr(rec.tax2b)+' in 2B — verify.';
+  } else if(im<3){
+    rec.remarks='probable match — verify';rec._cat='probable';
+    rec.note='Matched by GSTIN + amount — the books voucher '+rec.vchBk+' differs from the 2B document no. '+rec.docNo+'; verify it is the same invoice.';
+  } else {
+    rec.remarks='booked';rec._cat='matched';
+    rec.note='Matched purchase '+rec.vchBk+' ('+rec.partyBk+').';
+  }
+  if(typeof rec.spill==='number'&&rec.spill!==0){
+    rec.note+=' Booked '+Math.abs(rec.spill)+' month(s) '+(rec.spill>0?'earlier':'later')+' than the 2B period.';
+  }
+  return rec;
+}
 function reconcile(){
   var n=booksRows.length,used=new Array(n).fill(false);
   var invIdx={},gstinIdx={},gstAmtIdx={};
   booksRows.forEach(function(r,i){
     invCands(r).forEach(function(c){(invIdx[c]||(invIdx[c]=[])).push(i);});
     var g=normGstin(r.gstin);if(g)(gstinIdx[g]||(gstinIdx[g]=[])).push(i);
-    var a=Math.round(bGstTotal(r));(gstAmtIdx[a]||(gstAmtIdx[a]=[])).push(i);
+    (gstAmtIdx[Math.round(bGst(r))]||(gstAmtIdx[Math.round(bGst(r))]=[])).push(i);
   });
+  function cmpKey(a,b){for(var i=0;i<a.length;i++){if(a[i]!==b[i])return a[i]>b[i]?1:-1;}return 0;}
   function findMatch(b){
     var bInv=normInv(b.invNo),g=normGstin(b.gstin),bg=b.igst+b.cgst+b.sgst;
     var pool={};
     function add(list){(list||[]).forEach(function(i){if(!used[i])pool[i]=1;});}
-    add(invIdx[bInv]); if(g)add(gstinIdx[g]); add(gstAmtIdx[Math.round(bg)]);
+    add(invIdx[bInv]);if(g)add(gstinIdx[g]);add(gstAmtIdx[Math.round(bg)]);
     var best=-1,bestKey=null;
     Object.keys(pool).forEach(function(ks){
       var i=+ks,r=booksRows[i];
       var im=0;invCands(r).forEach(function(c){im=Math.max(im,invMatch(bInv,c));});
-      var rg=normGstin(r.gstin), gstEq=!!(g&&rg&&g===rg);
-      var dg=Math.abs(bg-bGstTotal(r)), gstClose=dg<=2, gstNear=dg<=50;
-      var ns=nameScore(b.party,r.party), nameStrong=ns>=0.5;
-      var accept = im>=2 || (im>=1&&(gstNear||nameStrong)) || (gstEq&&gstNear) || (nameStrong&&gstClose);
+      var rg=normGstin(r.gstin),gstEq=!!(g&&rg&&g===rg);
+      var dg=Math.abs(bg-bGst(r)),gstClose=dg<=2,gstNear=dg<=50;
+      var ns=nameScore(b.party,r.party),nameStrong=ns>=0.5;
+      var accept=im>=2||(im>=1&&(gstNear||nameStrong))||(gstEq&&gstNear)||(nameStrong&&gstClose);
       if(!accept)return;
-      // rank: prefer better invoice, then gstin, then closer amount, then name
-      var key=[im, gstEq?1:0, gstClose?1:0, -dg, ns];
+      var key=[im,gstEq?1:0,gstClose?1:0,-dg,ns];
       if(best<0||cmpKey(key,bestKey)>0){best=i;bestKey=key;}
     });
     return best;
   }
-  function cmpKey(a,b){for(var i=0;i<a.length;i++){if(a[i]!==b[i])return a[i]>b[i]?1:-1;}return 0;}
-  var matched=[],mismatch=[],only2b=[];
+  var recs=[],cn=[];
   twoBRows.forEach(function(b){
-    var bi=findMatch(b);
-    if(bi<0){only2b.push(b);return;}
-    used[bi]=true;var br=booksRows[bi],bt=bTax(br);
-    var di=b.igst-bt.igst,dc=b.cgst-bt.cgst,ds=b.sgst-bt.sgst,dt=b.taxable-br.taxable;
-    var ok=Math.abs(di)<=TAXTOL&&Math.abs(dc)<=TAXTOL&&Math.abs(ds)<=TAXTOL;
-    (ok?matched:mismatch).push({twoB:b,books:br,d:{igst:di,cgst:dc,sgst:ds,tax:dt}});
+    var bi=findMatch(b);var br=null;
+    if(bi>=0){used[bi]=true;br=booksRows[bi];}
+    var rec=buildRec(b,br);
+    (b.isCN?cn:recs).push(rec);
   });
-  var onlyBooks=booksRows.filter(function(r,i){return !used[i];});
-  report={matched:matched,mismatch:mismatch,only2b:only2b,onlyBooks:onlyBooks};
+  // Books booked but not in 2B → their own records (2B side blank).
+  booksRows.forEach(function(r,i){
+    if(used[i])return;
+    var bt=bTax(r);
+    recs.push({regn2b:'',gstin2b:'',party2b:'',docNo:'',docDate:'',invVal:'',tax2b:'',igst2b:'',cgst2b:'',sgst2b:'',gst2b:'',rcm:r.rcm?'Yes':'',period:periodOf(r.date),
+      gstinChk:'—',nameChk:'—',taxChk:'',gstChk:'',vchChk:'—',spill:'',remarks:'booked, but not in 2B',
+      regnBk:'',gstinBk:r.gstin||'',dateBk:r.date||'',partyBk:r.party||'',vchBk:r.voucherNo||r.supplierInvNo||'',
+      igstBk:r2(bt.igst),cgstBk:r2(bt.cgst),sgstBk:r2(bt.sgst),gstBk:r2(bt.igst+bt.cgst+bt.sgst),taxBk:r2(r.taxable),
+      note:'Booked in your books ('+(r.voucherNo||r.supplierInvNo||'')+') but not found in the 2B uploaded — the supplier may not have filed it, or it is in a different period.',_cat:'onlybk',_bk:r,_isCN:false});
+  });
+  report={recs:recs,cn:cn};
   renderReport();markStep(4,true);
   $('card5').classList.remove('hidden');$('card5').scrollIntoView({behavior:'smooth'});
 }
-function itc2b(r){return r.igst+r.cgst+r.sgst;}
-function itcB(r){var t=bTax(r);return t.igst+t.cgst+t.sgst;}
+
+/* ---- on-screen report ---- */
+function groupBy(recs){var by={matched:[],mismatch:[],probable:[],only2b:[],onlybk:[]};recs.forEach(function(r){(by[r._cat]||by.only2b).push(r);});return by;}
+function sumF(a,f){return a.reduce(function(s,r){return s+(Number(f(r))||0);},0);}
 function renderReport(){
-  var m=report;
-  var b2bTot=twoBRows.reduce(function(a,r){return a+itc2b(r);},0);
-  var bkTot=booksRows.reduce(function(a,r){return a+itcB(r);},0);
-  var matTot=m.matched.reduce(function(a,r){return a+itc2b(r.twoB);},0);
-  var mmTot=m.mismatch.reduce(function(a,r){return a+(itc2b(r.twoB)-itcB(r.books));},0);
-  var o2Tot=m.only2b.reduce(function(a,r){return a+itc2b(r);},0);
-  var obTot=m.onlyBooks.reduce(function(a,r){return a+itcB(r);},0);
-  $('repSub').innerHTML=twoBRows.length+' invoices in 2B · '+booksRows.length+' in books · ITC 2B '+inr(b2bTot)+' vs books '+inr(bkTot);
-  var g=$('statGrid');
-  g.innerHTML=[
-    tile('good','Matched',m.matched.length+' inv',inr(matTot)+' ITC'),
-    tile('warnv','Mismatch',m.mismatch.length+' inv','net '+inr(mmTot)),
-    tile('badv','Only in 2B',m.only2b.length+' inv',inr(o2Tot)+' ITC'),
-    tile('badv','Only in books',m.onlyBooks.length+' inv',inr(obTot)+' ITC')
+  var by=groupBy(report.recs), cn=report.cn;
+  var b2bTot=sumF(report.recs.filter(function(r){return r._cat!=='onlybk';}),function(r){return r.gst2b;});
+  var bkTot=booksRows.reduce(function(a,r){return a+bGst(r);},0);
+  $('repSub').innerHTML=(report.recs.filter(function(r){return r._cat!=='onlybk';}).length)+' 2B docs · '+booksRows.length+' books invoices'+(cn.length?' · '+cn.length+' credit notes':'')+' · ITC 2B '+inr(b2bTot)+' vs books '+inr(bkTot);
+  $('statGrid').innerHTML=[
+    tile('good','Booked (matched)',by.matched.length,inr(sumF(by.matched,function(r){return r.gst2b;}))+' GST'),
+    tile('warnv','Amount mismatch',by.mismatch.length,'GST diff '+inr(sumF(by.mismatch,function(r){return r.gstChk;}))),
+    tile('warnv','Probable — verify',by.probable.length,inr(sumF(by.probable,function(r){return r.gst2b;}))+' GST'),
+    tile('badv','Not in books',by.only2b.length,inr(sumF(by.only2b,function(r){return r.gst2b;}))+' GST'),
+    tile('badv','Not in 2B',by.onlybk.length,inr(sumF(by.onlybk,function(r){return r.gstBk;}))+' GST')
   ].join('');
   var html='';
-  html+=secMismatch(m.mismatch);
-  html+=secList('Only in GSTR-2B (in 2B, not in your books)',m.only2b,'2b');
-  html+=secList('Only in books (booked ITC not in 2B)',m.onlyBooks,'bk');
-  html+=secList('Matched',m.matched.map(function(r){return r.twoB;}),'2b');
+  html+=secMM('Amount mismatch — matched invoice, GST or split differs',by.mismatch);
+  html+=secMM('Probable match — verify',by.probable);
+  html+=secOnly('In GSTR-2B but NOT in your books',by.only2b,'2b');
+  html+=secOnly('Booked in your books but NOT in 2B',by.onlybk,'bk');
+  if(cn.length)html+=secOnly('Credit notes in 2B',cn.map(function(r){return r;}),'2b');
+  html+=secBooked('Booked (matched)',by.matched);
   $('repTables').innerHTML=html;
 }
-function tile(cls,k,v,s){return '<div class="statc '+cls+'"><div class="v">'+esc(v.split(' ')[0])+'</div><div class="k">'+esc(k)+'</div><div class="s">'+esc(s)+'</div></div>';}
-function secMismatch(rows){
-  if(!rows.length)return sec('Mismatched (matched invoice, different tax)','0');
-  var body=rows.map(function(r){var b=r.twoB,k=r.books,t=bTax(k);
-    return '<tr><td class="mono">'+esc(b.gstin)+'</td><td>'+esc(b.party||k.party)+'</td><td>'+esc(b.invNo)+'</td>'
-      +cell2(b.taxable,k.taxable)+cell2(b.igst,t.igst)+cell2(b.cgst,t.cgst)+cell2(b.sgst,t.sgst)+'</tr>';}).join('');
-  return sec('Mismatched (matched invoice, different tax)',String(rows.length),
-    '<thead><tr><th>GSTIN</th><th>Party</th><th>Invoice</th><th class="r">Taxable 2B / books</th><th class="r">IGST</th><th class="r">CGST</th><th class="r">SGST</th></tr></thead><tbody>'+body+'</tbody>');
+function tile(cls,k,count,s){return '<div class="statc '+cls+'"><div class="v">'+count+'</div><div class="k">'+esc(k)+'</div><div class="s">'+esc(s)+'</div></div>';}
+function sec(title,count,tbl){return '<div class="repsec"><h3>'+esc(title)+' <span class="rc">'+count+'</span></h3>'+(tbl?'<div class="tblwrap"><table class="mtx">'+tbl+'</table></div>':'<div class="empty">None.</div>')+'</div>';}
+function chkTd(v){if(v===true)return '<td style="color:var(--ok)">✓</td>';if(v===false)return '<td class="neg">✗</td>';return '<td class="mono" style="color:var(--faint)">'+esc(v)+'</td>';}
+function secMM(title,recs){
+  if(!recs.length)return sec(title,'0');
+  var body=recs.map(function(r){return '<tr><td class="mono">'+esc(r.gstin2b||'—')+'</td><td>'+esc(r.party2b||r.partyBk)+(r.rcm?' <span class="pill rcm">RCM</span>':'')+'</td>'
+    +'<td>'+esc(r.docNo)+(r.vchBk&&r.vchBk!==r.docNo?' <span class="mono" style="color:var(--faint)">/ '+esc(r.vchBk)+'</span>':'')+'</td>'
+    +'<td class="r">'+inr(r.gst2b)+'</td><td class="r">'+inr(r.gstBk)+'</td><td class="r'+(Math.abs(r.gstChk)>0.5?' neg':'')+'">'+inr(r.gstChk)+'</td>'
+    +'<td style="white-space:normal;max-width:420px;font-size:12px;color:var(--muted)">'+esc(r.note)+'</td></tr>';}).join('');
+  return sec(title,String(recs.length),'<thead><tr><th>GSTIN</th><th>Party</th><th>Doc / Vch</th><th class="r">GST 2B</th><th class="r">GST books</th><th class="r">Diff</th><th>What differs</th></tr></thead><tbody>'+body+'</tbody>');
 }
-function cell2(a,b){var d=Math.abs(a-b)>0.5;return '<td class="r'+(d?' neg':'')+'">'+inr(a)+' / '+inr(b)+'</td>';}
-function secList(title,rows,kind){
-  if(!rows.length)return sec(title,'0');
-  var body=rows.map(function(r){
-    var tv=kind==='2b'?r.taxable:r.taxable, ig=kind==='2b'?r.igst:(r.igst+(r.rcmIgst||0)),cg=kind==='2b'?r.cgst:(r.cgst+(r.rcmCgst||0)),sg=kind==='2b'?r.sgst:(r.sgst+(r.rcmSgst||0));
-    var no=kind==='2b'?r.invNo:(r.voucherNo||r.supplierInvNo);
-    return '<tr><td class="mono">'+esc(r.gstin||'—')+'</td><td>'+esc(r.party||'')+(r.rcm?' <span class="pill rcm">RCM</span>':'')+'</td><td>'+esc(no||'')+'</td><td>'+esc(r.invDate||r.date||'')+'</td><td class="r">'+inr(tv)+'</td><td class="r">'+inr(ig)+'</td><td class="r">'+inr(cg)+'</td><td class="r">'+inr(sg)+'</td></tr>';
+function secOnly(title,recs,side){
+  if(!recs.length)return sec(title,'0');
+  var body=recs.map(function(r){
+    var g=side==='2b'?r.gstin2b:r.gstinBk, p=side==='2b'?(r.party2b||r.partyBk):r.partyBk, no=side==='2b'?r.docNo:r.vchBk, dt=side==='2b'?r.docDate:r.dateBk,
+        tx=side==='2b'?r.tax2b:r.taxBk, ig=side==='2b'?r.igst2b:r.igstBk, cg=side==='2b'?r.cgst2b:r.cgstBk, sg=side==='2b'?r.sgst2b:r.sgstBk;
+    return '<tr><td class="mono">'+esc(g||'—')+'</td><td>'+esc(p||'')+(r.rcm?' <span class="pill rcm">RCM</span>':'')+'</td><td>'+esc(no||'')+'</td><td style="white-space:nowrap">'+esc((''+dt).slice(0,10))+'</td><td class="r">'+inr(tx)+'</td><td class="r">'+inr(ig)+'</td><td class="r">'+inr(cg)+'</td><td class="r">'+inr(sg)+'</td></tr>';
   }).join('');
-  return sec(title,String(rows.length),'<thead><tr><th>GSTIN</th><th>Party</th><th>Invoice</th><th>Date</th><th class="r">Taxable</th><th class="r">IGST</th><th class="r">CGST</th><th class="r">SGST</th></tr></thead><tbody>'+body+'</tbody>');
+  return sec(title,String(recs.length),'<thead><tr><th>GSTIN</th><th>Party</th><th>Doc / Vch</th><th>Date</th><th class="r">Taxable</th><th class="r">IGST</th><th class="r">CGST</th><th class="r">SGST</th></tr></thead><tbody>'+body+'</tbody>');
 }
-function sec(title,count,tbl){
-  return '<div class="repsec"><h3>'+esc(title)+' <span class="rc">'+count+'</span></h3>'+(tbl?'<div class="tblwrap"><table class="mtx">'+tbl+'</table></div>':'<div class="empty">None.</div>')+'</div>';
+function secBooked(title,recs){
+  if(!recs.length)return sec(title,'0');
+  var body=recs.slice(0,400).map(function(r){return '<tr><td class="mono">'+esc(r.gstin2b||'—')+'</td><td>'+esc(r.party2b||r.partyBk)+'</td><td>'+esc(r.docNo)+'</td><td style="white-space:nowrap">'+esc((''+r.docDate).slice(0,10))+'</td><td class="r">'+inr(r.tax2b)+'</td><td class="r">'+inr(r.gst2b)+'</td></tr>';}).join('');
+  return sec(title,String(recs.length),'<thead><tr><th>GSTIN</th><th>Party</th><th>Invoice</th><th>Date</th><th class="r">Taxable</th><th class="r">GST</th></tr></thead><tbody>'+body+(recs.length>400?'<tr><td colspan="6" class="empty">Showing first 400 of '+recs.length+' — Excel has all.</td></tr>':'')+'</tbody>');
 }
 
-/* ============================ excel export ============================ */
+/* ============================ excel export (reference layout) ============================ */
+var RECO_HDR=['Regn (your GSTIN)','GSTIN (2B)','Party (2B)','Doc No','Doc Date','Invoice Value','Taxable (2B)','IGST (2B)','CGST (2B)','SGST (2B)','GST (2B)','RCM','Period','GSTIN check','name check','taxable check','GST check','voucher check','spillover (mth)','remarks','Regn (books)','GSTIN (books)','Date (books)','Particulars (books)','Vch / Bill No','IGST (books)','CGST (books)','SGST (books)','GST as per Books','Taxable (books)','Note'];
+function recToRow(r){return [r.regn2b,r.gstin2b,r.party2b,r.docNo,(''+r.docDate).slice(0,10),r.invVal,r.tax2b,r.igst2b,r.cgst2b,r.sgst2b,r.gst2b,r.rcm,r.period,r.gstinChk,r.nameChk,r.taxChk,r.gstChk,r.vchChk,r.spill,r.remarks,r.regnBk,r.gstinBk,(''+r.dateBk).slice(0,10),r.partyBk,r.vchBk,r.igstBk,r.cgstBk,r.sgstBk,r.gstBk,r.taxBk,r.note];}
 function exportXlsx(){
   if(!report||typeof ExcelJS==='undefined'){alert('Report or Excel library not ready.');return;}
   var wb=new ExcelJS.Workbook();
-  function sheet(name,cols,rows){var ws=wb.addWorksheet(name);ws.columns=cols;rows.forEach(function(r){ws.addRow(r);});ws.getRow(1).font={bold:true};}
-  sheet('Summary',[{header:'Category',key:'c',width:26},{header:'Invoices',key:'n',width:12},{header:'ITC',key:'i',width:18}],[
-    {c:'GSTR-2B total',n:twoBRows.length,i:twoBRows.reduce(function(a,r){return a+itc2b(r);},0)},
-    {c:'Books total',n:booksRows.length,i:booksRows.reduce(function(a,r){return a+itcB(r);},0)},
-    {c:'Matched',n:report.matched.length,i:report.matched.reduce(function(a,r){return a+itc2b(r.twoB);},0)},
-    {c:'Mismatch',n:report.mismatch.length,i:report.mismatch.reduce(function(a,r){return a+(itc2b(r.twoB)-itcB(r.books));},0)},
-    {c:'Only in 2B',n:report.only2b.length,i:report.only2b.reduce(function(a,r){return a+itc2b(r);},0)},
-    {c:'Only in books',n:report.onlyBooks.length,i:report.onlyBooks.reduce(function(a,r){return a+itcB(r);},0)}
-  ]);
-  var C2=[{header:'GSTIN',key:'g',width:20},{header:'Party',key:'p',width:30},{header:'Invoice',key:'no',width:18},{header:'Date',key:'d',width:12},{header:'Taxable',key:'tx',width:14},{header:'IGST',key:'i',width:12},{header:'CGST',key:'c',width:12},{header:'SGST',key:'s',width:12},{header:'RCM',key:'r',width:7}];
-  function r2b(r){return {g:r.gstin,p:r.party,no:r.invNo,d:r.invDate,tx:r.taxable,i:r.igst,c:r.cgst,s:r.sgst,r:r.rcm?'Y':''};}
-  function rbk(r){var t=bTax(r);return {g:r.gstin,p:r.party,no:r.voucherNo||r.supplierInvNo,d:r.date,tx:r.taxable,i:t.igst,c:t.cgst,s:t.sgst,r:r.rcm?'Y':''};}
-  sheet('Matched',C2,report.matched.map(function(r){return r2b(r.twoB);}));
-  var MM=[{header:'GSTIN',key:'g',width:20},{header:'Party',key:'p',width:28},{header:'Invoice',key:'no',width:16},{header:'Taxable 2B',key:'t2',width:13},{header:'Taxable books',key:'tb',width:14},{header:'IGST 2B',key:'i2',width:11},{header:'IGST books',key:'ib',width:12},{header:'CGST 2B',key:'c2',width:11},{header:'CGST books',key:'cb',width:12},{header:'SGST 2B',key:'s2',width:11},{header:'SGST books',key:'sb',width:12}];
-  sheet('Mismatch',MM,report.mismatch.map(function(r){var b=r.twoB,t=bTax(r.books);return {g:b.gstin,p:b.party||r.books.party,no:b.invNo,t2:b.taxable,tb:r.books.taxable,i2:b.igst,ib:t.igst,c2:b.cgst,cb:t.cgst,s2:b.sgst,sb:t.sgst};}));
-  sheet('Only in 2B',C2,report.only2b.map(r2b));
-  sheet('Only in books',C2,report.onlyBooks.map(rbk));
+  function sheet(name,rows){
+    var ws=wb.addWorksheet(name);
+    ws.addRow(RECO_HDR); ws.getRow(1).font={bold:true};
+    rows.forEach(function(r){ws.addRow(recToRow(r));});
+    ws.columns.forEach(function(c,i){c.width=[16,17,26,16,12,13,13,11,11,11,12,6,11,10,10,11,10,11,10,20,16,17,12,26,16,11,11,11,13,13,60][i]||12;});
+  }
+  // reconciled: matched, mismatch, probable, only-2b first, then only-books
+  var order={matched:0,mismatch:1,probable:2,only2b:3,onlybk:4};
+  var recs=report.recs.slice().sort(function(a,b){return (order[a._cat]-order[b._cat])||((b.gst2b||b.gstBk||0)-(a.gst2b||a.gstBk||0));});
+  sheet('reconciled',recs);
+  sheet('Credit Notes',report.cn);
   wb.xlsx.writeBuffer().then(function(buf){dl('itc-reconciliation.xlsx',new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));});
 }
 
