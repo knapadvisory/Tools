@@ -94,9 +94,9 @@
   <div class="card">
     <div class="grid setup">
       <div><label>Tally URL</label><input id="tallyUrl" placeholder="http://localhost:9000"></div>
-      <div><label>Company (leave blank = the open company)</label>
+      <div><label>Company <span style="color:#94a3b8;font-weight:400">— scan, then pick</span></label>
         <div style="display:flex;gap:6px"><select id="company"><option value="">(the open company)</option></select>
-        <button class="sec" id="refreshCo" title="Re-read companies from Tally">↻</button></div></div>
+        <button class="sec" id="refreshCo" title="Re-read the companies open in Tally right now" style="white-space:nowrap">🔎 Scan</button></div></div>
       <div><label>From</label><input type="date" id="from"></div>
       <div><label>To</label><input type="date" id="to"></div>
       <div><button id="run">Run audit</button></div>
