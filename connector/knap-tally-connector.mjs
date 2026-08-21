@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.50';
+const VERSION = '4.51';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2858,8 +2858,26 @@ async function readProfitabilityForCompany(url, company, asOn, from) {
     }
     heads.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
     const topHeads = heads.slice(0, 8).map((h) => ({ name: h.name, amount: h.amount, pctRevenue: revenue ? h.amount / revenue : 0 }));
+    // Purchase (period-aware) — its own KPI + the Sales-vs-Purchase chart.
+    const purchase = r2(await winTotal('Purchase Accounts'));
     dcProgress.sub = '';
-    const out = { revenue, expenses, netProfit: r2(revenue - expenses), topHeads };
+    // Monthly sales & purchase (FY month-ends) for the dashboard's grouped bars.
+    const fy = fyStartOf(asOn);
+    const points = [];
+    for (let d = new Date(Date.UTC(fy.getUTCFullYear(), fy.getUTCMonth() + 1, 0)); d < asOn; d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 2, 0))) points.push(d);
+    points.push(asOn);
+    let prevS = 0, prevP = 0; const monthly = [];
+    for (let i = 0; i < points.length; i++) {
+      dcProgress.sub = `sales/purchase ${i + 1}/${points.length}`;
+      const s = await readGroupLeaves(url, 'Sales Accounts', points[i], groupByNorm);
+      const p = await readGroupLeaves(url, 'Purchase Accounts', points[i], groupByNorm);
+      const cumS = r2(-s.total), cumP = r2(p.total);
+      const pt = points[i];
+      monthly.push({ month: `${pt.getUTCFullYear()}-${String(pt.getUTCMonth() + 1).padStart(2, '0')}`, sales: r2(cumS - prevS), purchase: r2(cumP - prevP) });
+      prevS = cumS; prevP = cumP;
+    }
+    dcProgress.sub = '';
+    const out = { revenue, expenses, purchase, netProfit: r2(revenue - expenses), grossProfit: r2(revenue - purchase), topHeads, monthly };
     if (from) out.periodFrom = from.toISOString().slice(0, 10);
     return out;
   } finally { state.settings.company = saved; }
