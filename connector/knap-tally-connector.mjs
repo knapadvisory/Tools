@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.49';
+const VERSION = '4.50';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2930,6 +2930,51 @@ async function readPartyStatement(url, company, party, from, to) {
   } finally { state.settings.company = saved; }
 }
 
+// "Full pull" — every debtor OR creditor party's full statement for [from..to]
+// in ONE movement pass (same cost as the ageing rail), so the dashboard can
+// store them and the drill-down popup opens instantly for staff AND for a
+// published client with no connector running. Returns a map keyed by the
+// normalised party name.
+async function readAllStatements(url, company, kind, from, to) {
+  const saved = state.settings.company; state.settings.company = company || '';
+  try {
+    const group = kind === 'creditors' ? 'Sundry Creditors' : 'Sundry Debtors';
+    dcProgress.phase = `Full pull — ${kind} statements to ${to.toISOString().slice(0, 10)}…`;
+    // party set + masters (opening + gstin)
+    const groupByNorm = new Map();
+    for (const [gname, g] of Object.entries(parseGroups(await askTallyFast(url, GROUPS_REQUEST(), 120000)))) groupByNorm.set(norm(gname), { name: gname, parent: g.parent });
+    const info = parseDcLedgers(await askTallyFast(url, DC_LEDGER_INFO_REQUEST(group), 120000));
+    const gstinByNorm = new Map(); for (const r of info) gstinByNorm.set(norm(r.ledger), r.gstin || '');
+    const masters = parseLedgerMasters(await askTallyFast(url, LEDGER_MASTERS_REQUEST(), 180000));
+    const leaves = [];
+    await readDCLeaves(url, group, to, groupByNorm, new Set(), leaves, { reads: 0 });
+    const names = leaves.map((lf) => lf.name);
+    const partySet = new Set(names.map((n) => Object.keys(masters).find((m) => norm(m) === norm(n)) || n));
+    const fyStart = fyStartOf(to);
+    const readFrom = fyStart < from ? fyStart : from;
+    dcProgress.sub = `${partySet.size} parties`;
+    const { moves } = await readAgeMovements(url, readFrom, to, partySet, { firstWin: 6, attemptMs: 180000 });
+    dcProgress.sub = '';
+    const fromKey = from.getTime(), toKey = to.getTime();
+    const statements = {};
+    for (const pname of partySet) {
+      const openingFY = r2((masters[pname] && masters[pname].openingDr) || 0);
+      const all = (moves[pname] || []).slice().sort((a, b) => (a.date && b.date ? a.date - b.date : 0));
+      let opening = openingFY, closing = openingFY; const entries = [];
+      for (const m of all) {
+        const t = m.date ? m.date.getTime() : 0;
+        closing = r2(closing + m.dr);
+        if (t < fromKey) { opening = r2(opening + m.dr); continue; }
+        if (t > toKey) continue;
+        entries.push({ date: m.date ? m.date.toISOString().slice(0, 10) : null, ref: m.ref, vtype: m.vtype || '', debit: m.dr > 0 ? r2(m.dr) : 0, credit: m.dr < 0 ? r2(-m.dr) : 0 });
+      }
+      statements[norm(pname)] = { party: pname, gstin: gstinByNorm.get(norm(pname)) || '', opening, entries, closing };
+    }
+    dcProgress.phase = '';
+    return { kind, from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10), count: Object.keys(statements).length, statements };
+  } finally { state.settings.company = saved; }
+}
+
 // ===========================================================================
 // AGEING & BILL-WISE (FIFO)  (page reports)
 // ---------------------------------------------------------------------------
@@ -4242,6 +4287,50 @@ const server = http.createServer(async (req, res) => {
         const st = await readPartyStatement(String(body.url || state.settings.tallyUrl), String(body.company || ''), party, from, to);
         dcProgress.active = false;
         json(res, 200, { ok: true, version: VERSION, from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10), ...st });
+      } catch (e) {
+        dcProgress.active = false;
+        json(res, 502, { ok: false, error: 'Could not read Tally: ' + String((e && e.message) || e) });
+      }
+      return;
+    }
+
+    // Full pull — receivables + payables WITH every party's full ledger
+    // statement attached, pushed to the dashboard so the drill-down opens
+    // instantly (staff or a published client, no live read). Heavier than the
+    // normal fetch: two movement passes over the whole book.
+    if (req.method === 'POST' && url.pathname === '/api/cockpit/pull-full') {
+      if (dcProgress.active) { json(res, 409, { ok: false, error: 'A read is already running.' }); return; }
+      const c = state.cockpit || {};
+      if (!c.url || !c.key) { json(res, 400, { ok: false, error: 'Cockpit not configured — click “Connect this Tally” first.' }); return; }
+      const body = JSON.parse(await readBody(req));
+      const company = String(body.company || c.company || '').trim();
+      const now = new Date();
+      const asOn = body.asOn ? tallyDateOf(String(body.asOn).replace(/-/g, '')) : new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+      if (!asOn) { json(res, 400, { ok: false, error: 'Bad asOn date.' }); return; }
+      const tallyUrl = state.settings.tallyUrl;
+      const stmtFrom = fyStartOf(asOn); // statements from FY start → asOn (full history for the popup)
+      let sourceCompany = company, sourceGstin = '';
+      try {
+        const comps = parseCompanies(await tallyFetch(tallyUrl, COMPANY_REQUEST(), 30000));
+        let match = company ? (comps.find((c) => c.name === company) || comps.find((c) => norm(c.name) === norm(company))) : (comps.length === 1 ? comps[0] : null);
+        if (!company && match) sourceCompany = match.name;
+        if (match) sourceGstin = (match.gstins || [])[0] || '';
+      } catch { /* */ }
+      const src = { company: sourceCompany, gstin: sourceGstin };
+      dcCancel = false; dcProgress.active = true; dcProgress.startedAt = Date.now();
+      try {
+        const results = [];
+        for (const [rail, kind] of [['receivables', 'debtors'], ['payables', 'creditors']]) {
+          const base = rail === 'receivables'
+            ? await readReceivablesForCompany(tallyUrl, company, asOn)
+            : await readPayablesForCompany(tallyUrl, company, asOn);
+          const st = await readAllStatements(tallyUrl, company, kind, stmtFrom, asOn);
+          base.statements = st.statements;           // attach full statements to the rail data
+          const push = await pushRailToDashboard(rail, base, asOn, src);
+          results.push({ rail, parties: base.parties.length, statements: st.count, push });
+        }
+        dcProgress.active = false;
+        json(res, 200, { ok: true, asOf: asOn.toISOString().slice(0, 10), company: sourceCompany, sourceCompany, sourceGstin, results });
       } catch (e) {
         dcProgress.active = false;
         json(res, 502, { ok: false, error: 'Could not read Tally: ' + String((e && e.message) || e) });
