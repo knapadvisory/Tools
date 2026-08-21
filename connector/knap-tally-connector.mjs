@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.48';
+const VERSION = '4.49';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2536,13 +2536,14 @@ async function readCashForCompany(url, company, asOn) {
 // Push one rail's figure-set to the configured dashboard as a draft snapshot.
 // `src` = { company, gstin } names the Tally company these figures were read
 // from, so the dashboard can show the source and refuse the wrong company.
-async function pushRailToDashboard(rail, data, asOn, src) {
+async function pushRailToDashboard(rail, data, asOn, src, periodFrom) {
   const base = String((state.cockpit && state.cockpit.url) || '').replace(/\/+$/, '');
   const key = String((state.cockpit && state.cockpit.key) || '');
   const res = await fetch(base + '/api/tally/snapshot', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-tally-key': key },
     body: JSON.stringify({ asOf: asOn.toISOString().slice(0, 10), rail, data,
+      periodFrom: periodFrom || null,
       sourceCompany: (src && src.company) || '', sourceGstin: (src && src.gstin) || '' }),
   });
   let body = {};
@@ -2673,7 +2674,10 @@ async function readSalesRegister(url, asOn, groupByNorm) {
   return { customers, invoices, netTotal, grossTotal };
 }
 
-async function readSalesForCompany(url, company, asOn) {
+// `from` (optional) scopes the flow to a period [from..asOn]; when omitted the
+// window is the whole FY-to-date (unchanged behaviour). The full monthly series
+// is always FY history for the trend chart; `total` is the period's sales.
+async function readSalesForCompany(url, company, asOn, from) {
   const saved = state.settings.company; state.settings.company = company || '';
   try {
     dcProgress.phase = `Sales — as on ${asOn.toISOString().slice(0, 10)}…`;
@@ -2693,9 +2697,14 @@ async function readSalesForCompany(url, company, asOn) {
       prevCum = cum;
     }
     dcProgress.sub = '';
-    // Customer-wise + bill-wise register. Never blocks the headline totals: a
-    // too-dense book (or any read error) just omits the detail.
-    const out = { total: prevCum, monthly };   // total = FY-to-date sales at asOn
+    // Period window: default FY start. When `from` is given, the headline total
+    // is that period's sales (sum of in-window months) and the register is
+    // filtered to the window; the trend keeps full FY history for context.
+    const fromYM = from ? `${from.getUTCFullYear()}-${String(from.getUTCMonth() + 1).padStart(2, '0')}` : null;
+    const inWindow = (ym) => !fromYM || ym >= fromYM;
+    const periodTotal = fromYM ? r2(monthly.filter((m) => inWindow(m.month)).reduce((s, m) => s + m.amount, 0)) : prevCum;
+    const out = { total: periodTotal, fyTotal: prevCum, monthly };
+    if (from) out.periodFrom = from.toISOString().slice(0, 10);
     let register = null;
     try { register = await readSalesRegister(url, asOn, groupByNorm); }
     catch (e) {
@@ -2704,8 +2713,29 @@ async function readSalesForCompany(url, company, asOn) {
       if (out.registerNote === 'error') out.registerError = msg;
     }
     if (register && register.customers) {
-      out.customers = register.customers;
-      out.invoices = register.invoices;
+      let invoices = register.invoices || [];
+      let customers = register.customers;
+      // Filter the register to the period, then re-roll customer turnover.
+      if (fromYM) {
+        const fromIso = from.toISOString().slice(0, 10);
+        invoices = invoices.filter((v) => (v.date || '') >= fromIso);
+        const byCust = new Map();
+        for (const v of invoices) {
+          const k = norm(v.party || '—');
+          const cur = byCust.get(k) || { name: v.party || '—', gstin: '', invoices: 0, taxable: 0, gross: 0 };
+          cur.taxable = r2(cur.taxable + (v.taxable || 0));
+          cur.gross = r2(cur.gross + (v.gross || v.taxable || 0));
+          cur.invoices += 1;
+          byCust.set(k, cur);
+        }
+        // carry GSTIN from the FY-wide customer list where we have it
+        const gmap = new Map((register.customers || []).map((c) => [norm(c.name), c.gstin || '']));
+        customers = [...byCust.values()]
+          .map((c) => ({ ...c, gstin: gmap.get(norm(c.name)) || '' }))
+          .sort((a, b) => Math.abs(b.taxable) - Math.abs(a.taxable));
+      }
+      out.customers = customers;
+      out.invoices = invoices;
       out.grossTotal = register.grossTotal;
       out.registerNet = register.netTotal;   // should tie to `total`; gap surfaced in the UI
     }
@@ -2793,28 +2823,45 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
   } finally { state.settings.company = saved; }
 }
 
-async function readProfitabilityForCompany(url, company, asOn) {
+// `from` (optional) scopes the P&L to a period. P&L accounts carry no opening,
+// so the closing at a date IS the FY-to-date movement; a period is therefore
+// closing(to) − closing(from−1 day). Omit `from` for FY-to-date (unchanged).
+async function readProfitabilityForCompany(url, company, asOn, from) {
   const saved = state.settings.company; state.settings.company = company || '';
   try {
     dcProgress.phase = `Profitability — as on ${asOn.toISOString().slice(0, 10)}…`;
     const groupByNorm = await groupTreeByNorm(url);
+    // The day before the period start; leaves() there = opening movement to net off.
+    const baseDate = from ? new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate() - 1)) : null;
+    const useBase = !!(baseDate && baseDate >= fyStartOf(asOn));   // only net off within the same FY
+    // group total for the window: total(asOn) − total(base)
+    const winTotal = async (g) => {
+      const a = await readGroupLeaves(url, g, asOn, groupByNorm);
+      if (!useBase) return a.total;
+      const b = await readGroupLeaves(url, g, baseDate, groupByNorm);
+      return r2(a.total - b.total);
+    };
     let revenue = 0;
-    for (const g of PL_INCOME_GROUPS) { dcProgress.sub = g; const { total } = await readGroupLeaves(url, g, asOn, groupByNorm); revenue = r2(revenue - total); }
+    for (const g of PL_INCOME_GROUPS) { dcProgress.sub = g; revenue = r2(revenue - (await winTotal(g))); }
     let expenses = 0;
-    for (const g of PL_EXPENSE_GROUPS) { dcProgress.sub = g; const { total } = await readGroupLeaves(url, g, asOn, groupByNorm); expenses = r2(expenses + total); }
+    for (const g of PL_EXPENSE_GROUPS) { dcProgress.sub = g; expenses = r2(expenses + (await winTotal(g))); }
     const heads = [];
     for (const g of EXPENSE_HEAD_GROUPS) {
       dcProgress.sub = g;
-      const { leaves } = await readGroupLeaves(url, g, asOn, groupByNorm);
-      for (const lf of leaves) if (Math.abs(lf.balanceDr) > 0.005) heads.push({ name: lf.name, amount: r2(lf.balanceDr) });
+      const a = await readGroupLeaves(url, g, asOn, groupByNorm);
+      const bMap = new Map();
+      if (useBase) { const b = await readGroupLeaves(url, g, baseDate, groupByNorm); for (const lf of b.leaves) bMap.set(norm(lf.name), lf.balanceDr); }
+      for (const lf of a.leaves) {
+        const amt = r2(lf.balanceDr - (useBase ? (bMap.get(norm(lf.name)) || 0) : 0));
+        if (Math.abs(amt) > 0.005) heads.push({ name: lf.name, amount: amt });
+      }
     }
     heads.sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
     const topHeads = heads.slice(0, 8).map((h) => ({ name: h.name, amount: h.amount, pctRevenue: revenue ? h.amount / revenue : 0 }));
     dcProgress.sub = '';
-    // Net profit = total income − total expense (indicative: excludes closing-
-    // stock/COGS adjustment, so it ties exactly for service books, approximately
-    // where stock matters — the dashboard labels this).
-    return { revenue, expenses, netProfit: r2(revenue - expenses), topHeads };
+    const out = { revenue, expenses, netProfit: r2(revenue - expenses), topHeads };
+    if (from) out.periodFrom = from.toISOString().slice(0, 10);
+    return out;
   } finally { state.settings.company = saved; }
 }
 
@@ -3927,6 +3974,11 @@ const server = http.createServer(async (req, res) => {
         ? tallyDateOf(String(body.asOn).replace(/-/g, ''))
         : new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
       if (!asOn) { json(res, 400, { ok: false, error: 'Bad asOn date.' }); return; }
+      // Optional period start for FLOW rails (sales, profitability). Balance
+      // rails (cash/receivables/payables) ignore it — they are as-on `asOn`.
+      const from = body.from ? tallyDateOf(String(body.from).replace(/-/g, '')) : null;
+      if (body.from && !from) { json(res, 400, { ok: false, error: 'Bad from date.' }); return; }
+      const periodFromIso = from ? from.toISOString().slice(0, 10) : null;
       const rails = Array.isArray(body.rails) && body.rails.length ? body.rails : ['cash'];
       const tallyUrl = state.settings.tallyUrl;
       // Resolve which Tally company these figures actually come from, and its
@@ -3958,19 +4010,19 @@ const server = http.createServer(async (req, res) => {
             const push = await pushRailToDashboard('payables', pay, asOn, src);
             results.push({ rail, parties: pay.parties.length, total: pay.total, ageingMethod: pay.ageingMethod, push });
           } else if (rail === 'sales') {
-            const sales = await readSalesForCompany(tallyUrl, company, asOn);
-            const push = await pushRailToDashboard('sales', sales, asOn, src);
+            const sales = await readSalesForCompany(tallyUrl, company, asOn, from);
+            const push = await pushRailToDashboard('sales', sales, asOn, src, periodFromIso);
             results.push({ rail, total: sales.total, months: sales.monthly.length, push });
           } else if (rail === 'profitability') {
-            const prof = await readProfitabilityForCompany(tallyUrl, company, asOn);
-            const push = await pushRailToDashboard('profitability', prof, asOn, src);
+            const prof = await readProfitabilityForCompany(tallyUrl, company, asOn, from);
+            const push = await pushRailToDashboard('profitability', prof, asOn, src, periodFromIso);
             results.push({ rail, revenue: prof.revenue, netProfit: prof.netProfit, push });
           } else {
             results.push({ rail, error: 'rail not supported yet' });
           }
         }
         dcProgress.active = false;
-        json(res, 200, { ok: true, asOf: asOn.toISOString().slice(0, 10), company: sourceCompany, sourceCompany, sourceGstin, results });
+        json(res, 200, { ok: true, asOf: asOn.toISOString().slice(0, 10), periodFrom: periodFromIso, company: sourceCompany, sourceCompany, sourceGstin, results });
       } catch (e) {
         dcProgress.active = false;
         const msg = /timed out|timeout|abort|released/i.test(String((e && e.message) || e))
