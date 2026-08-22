@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.51';
+const VERSION = '4.52';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2948,6 +2948,64 @@ async function readPartyStatement(url, company, party, from, to) {
   } finally { state.settings.company = saved; }
 }
 
+// TDS 26Q — expense bookings over [from..to], one row per voucher: the party
+// credited, its PAN, the lead expense ledger, the expense amount, and any TDS
+// deducted on the same voucher. Feeds the 26Q workpaper's "read from Tally"
+// mode; the tool does the section-mapping / thresholds / reco on top.
+const TDS_LEDGER_RE = /\btds\b|tax deducted at source|194[a-z]?\b/i;
+const GST_LEDGER_RE = /\b(i?gst|cgst|sgst|igst|cess|integrated tax|central tax|state tax)\b/i;
+async function readTds26q(url, company, from, to) {
+  const saved = state.settings.company; state.settings.company = company || '';
+  try {
+    // PAN by party name (from Sundry Creditors master info; masters as fallback)
+    const panByNorm = new Map();
+    try {
+      const info = parseDcLedgers(await askTallyFast(url, DC_LEDGER_INFO_REQUEST('Sundry Creditors'), 120000));
+      for (const r of info) if (r.pan) panByNorm.set(norm(r.ledger), r.pan);
+    } catch { /* PAN optional */ }
+    const fromKey = from.getUTCFullYear() * 10000 + (from.getUTCMonth() + 1) * 100 + from.getUTCDate();
+    const toKey = to.getUTCFullYear() * 10000 + (to.getUTCMonth() + 1) * 100 + to.getUTCDate();
+    const rows = []; const seen = new Set();
+    dcProgress.phase = `TDS 26Q — vouchers ${from.toISOString().slice(0, 10)} → ${to.toISOString().slice(0, 10)}…`;
+    await readVouchersRamp(url, from, to, (xml) => {
+      for (const block of xml.match(/<VOUCHER[\s>][\s\S]*?<\/VOUCHER>/gi) || []) {
+        if (/(^|>)\s*Yes\s*<\/ISCANCELLED>/i.test(block.match(/<ISCANCELLED>[\s\S]*?<\/ISCANCELLED>/i)?.[0] ?? '')) continue;
+        if (/<ISOPTIONAL>\s*Yes/i.test(block)) continue;
+        let key = tag(block, 'GUID');
+        if (!key) key = `${tag(block, 'VOUCHERTYPENAME')}|${tag(block, 'DATE')}|${tag(block, 'VOUCHERNUMBER')}|${tag(block, 'PARTYLEDGERNAME')}`;
+        if (seen.has(key)) continue; seen.add(key);
+        const dk = dateKey(tag(block, 'DATE'));
+        if (dk < fromKey || dk > toKey) continue;
+        const party = tag(block, 'PARTYLEDGERNAME') || '';
+        if (!party) continue;
+        const entryBlocks = block.match(/<ALLLEDGERENTRIES\.LIST>[\s\S]*?<\/ALLLEDGERENTRIES\.LIST>/gi) || block.match(/<LEDGERENTRIES\.LIST>[\s\S]*?<\/LEDGERENTRIES\.LIST>/gi) || [];
+        let tds = 0, expense = 0, leadName = '', leadAmt = 0;
+        for (const e of entryBlocks) {
+          const nm = tag(e, 'LEDGERNAME'); if (!nm) continue;
+          const rawAmt = toNum(tag(e, 'AMOUNT'));
+          const dp = tag(e, 'ISDEEMEDPOSITIVE');
+          const dr = r2((dp ? (/yes/i.test(dp) ? 1 : -1) : (rawAmt < 0 ? 1 : -1)) * Math.abs(rawAmt)); // Dr-positive
+          if (norm(nm) === norm(party)) continue;            // party leg = net payable
+          if (TDS_LEDGER_RE.test(nm)) { tds = r2(tds + (dr < 0 ? -dr : 0)); continue; } // TDS = credit
+          if (GST_LEDGER_RE.test(nm)) continue;              // GST tax leg, not expense
+          if (/round\s*off/i.test(nm)) continue;
+          if (dr > 0) { expense = r2(expense + dr); if (dr > leadAmt) { leadAmt = dr; leadName = nm; } } // expense debit
+        }
+        if (expense <= 0.5) continue;                        // not an expense booking
+        const vd = parseTallyFieldDate(tag(block, 'DATE'));
+        rows.push({
+          date: vd ? vd.toISOString().slice(0, 10) : null,
+          party, pan: panByNorm.get(norm(party)) || '',
+          ledger: leadName || tag(block, 'VOUCHERTYPENAME') || '', amount: expense, tds,
+          vno: tag(block, 'VOUCHERNUMBER') || '',
+        });
+      }
+    });
+    dcProgress.phase = '';
+    return { ok: true, count: rows.length, rows };
+  } finally { state.settings.company = saved; }
+}
+
 // "Full pull" — every debtor OR creditor party's full statement for [from..to]
 // in ONE movement pass (same cost as the ageing rail), so the dashboard can
 // store them and the drill-down popup opens instantly for staff AND for a
@@ -4305,6 +4363,25 @@ const server = http.createServer(async (req, res) => {
         const st = await readPartyStatement(String(body.url || state.settings.tallyUrl), String(body.company || ''), party, from, to);
         dcProgress.active = false;
         json(res, 200, { ok: true, version: VERSION, from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10), ...st });
+      } catch (e) {
+        dcProgress.active = false;
+        json(res, 502, { ok: false, error: 'Could not read Tally: ' + String((e && e.message) || e) });
+      }
+      return;
+    }
+
+    // TDS 26Q — expense bookings party-wise with TDS deducted, for the workpaper.
+    if (req.method === 'POST' && url.pathname === '/api/tds26q/read') {
+      if (dcProgress.active) { json(res, 409, { ok: false, error: 'A read is already running.' }); return; }
+      const body = JSON.parse(await readBody(req));
+      const from = tallyDateOf(String(body.from || '').replace(/-/g, ''));
+      const to = tallyDateOf(String(body.to || '').replace(/-/g, ''));
+      if (!from || !to || from > to) { json(res, 400, { ok: false, error: 'Bad period.' }); return; }
+      dcCancel = false; dcProgress.active = true; dcProgress.startedAt = Date.now();
+      try {
+        const out = await readTds26q(String(body.url || state.settings.tallyUrl), String(body.company || ''), from, to);
+        dcProgress.active = false;
+        json(res, 200, { version: VERSION, ...out });
       } catch (e) {
         dcProgress.active = false;
         json(res, 502, { ok: false, error: 'Could not read Tally: ' + String((e && e.message) || e) });
