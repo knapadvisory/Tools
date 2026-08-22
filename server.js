@@ -219,6 +219,10 @@ app.use('/finprep', express.static(path.join(__dirname, 'finprep'), {
   setHeaders: (res) => res.set(NO_CACHE),
 }));
 
+app.use('/pdf-unlock', express.static(path.join(__dirname, 'pdf-unlock'), {
+  setHeaders: (res) => res.set(NO_CACHE),
+}));
+
 app.use('/debtor-creditor', express.static(path.join(__dirname, 'debtor-creditor'), {
   setHeaders: (res) => res.set(NO_CACHE),
 }));

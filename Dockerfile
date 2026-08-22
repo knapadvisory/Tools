@@ -21,6 +21,7 @@ COPY gstr2b/ ./gstr2b/
 COPY audit/ ./audit/
 COPY tds26as/ ./tds26as/
 COPY finprep/ ./finprep/
+COPY pdf-unlock/ ./pdf-unlock/
 COPY debtor-creditor/ ./debtor-creditor/
 COPY itc-reco/ ./itc-reco/
 COPY gstr1/ ./gstr1/
