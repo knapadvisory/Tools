@@ -17,6 +17,7 @@ Sibling sites: [teamhub.knapadvisory.com](https://teamhub.knapadvisory.com) ·
 | Tally Statutory Audit Assistant | **Hosted here** at `/audit/` + local connector | This repo — page `audit/`, engine `connector/knap-tally-audit-engine.mjs` (ported from `Dashboard` branch `claude/tally-audit-tool-24lawp` v1.2) |
 | GSTR-2B ⇄ Tally Poster | **Hosted here** at `/gstr2b/` + local connector | This repo — page `gstr2b/`, engine `connector/knap-tally-connector.mjs` (ported from `Dashboard` branch `claude/gstr2b-tally-posting-mqt7zn` v1.7) |
 | GSTR-1 Excel Summary | **Hosted here** at `/gstr1/` | This repo — page `gstr1/`, engine `gstr1-engine/` run unmodified as an internal child process, proxied at `/gstr1-api` (from `Dashboard` branch `claude/pdf-excel-extraction-tool-izu1zp`) |
+| PDF Unlock (password remover) | **Hosted here** at `/pdf-unlock/` | This repo — page `pdf-unlock/`, fully client-side (qpdf compiled to WebAssembly, embedded in the page); ported from `Management-tool` branch `claude/pdf-password-removal-app-4jna0v` |
 
 The desktop tools in `downloads/` are **copies** of the branch files above —
 they are what the page serves. When a tool gets a new version, copy the new
@@ -35,6 +36,9 @@ gstr1/                the hosted GSTR-1 Excel Summary page (UI only)
 gstr1-engine/         the GSTR-1 engine, UNMODIFIED single-file tool; server.js
                       runs it as a child on 127.0.0.1:8788 and proxies
                       /gstr1-api to it (state persists in the /data volume)
+pdf-unlock/           the hosted PDF password-remover page — one self-contained
+                      file, decryption runs in the browser (qpdf → WASM);
+                      nothing is uploaded to the server
 connector/            KNAP Tally Connector: gstr2b engine + supervised audit
                       engine + installer, served OPEN at /connector/
                       (self-update needs no key)
