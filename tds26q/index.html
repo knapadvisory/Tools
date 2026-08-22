@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TDS 26Q Workpaper — KNAP Tools</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧾</text></svg>">
+<script src="/session.js" defer></script>
+<script src="/gstr2b/exceljs.js" defer></script>
+<link rel="stylesheet" href="/cockpit.css">
+<style>
+  :root{ --accent:var(--green); --accent-hover:var(--green-2); --on-accent:#fff; }
+  .card h2{ margin-bottom:10px; }
+  .stepno{ display:inline-flex; width:22px; height:22px; border-radius:50%; background:var(--green); color:#fff; font-size:12px; font-weight:700; align-items:center; justify-content:center; margin-right:8px; }
+  .lede{ color:var(--muted); max-width:70ch; }
+  .tabs{ display:flex; gap:6px; margin:2px 0 14px; }
+  .tab{ padding:7px 14px; border:1px solid var(--border); border-radius:9px 9px 0 0; background:var(--surface-2); cursor:pointer; font-size:13px; font-weight:600; color:var(--muted); }
+  .tab.on{ background:var(--surface); color:var(--text); border-bottom-color:var(--surface); }
+  .drop{ border:1.5px dashed var(--border); border-radius:12px; padding:26px; text-align:center; cursor:pointer; background:var(--surface-2); }
+  .drop.over{ border-color:var(--green); background:var(--green-soft,#eef6f0); }
+  .drop .big{ font-weight:700; color:var(--text); } .drop .hint{ color:var(--muted); font-size:12.5px; margin-top:4px; }
+  .row{ display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+  label{ font-size:13px; }
+  input.small{ width:160px; } input.tiny{ width:92px; } input.mini{ width:72px; }
+  select,input{ font:inherit; }
+  .btn.go{ background:var(--green); border-color:var(--green); color:#fff; }
+  .btn.go:hover:not(:disabled){ background:var(--green-2); color:#fff; }
+  table{ width:100%; border-collapse:collapse; font-size:12.6px; margin-top:12px; }
+  th{ text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:var(--faint); border-bottom:1px solid var(--border); padding:6px 8px; white-space:nowrap; }
+  td{ padding:5px 8px; border-bottom:1px solid var(--surface-2); vertical-align:top; }
+  td.r, th.r{ text-align:right; font-family:var(--mono); }
+  .pill{ display:inline-block; font-size:10.5px; font-weight:700; padding:1px 7px; border-radius:999px; }
+  .pill.ok{ background:#e3f2e8; color:#1b6a3a; }
+  .pill.watch{ background:var(--warn-soft,#fbf4dc); color:var(--warn,#8a6d1a); }
+  .pill.flag{ background:var(--bad-soft,#fdecec); color:var(--bad,#b42318); }
+  .stats{ display:flex; gap:12px; flex-wrap:wrap; margin-top:12px; }
+  .stat{ background:var(--surface-2); border:1px solid var(--border); border-radius:10px; padding:10px 16px; min-width:120px; }
+  .stat .n{ font-size:19px; font-weight:700; font-family:var(--mono); } .stat .l{ font-size:11.5px; color:var(--muted); }
+  .sug{ color:var(--green); font-size:11.5px; cursor:pointer; }
+  .hidden{ display:none; }
+  .mapgrid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:10px; margin-top:10px; }
+  .mapgrid label{ display:flex; flex-direction:column; gap:3px; font-size:12px; color:var(--muted); }
+  .mapgrid select{ padding:5px 8px; border:1px solid var(--border); border-radius:7px; }
+  .tblwrap{ max-height:520px; overflow:auto; border:1px solid var(--border); border-radius:10px; margin-top:12px; }
+  .chalrow input{ margin:0; }
+  .muted{ color:var(--muted); } .small-note{ font-size:11.5px; color:var(--muted); margin-top:6px; }
+</style>
+</head>
+<body>
+<header class="site-head"><div class="site-head-inner">
+  <span class="brand"><span class="g"></span> TDS 26Q Workpaper</span>
+  <a class="back" href="/">← All tools</a>
+  <span class="spacer"></span>
+  <span class="conn-pill" id="connPill"><span class="dot"></span><span id="connPillText">file mode</span></span>
+  <button type="button" class="sess-out" onclick="releaseTally()" title="Free Tally for normal use">🔌 Release Tally</button>
+  <button type="button" class="sess-out" id="conn-upd" onclick="updateConnector()" title="Fetch the newest connector">⟳ Update connector</button>
+</div></header>
+
+<main>
+  <h1>TDS 26Q Workpaper <span id="conn-ver" style="font-size:12px;color:var(--muted);font-weight:400"></span></h1>
+  <p class="lede">Build the quarter's 26Q deduction workpaper — party-wise expenses, section-mapped
+    (194C / 194J / 194I / 194Q / 194H / 194A), with threshold checks, <b>required vs actual</b> TDS, and a
+    challan-vs-liability reconciliation. Output is a clean Excel in 26Q columns. Read expenses <b>from Tally</b>
+    on the Tally PC, or <b>upload a register</b> anywhere.</p>
+
+  <!-- Step 1: client + period -->
+  <div class="card">
+    <h2><span class="stepno">1</span>Client &amp; period</h2>
+    <div class="row">
+      <label>Client / entity <input id="clientName" class="small" placeholder="e.g. Eclat India Pvt Ltd" oninput="loadLearned()"></label>
+      <label>FY
+        <select id="fy"></select>
+      </label>
+      <label>Quarter
+        <select id="qtr">
+          <option value="Q1">Q1 · Apr–Jun</option>
+          <option value="Q2">Q2 · Jul–Sep</option>
+          <option value="Q3">Q3 · Oct–Dec</option>
+          <option value="Q4">Q4 · Jan–Mar</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="deducteeCo" checked> Deductees are mostly companies/firms (194C @2%)</label>
+    </div>
+    <div class="small-note">Thresholds are checked on the whole FY (aggregate), so upload/read the full year when you can — the workpaper still reports the selected quarter.</div>
+  </div>
+
+  <!-- Step 2: intake -->
+  <div class="card">
+    <h2><span class="stepno">2</span>Expenses</h2>
+    <div class="tabs">
+      <div class="tab on" id="tab-file" onclick="switchTab('file')">📄 Upload register</div>
+      <div class="tab" id="tab-tally" onclick="switchTab('tally')">🔗 Read from Tally</div>
+    </div>
+
+    <div id="pane-file">
+      <div class="drop" id="drop"><span class="big">Drop the expense register (.xlsx / .csv) here, or click to choose</span>
+        <div class="hint">Any Tally export with columns for date, party, expense ledger, amount, and TDS deducted. Include PAN &amp; voucher no. if you have them.</div>
+      </div>
+      <input type="file" id="file" accept=".xlsx,.xls,.csv" class="hidden">
+      <div id="mapPane" class="hidden">
+        <div class="small-note">Map your columns to the fields below — auto-detected where possible. Only Party, Amount and one of (Expense ledger / TDS) are required.</div>
+        <div class="mapgrid" id="mapGrid"></div>
+        <div class="row" style="margin-top:12px"><button class="btn go" onclick="ingestFile()">Use this file →</button></div>
+      </div>
+      <div class="msg" id="msgFile"></div>
+    </div>
+
+    <div id="pane-tally" class="hidden">
+      <div class="row">
+        <label>Company <select id="company" class="small"><option value="">(open company)</option></select></label>
+        <button class="btn" id="scanBtn" onclick="scanCompanies()">🔎 Scan companies</button>
+        <span style="font-size:12.5px"><span id="tally-dot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#c3ccd8;margin-right:5px"></span><span id="tally-status" class="msg" style="margin:0">checking connector…</span></span>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn go" id="readTallyBtn" onclick="readFromTally()">📥 Read expenses for the quarter</button>
+        <span class="small-note" style="margin:0">Reads expense vouchers party-wise with any TDS deducted on the same voucher (needs connector v4.52+).</span>
+      </div>
+      <div class="msg" id="msgTally"></div>
+    </div>
+  </div>
+
+  <!-- Step 3: mapping + rates -->
+  <div class="card hidden" id="cardMap">
+    <h2><span class="stepno">3</span>Section mapping &amp; rates</h2>
+    <div class="small-note">Each party is section-mapped from its expense ledger (auto-suggested, learned per client). Fix any that are wrong — choices are remembered for this client. Rates below are the defaults used to compute <b>required</b> TDS; edit if a lower/higher rate applies.</div>
+    <div id="rateRow" class="row" style="margin-top:10px"></div>
+    <div class="tblwrap"><table id="mapTable"></table></div>
+  </div>
+
+  <!-- Step 4: workpaper -->
+  <div class="card hidden" id="cardWp">
+    <h2><span class="stepno">4</span>Deduction workpaper</h2>
+    <div class="stats" id="wpStats"></div>
+    <div class="row" style="margin-top:10px">
+      <label>Show <select id="wpFilter" onchange="renderWorkpaper()">
+        <option value="all">all parties</option>
+        <option value="qtr">selected quarter only</option>
+        <option value="flag">exceptions only (short / not deducted / no-PAN)</option>
+      </select></label>
+    </div>
+    <div class="tblwrap"><table id="wpTable"></table></div>
+  </div>
+
+  <!-- Step 5: challans -->
+  <div class="card hidden" id="cardChal">
+    <h2><span class="stepno">5</span>Challans (deposited) &amp; reconciliation</h2>
+    <div class="small-note">Enter the challans deposited for this quarter (or upload a CSV). Reco compares TDS deducted (books) vs deposited per section, and flags short deposit and late deposit (interest u/s 201(1A) @1.5%/month).</div>
+    <div class="tblwrap"><table id="chalTable"></table></div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn" onclick="addChallan()">＋ Add challan</button>
+      <label class="btn" style="cursor:pointer">⬆ Upload challans CSV<input type="file" id="chalFile" accept=".csv" class="hidden" onchange="uploadChallans(this.files[0])"></label>
+    </div>
+    <div class="tblwrap"><table id="recoTable"></table></div>
+  </div>
+
+  <!-- Step 6: export -->
+  <div class="card hidden" id="cardExp">
+    <h2><span class="stepno">6</span>Export</h2>
+    <button class="btn go" onclick="exportWb()">⬇ Download 26Q workpaper (Excel)</button>
+    <div class="msg" id="msgExp"></div>
+    <div class="small-note">Sheets: Deductee-wise (26Q columns) · Section summary · Challan reco · Exceptions. This is a working paper for 26Q prep / RPU input — the FVU text file is a later addition.</div>
+  </div>
+</main>
+
+<script>
+var API='http://127.0.0.1:8797', connVer='';
+/* ---------- sections & thresholds (editable rates) ---------- */
+var SECTIONS={
+  '194C':{label:'194C · Contractors', rate:2, rateInd:1, thrSingle:30000, thrAgg:100000, note:'1% if payee is Ind/HUF, else 2%'},
+  '194J':{label:'194J · Professional/Technical', rate:10, thrAgg:30000, note:'2% for technical services / call-centre; else 10%'},
+  '194I':{label:'194I · Rent', rate:10, rateP:2, thrAgg:240000, note:'10% land/building; 2% plant & machinery'},
+  '194Q':{label:'194Q · Purchase of goods', rate:0.1, thrAgg:5000000, excessOnly:true, note:'0.1% on purchases beyond ₹50L per party'},
+  '194H':{label:'194H · Commission/Brokerage', rate:2, thrAgg:15000, note:'2% (from Oct-2024; was 5%)'},
+  '194A':{label:'194A · Interest (non-bank)', rate:10, thrAgg:5000, note:'10%; threshold ₹5,000 (₹40,000 for banks)'},
+  'NONE':{label:'Not liable / exclude', rate:0, thrAgg:0, note:'Salary (192/24Q), reimbursements, exempt payees'}
+};
+var SUG=[
+  [/rent|lease|licen[cs]e fee|godown|warehouse charges/i,'194I'],
+  [/professional|consult|audit|legal|advocate|retainer|technical fee|design fee|architect/i,'194J'],
+  [/commission|brokerage/i,'194H'],
+  [/interest/i,'194A'],
+  [/contract|labour|labor|job ?work|fabricat|transport|freight|carriage|courier|security charges|housekeeping|manpower|works? contract|erection|installation/i,'194C'],
+  [/purchase|goods|material|raw material|stock|trading/i,'194Q']
+];
+/* ---------- state ---------- */
+var raw={headers:[],rows:[]}, colMap={}, lines=[], parties=[], learned={}, challans=[], reco=[];
+var FIELDS=[['date','Date'],['party','Party / deductee'],['pan','PAN'],['ledger','Expense ledger'],['amount','Amount paid/credited'],['tds','TDS deducted'],['vno','Voucher no.']];
+
+/* ---------- FY dropdown ---------- */
+(function(){
+  var sel=document.getElementById('fy'), now=new Date(), y=now.getFullYear(), base=(now.getMonth()>=3)?y:y-1;
+  for(var i=0;i<4;i++){ var a=base-i; sel.innerHTML+='<option value="'+a+'">FY '+a+'-'+String(a+1).slice(2)+'</option>'; }
+})();
+function fyBounds(){ var y=+document.getElementById('fy').value; return {from:y+'-04-01', to:(y+1)+'-03-31'}; }
+function qBounds(){
+  var y=+document.getElementById('fy').value, q=document.getElementById('qtr').value;
+  var map={Q1:[y,4,y,6],Q2:[y,7,y,9],Q3:[y,10,y,12],Q4:[y+1,1,y+1,3]}[q];
+  var last=new Date(Date.UTC(map[2],map[3],0)).getUTCDate();
+  return {from:map[0]+'-'+String(map[1]).padStart(2,'0')+'-01', to:map[2]+'-'+String(map[3]).padStart(2,'0')+'-'+String(last).padStart(2,'0')};
+}
+
+/* ---------- tabs ---------- */
+function switchTab(t){
+  document.getElementById('tab-file').classList.toggle('on',t==='file');
+  document.getElementById('tab-tally').classList.toggle('on',t==='tally');
+  document.getElementById('pane-file').classList.toggle('hidden',t!=='file');
+  document.getElementById('pane-tally').classList.toggle('hidden',t!=='tally');
+}
+
+/* ---------- connector (read-from-Tally mode) ---------- */
+function setPill(s,t){var p=document.getElementById('connPill');if(!p)return;p.className='conn-pill '+(s||'');document.getElementById('connPillText').textContent=t;}
+function checkConn(){
+  fetch(API+'/health',{signal:AbortSignal.timeout(3000)}).then(function(r){return r.json();}).then(function(h){
+    connVer=h.version||''; document.getElementById('conn-ver').textContent='· connector v'+connVer;
+    document.getElementById('tally-dot').style.background='var(--ok,#1b6a3a)';
+    document.getElementById('tally-status').textContent='connector v'+connVer;
+    setPill('on','connector v'+connVer);
+    if(parseFloat(connVer)>=4.46) scanCompanies();
+  }).catch(function(){
+    document.getElementById('tally-status').innerHTML='connector not found — <a href="/connector/Install-Tally-Connector.bat" download>install it</a> (once) on this PC';
+    setPill('','file mode');
+  });
+}
+checkConn();
+function releaseTally(){ fetch(API+'/api/tally/release',{method:'POST'}).catch(function(){}); }
+function updateConnector(){
+  var el=document.getElementById('conn-upd'); el.disabled=true; el.textContent='⏳ Updating…';
+  fetch(API+'/update',{method:'POST'}).then(function(resp){
+    if(!resp.ok){ el.disabled=false; el.textContent='⟳ Update connector'; return; }
+    var was=connVer, tries=0, t=setInterval(function(){ tries++;
+      fetch(API+'/health').then(function(r){return r.json();}).then(function(h){
+        if(h.version&&h.version!==was){ clearInterval(t); el.disabled=false; el.textContent='⟳ Update connector'; checkConn(); }
+      }).catch(function(){});
+      if(tries>30){ clearInterval(t); el.disabled=false; el.textContent='⟳ Update connector'; }
+    },3000);
+  }).catch(function(){ el.disabled=false; el.textContent='⟳ Update connector'; });
+}
+function scanCompanies(){
+  var btn=document.getElementById('scanBtn'), was=btn.textContent; btn.disabled=true; btn.textContent='⏳…';
+  fetch(API+'/api/dc/companies',{method:'POST',headers:{'content-type':'application/json'},body:'{}'})
+    .then(function(r){return r.json();}).then(function(j){
+      btn.disabled=false; btn.textContent=was;
+      var sel=document.getElementById('company'), list=[];
+      (j.endpoints||[]).forEach(function(ep){(ep.companies||[]).forEach(function(c){list.push((typeof c==='string')?c:c.name);});});
+      sel.innerHTML='<option value="">(open company)</option>'+list.map(function(n){return '<option>'+n+'</option>';}).join('');
+      document.getElementById('tally-status').textContent='connector v'+connVer+' · '+list.length+' company(ies)';
+    }).catch(function(){ btn.disabled=false; btn.textContent=was; });
+}
+function readFromTally(){
+  var btn=document.getElementById('readTallyBtn'), was=btn.textContent; btn.disabled=true; btn.textContent='⏳ Reading…';
+  var b=qBounds(), fyb=fyBounds();
+  fetch(API+'/api/tds26q/read',{method:'POST',headers:{'content-type':'application/json'},
+    body:JSON.stringify({company:document.getElementById('company').value, from:fyb.from, to:fyb.to})})
+    .then(function(r){return r.json();}).then(function(j){
+      btn.disabled=false; btn.textContent=was;
+      if(!j.ok) throw new Error(j.error||'read failed');
+      lines=(j.rows||[]).map(function(r){ return {date:r.date,party:r.party,pan:r.pan||'',ledger:r.ledger||'',amount:+r.amount||0,tds:+r.tds||0,vno:r.vno||''}; });
+      document.getElementById('msgTally').innerHTML='<span class="msg ok">✅ Read '+lines.length+' expense lines from Tally.</span>';
+      afterIngest();
+    }).catch(function(e){ btn.disabled=false; btn.textContent=was; document.getElementById('msgTally').innerHTML='<span class="msg bad">Could not read from Tally ('+(e.message||e)+'). Update the connector to v4.52+, or use Upload register.</span>'; });
+}
+
+/* ---------- file upload + column mapping ---------- */
+var drop=document.getElementById('drop'), fileInput=document.getElementById('file');
+drop.onclick=function(){fileInput.click();};
+drop.ondragover=function(e){e.preventDefault();drop.classList.add('over');};
+drop.ondragleave=function(){drop.classList.remove('over');};
+drop.ondrop=function(e){e.preventDefault();drop.classList.remove('over'); if(e.dataTransfer.files[0])readFile(e.dataTransfer.files[0]);};
+fileInput.onchange=function(){ if(fileInput.files[0])readFile(fileInput.files[0]); };
+function readFile(f){
+  document.getElementById('msgFile').textContent='Reading '+f.name+'…';
+  var isCsv=/\.csv$/i.test(f.name);
+  var rd=new FileReader();
+  rd.onload=function(){
+    if(isCsv){ parseCsv(rd.result); } else { parseXlsx(rd.result); }
+  };
+  if(isCsv) rd.readAsText(f); else rd.readAsArrayBuffer(f);
+}
+function parseCsv(text){
+  var rows=text.split(/\r?\n/).filter(function(l){return l.trim();}).map(function(l){return splitCsv(l);});
+  if(!rows.length){ document.getElementById('msgFile').textContent='Empty file.'; return; }
+  raw.headers=rows[0]; raw.rows=rows.slice(1); afterRead();
+}
+function splitCsv(l){ var out=[],cur='',q=false; for(var i=0;i<l.length;i++){var c=l[i]; if(q){ if(c==='"'){ if(l[i+1]==='"'){cur+='"';i++;} else q=false; } else cur+=c; } else { if(c==='"')q=true; else if(c===',' ){out.push(cur);cur='';} else cur+=c; } } out.push(cur); return out.map(function(s){return s.trim();}); }
+function parseXlsx(buf){
+  var wb=new ExcelJS.Workbook();
+  wb.xlsx.load(buf).then(function(){
+    var ws=wb.worksheets[0], rows=[];
+    ws.eachRow(function(row){ var a=[]; row.eachCell({includeEmpty:true},function(c){ a.push(cellText(c.value)); }); rows.push(a); });
+    // find the header row: first row with >=3 non-empty cells that look like labels
+    var hi=0; for(var i=0;i<Math.min(rows.length,8);i++){ if(rows[i].filter(function(x){return x;}).length>=3){ hi=i; break; } }
+    raw.headers=rows[hi]; raw.rows=rows.slice(hi+1).filter(function(r){return r.some(function(x){return x!=='';});}); afterRead();
+  }).catch(function(e){ document.getElementById('msgFile').innerHTML='<span class="msg bad">Could not read the Excel ('+(e.message||e)+'). Try saving as CSV.</span>'; });
+}
+function cellText(v){ if(v==null)return ''; if(typeof v==='object'){ if(v.text)return String(v.text); if(v.result!=null)return String(v.result); if(v instanceof Date)return v.toISOString().slice(0,10); if(v.richText)return v.richText.map(function(t){return t.text;}).join(''); return ''; } return String(v); }
+function afterRead(){
+  document.getElementById('msgFile').textContent=raw.rows.length+' rows read. Confirm the column mapping:';
+  autoMap(); renderMapGrid(); document.getElementById('mapPane').classList.remove('hidden');
+}
+var COLHINT={date:/date|dt|voucher date/i,party:/party|ledger name|name of|deductee|supplier|vendor|account/i,pan:/pan/i,ledger:/expense|nature|particular|head|ledger|account/i,amount:/amount|paid|credit|value|gross|taxable|debit/i,tds:/tds|tax deduct|194/i,vno:/vch no|voucher no|vno|invoice no|bill no|doc/i};
+function autoMap(){ colMap={}; FIELDS.forEach(function(f){ var k=f[0]; for(var i=0;i<raw.headers.length;i++){ if(COLHINT[k].test(raw.headers[i]||'')){ colMap[k]=i; break; } } }); }
+function renderMapGrid(){
+  var g=document.getElementById('mapGrid'); g.innerHTML=FIELDS.map(function(f){
+    var opts='<option value="">— none —</option>'+raw.headers.map(function(h,i){ return '<option value="'+i+'"'+(colMap[f[0]]===i?' selected':'')+'>'+(h||('Col '+(i+1)))+'</option>'; }).join('');
+    return '<label>'+f[1]+'<select data-f="'+f[0]+'" onchange="colMap[this.getAttribute(\'data-f\')]=this.value===\'\'?undefined:+this.value">'+opts+'</select></label>';
+  }).join('');
+}
+function ingestFile(){
+  if(colMap.party===undefined||colMap.amount===undefined){ document.getElementById('msgFile').innerHTML='<span class="msg bad">Party and Amount columns are required.</span>'; return; }
+  lines=raw.rows.map(function(r){
+    return { date:normDate(cell(r,'date')), party:(cell(r,'party')||'').trim(), pan:(cell(r,'pan')||'').trim().toUpperCase(),
+      ledger:(cell(r,'ledger')||'').trim(), amount:num(cell(r,'amount')), tds:num(cell(r,'tds')), vno:(cell(r,'vno')||'').trim() };
+  }).filter(function(l){ return l.party && (l.amount||l.tds); });
+  document.getElementById('msgFile').innerHTML='<span class="msg ok">✅ '+lines.length+' lines ingested.</span>';
+  afterIngest();
+}
+function cell(r,f){ var i=colMap[f]; return i===undefined?'':(r[i]==null?'':r[i]); }
+function num(v){ v=String(v==null?'':v).replace(/[₹,\s]/g,'').replace(/\((.*)\)/,'-$1'); var n=parseFloat(v); return isNaN(n)?0:n; }
+function normDate(v){
+  v=String(v||'').trim(); if(!v)return '';
+  var m=v.match(/^(\d{4})-(\d{2})-(\d{2})/); if(m)return m[1]+'-'+m[2]+'-'+m[3];
+  m=v.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/); if(m){ var y=m[3].length===2?'20'+m[3]:m[3]; return y+'-'+String(m[2]).padStart(2,'0')+'-'+String(m[1]).padStart(2,'0'); }
+  m=v.match(/^(\d{1,2})[- ]([A-Za-z]{3})[- ](\d{2,4})$/); if(m){ var mo={jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12'}[m[2].toLowerCase()]; var yy=m[3].length===2?'20'+m[3]:m[3]; if(mo)return yy+'-'+mo+'-'+String(m[1]).padStart(2,'0'); }
+  return v;
+}
+
+/* ---------- learned section mapping (per client, localStorage) ---------- */
+function lsKey(){ return 'knap.tds26q.'+((document.getElementById('clientName').value||'default').trim().toLowerCase()); }
+function loadLearned(){ try{ learned=JSON.parse(localStorage.getItem(lsKey())||'{}'); }catch(e){ learned={}; } if(parties.length) buildParties(); }
+function saveLearned(){ try{ localStorage.setItem(lsKey(),JSON.stringify(learned)); }catch(e){} }
+function normKey(s){ return String(s||'').toLowerCase().replace(/&/g,'and').replace(/[^a-z0-9]/g,''); }
+function suggestSection(ledger,party){ var t=(ledger||'')+' '+(party||''); for(var i=0;i<SUG.length;i++){ if(SUG[i][0].test(t))return SUG[i][1]; } return 'NONE'; }
+
+/* ---------- build party-wise aggregates ---------- */
+function afterIngest(){
+  loadLearned(); buildParties();
+  document.getElementById('cardMap').classList.remove('hidden');
+  document.getElementById('cardWp').classList.remove('hidden');
+  document.getElementById('cardChal').classList.remove('hidden');
+  document.getElementById('cardExp').classList.remove('hidden');
+  renderRates(); renderMapTable(); compute(); if(!challans.length) addChallan();
+}
+function buildParties(){
+  var byP={};
+  lines.forEach(function(l){
+    var k=normKey(l.party);
+    if(!byP[k]) byP[k]={key:k,party:l.party,pan:l.pan,ledgers:{},lines:[],section:null};
+    var p=byP[k]; p.lines.push(l); if(l.pan&&!p.pan)p.pan=l.pan; if(l.ledger)p.ledgers[l.ledger]=1;
+  });
+  parties=Object.keys(byP).map(function(k){return byP[k];});
+  parties.forEach(function(p){
+    var lead=Object.keys(p.ledgers)[0]||'';
+    p.section = learned[p.key] || suggestSection(lead,p.party);
+  });
+}
+
+/* ---------- rates UI ---------- */
+function renderRates(){
+  var r=document.getElementById('rateRow');
+  r.innerHTML=Object.keys(SECTIONS).filter(function(s){return s!=='NONE';}).map(function(s){
+    return '<label style="font-size:12px">'+s+' % <input class="mini" type="number" step="0.1" value="'+SECTIONS[s].rate+'" onchange="SECTIONS[\''+s+'\'].rate=+this.value;compute()"></label>';
+  }).join('');
+}
+
+/* ---------- section-mapping table ---------- */
+function renderMapTable(){
+  var t=document.getElementById('mapTable');
+  var rows=parties.slice().sort(function(a,b){return tot(b)-tot(a);});
+  var head='<thead><tr><th>Party</th><th>PAN</th><th>Lead expense ledger</th><th>Section</th><th class="r">FY amount</th></tr></thead>';
+  t.innerHTML=head+'<tbody>'+rows.map(function(p){
+    var lead=Object.keys(p.ledgers)[0]||'—';
+    var opts=Object.keys(SECTIONS).map(function(s){return '<option value="'+s+'"'+(p.section===s?' selected':'')+'>'+s+'</option>';}).join('');
+    var sug=suggestSection(lead,p.party);
+    return '<tr><td>'+esc(p.party)+'</td><td>'+(p.pan?esc(p.pan):'<span class="pill flag">no PAN</span>')+'</td><td class="muted">'+esc(lead)+'</td>'+
+      '<td><select onchange="setSection(\''+p.key+'\',this.value)">'+opts+'</select>'+(p.section!==sug?' <span class="sug" onclick="setSection(\''+p.key+'\',\''+sug+'\')" title="suggested">↺'+sug+'</span>':'')+'</td>'+
+      '<td class="r">'+inr(tot(p))+'</td></tr>';
+  }).join('')+'</tbody>';
+}
+function setSection(key,s){ var p=byKey(key); if(!p)return; p.section=s; learned[key]=s; saveLearned(); renderMapTable(); compute(); }
+function byKey(k){ for(var i=0;i<parties.length;i++)if(parties[i].key===k)return parties[i]; return null; }
+function tot(p){ return p.lines.reduce(function(s,l){return s+l.amount;},0); }
+
+/* ---------- compute required vs actual ---------- */
+var wp=[];
+function inQtr(d){ var b=qBounds(); return d>=b.from&&d<=b.to; }
+function compute(){
+  var indC=!document.getElementById('deducteeCo').checked;
+  wp=[];
+  parties.forEach(function(p){
+    var sec=p.section, S=SECTIONS[sec]||SECTIONS.NONE;
+    var fyAmt=tot(p), single=p.lines.reduce(function(m,l){return Math.max(m,l.amount);},0);
+    var tdsActual=p.lines.reduce(function(s,l){return s+l.tds;},0);
+    var qLines=p.lines.filter(function(l){return inQtr(l.date);});
+    var qAmt=qLines.reduce(function(s,l){return s+l.amount;},0);
+    var qTds=qLines.reduce(function(s,l){return s+l.tds;},0);
+    // threshold crossed?
+    var crossed=true, thrNote='';
+    if(sec==='NONE'){ crossed=false; }
+    else if(sec==='194C'){ crossed=(single>S.thrSingle)||(fyAmt>S.thrAgg); thrNote='single>'+S.thrSingle+' or FY>'+S.thrAgg; }
+    else { crossed=fyAmt>(S.thrAgg||0); thrNote='FY>'+(S.thrAgg||0); }
+    // rate
+    var rate=S.rate; if(sec==='194C'&&indC)rate=S.rateInd;
+    if(p.pan===''||!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(p.pan)) rate=Math.max(rate,20); // 206AA no/invalid PAN
+    // required on FY basis (194Q on excess over threshold)
+    var base=fyAmt; if(S.excessOnly) base=Math.max(0,fyAmt-(S.thrAgg||0));
+    var reqFY = (sec==='NONE'||!crossed)?0:r2(base*rate/100);
+    // quarter required (proportion of the FY requirement that falls in the quarter, by amount)
+    var reqQ = fyAmt? r2(reqFY*(qAmt/fyAmt)) : 0;
+    var shortFY=r2(reqFY-tdsActual);
+    var cls='ok',label='OK';
+    if(sec==='NONE'){ cls='ok'; label='Not liable'; }
+    else if(crossed && tdsActual<0.5 && reqFY>0){ cls='flag'; label='Threshold crossed — TDS NOT deducted'; }
+    else if(shortFY>1){ cls='flag'; label='Short deduction ₹'+Math.round(shortFY); }
+    else if(shortFY<-1){ cls='watch'; label='Excess deducted ₹'+Math.round(-shortFY); }
+    else if(rate>=20 && crossed){ cls='watch'; label='No/invalid PAN — 20% u/s 206AA'; }
+    wp.push({key:p.key,party:p.party,pan:p.pan,section:sec,lead:Object.keys(p.ledgers)[0]||'',
+      fyAmt:fyAmt,qAmt:qAmt,rate:rate,reqFY:reqFY,reqQ:reqQ,tdsActual:tdsActual,qTds:qTds,shortFY:shortFY,
+      crossed:crossed,cls:cls,label:label,qLines:qLines,lines:p.lines});
+  });
+  renderWorkpaper(); computeReco();
+}
+function renderWorkpaper(){
+  var f=document.getElementById('wpFilter').value;
+  var rows=wp.filter(function(w){ if(f==='qtr')return w.qAmt>0; if(f==='flag')return w.cls==='flag'||w.rate>=20; return true; })
+             .sort(function(a,b){ var o={flag:0,watch:1,ok:2}; return (o[a.cls]-o[b.cls])||(b.fyAmt-a.fyAmt); });
+  var t=document.getElementById('wpTable');
+  t.innerHTML='<thead><tr><th>Party</th><th>PAN</th><th>Sec</th><th class="r">FY paid</th><th class="r">Qtr paid</th><th class="r">Rate%</th><th class="r">TDS req (FY)</th><th class="r">TDS deducted</th><th class="r">Short</th><th>Status</th></tr></thead><tbody>'+
+    rows.map(function(w){ return '<tr>'+
+      '<td>'+esc(w.party)+'</td><td>'+(w.pan?esc(w.pan):'<span class="pill flag">none</span>')+'</td><td>'+w.section+'</td>'+
+      '<td class="r">'+inr(w.fyAmt)+'</td><td class="r">'+inr(w.qAmt)+'</td><td class="r">'+w.rate+'</td>'+
+      '<td class="r">'+inr(w.reqFY)+'</td><td class="r">'+inr(w.tdsActual)+'</td>'+
+      '<td class="r">'+(Math.abs(w.shortFY)>1?inr(w.shortFY):'—')+'</td>'+
+      '<td><span class="pill '+w.cls+'">'+w.label+'</span></td></tr>'; }).join('')+'</tbody>';
+  // stats
+  var liable=wp.filter(function(w){return w.section!=='NONE'&&w.crossed;});
+  var reqFY=liable.reduce(function(s,w){return s+w.reqFY;},0);
+  var ded=wp.reduce(function(s,w){return s+w.tdsActual;},0);
+  var flags=wp.filter(function(w){return w.cls==='flag';}).length;
+  document.getElementById('wpStats').innerHTML=
+    stat(parties.length,'parties')+stat(inr(reqFY),'TDS required (FY)')+stat(inr(ded),'TDS deducted')+stat(flags,'exceptions',flags?'flag':'');
+}
+function stat(n,l,cls){ return '<div class="stat'+(cls==='flag'?'" style="border-color:var(--bad,#b42318)':'')+'"><div class="n">'+n+'</div><div class="l">'+l+'</div></div>'; }
+
+/* ---------- challans + reco ---------- */
+function addChallan(){ challans.push({section:'194C',month:'',bsr:'',cno:'',date:'',amount:0}); renderChallans(); }
+function renderChallans(){
+  var t=document.getElementById('chalTable');
+  var secOpts=Object.keys(SECTIONS).filter(function(s){return s!=='NONE';});
+  t.innerHTML='<thead><tr><th>Section</th><th>Paid for (YYYY-MM)</th><th>BSR code</th><th>Challan no.</th><th>Deposit date</th><th class="r">Amount</th><th></th></tr></thead><tbody>'+
+    challans.map(function(c,i){ return '<tr class="chalrow">'+
+      '<td><select onchange="challans['+i+'].section=this.value;computeReco()">'+secOpts.map(function(s){return '<option'+(c.section===s?' selected':'')+'>'+s+'</option>';}).join('')+'</select></td>'+
+      '<td><input class="tiny" value="'+c.month+'" placeholder="2026-04" oninput="challans['+i+'].month=this.value;computeReco()"></td>'+
+      '<td><input class="tiny" value="'+c.bsr+'" oninput="challans['+i+'].bsr=this.value"></td>'+
+      '<td><input class="tiny" value="'+c.cno+'" oninput="challans['+i+'].cno=this.value"></td>'+
+      '<td><input class="tiny" type="date" value="'+c.date+'" oninput="challans['+i+'].date=this.value;computeReco()"></td>'+
+      '<td class="r"><input class="tiny" type="number" value="'+c.amount+'" oninput="challans['+i+'].amount=+this.value;computeReco()"></td>'+
+      '<td><span class="sug" onclick="challans.splice('+i+',1);renderChallans();computeReco()">✕</span></td></tr>'; }).join('')+'</tbody>';
+}
+function uploadChallans(f){ if(!f)return; var rd=new FileReader(); rd.onload=function(){ var rows=rd.result.split(/\r?\n/).filter(function(l){return l.trim();}).map(splitCsv); var h=rows[0].map(function(x){return x.toLowerCase();}); var idx=function(re){for(var i=0;i<h.length;i++)if(re.test(h[i]))return i;return -1;}; var iS=idx(/sec/),iM=idx(/month|period|paid/),iB=idx(/bsr/),iC=idx(/challan|cin/),iD=idx(/date/),iA=idx(/amount|tds|deposit/); rows.slice(1).forEach(function(r){ challans.push({section:(iS>=0?r[iS]:'194C').replace(/[^0-9A-Z]/gi,''),month:iM>=0?r[iM]:'',bsr:iB>=0?r[iB]:'',cno:iC>=0?r[iC]:'',date:iD>=0?normDate(r[iD]):'',amount:iA>=0?num(r[iA]):0}); }); renderChallans(); computeReco(); }; rd.readAsText(f); }
+function computeReco(){
+  var b=qBounds();
+  var deducted={}; // section -> {amt, lastCredit(date)}
+  wp.forEach(function(w){ if(w.section==='NONE')return; w.qLines.forEach(function(l){ if(!l.tds)return; if(!deducted[w.section])deducted[w.section]={amt:0,late:0}; deducted[w.section].amt+=l.tds; }); });
+  var dep={}; challans.forEach(function(c){ if(!dep[c.section])dep[c.section]={amt:0,maxDate:''}; dep[c.section].amt+=c.amount; if(c.date>dep[c.section].maxDate)dep[c.section].maxDate=c.date; });
+  var secs={}; Object.keys(deducted).forEach(function(s){secs[s]=1;}); Object.keys(dep).forEach(function(s){secs[s]=1;});
+  reco=Object.keys(secs).map(function(s){
+    var d=(deducted[s]||{}).amt||0, p=(dep[s]||{}).amt||0, short=r2(d-p);
+    // late deposit: due 7th of month after quarter-end month for the quarter's deductions (simplified)
+    var dueDay=new Date(Date.UTC(+b.to.slice(0,4), +b.to.slice(5,7), 7)); // 7th of month after quarter end
+    var depDate=(dep[s]||{}).maxDate||''; var late=0, months=0;
+    if(depDate && d>0){ var dd=new Date(depDate+'T00:00:00Z'); if(dd>dueDay){ months=Math.ceil((dd-dueDay)/(30*86400000))+1; late=r2(d*0.015*months); } }
+    return {section:s,deducted:d,deposited:p,short:short,late:late,months:months};
+  }).sort(function(a,b){return a.section<b.section?-1:1;});
+  var t=document.getElementById('recoTable');
+  t.innerHTML='<thead><tr><th>Section</th><th class="r">Deducted (qtr)</th><th class="r">Deposited</th><th class="r">Short</th><th class="r">Interest 201(1A)</th><th>Status</th></tr></thead><tbody>'+
+    reco.map(function(r){ var cls=r.short>1?'flag':(r.late>0?'watch':'ok'); var lbl=r.short>1?'Short deposit':(r.late>0?('Late '+r.months+' mo'):'Matched'); return '<tr><td>'+r.section+'</td><td class="r">'+inr(r.deducted)+'</td><td class="r">'+inr(r.deposited)+'</td><td class="r">'+(Math.abs(r.short)>1?inr(r.short):'—')+'</td><td class="r">'+(r.late>0?inr(r.late):'—')+'</td><td><span class="pill '+cls+'">'+lbl+'</span></td></tr>'; }).join('')+'</tbody>';
+}
+
+/* ---------- helpers ---------- */
+function r2(n){ return Math.round((n||0)*100)/100; }
+function inr(n){ n=+n||0; var neg=n<0; n=Math.abs(n); var s=n.toFixed(2); var p=s.split('.'); var x=p[0]; var last3=x.length>3?x.slice(-3):x; var rest=x.length>3?x.slice(0,-3):''; if(rest)last3=','+last3; rest=rest.replace(/\B(?=(\d{2})+(?!\d))/g,','); return (neg?'-':'')+rest+last3+'.'+p[1]; }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];}); }
+
+/* ---------- Excel export ---------- */
+function exportWb(){
+  if(!wp.length){ document.getElementById('msgExp').textContent='Nothing to export yet.'; return; }
+  var b=qBounds(), wb=new ExcelJS.Workbook();
+  var head={fill:{type:'pattern',pattern:'solid',fgColor:{argb:'FF173F28'}},font:{color:{argb:'FFFFFFFF'},bold:true,size:9},alignment:{horizontal:'center'}};
+  var flag='FFFDECEC', watch='FFFBF4DC';
+  // Sheet 1: Deductee-wise (26Q columns) — quarter lines
+  var ws=wb.addWorksheet('Deductee-wise (26Q)');
+  ws.columns=[{width:11},{width:32},{width:14},{width:8},{width:26},{width:14},{width:14},{width:8},{width:13},{width:13},{width:14},{width:12}];
+  var H=['Date paid/credited','Deductee','PAN','Section','Expense ledger','Voucher','Amount paid','Rate %','TDS required','TDS deducted','Short/(Excess)','Flag'];
+  var hr=ws.addRow(H); hr.eachCell(function(c){c.fill=head.fill;c.font=head.font;c.alignment=head.alignment;});
+  wp.forEach(function(w){
+    w.qLines.forEach(function(l){
+      var req=r2(l.amount*w.rate/100*(w.crossed?1:0)); if(w.section==='NONE')req=0;
+      var short=r2(req-l.tds);
+      var row=ws.addRow([l.date,w.party,w.pan,w.section,l.ledger,l.vno,l.amount,w.rate,req,l.tds,short,w.cls==='flag'?'CHECK':'']);
+      row.font={size:9}; [7,9,10,11].forEach(function(i){row.getCell(i).numFmt='#,##0.00';row.getCell(i).alignment={horizontal:'right'};}); row.getCell(8).alignment={horizontal:'right'};
+      if(w.cls==='flag')for(var i=1;i<=12;i++)row.getCell(i).fill={type:'pattern',pattern:'solid',fgColor:{argb:flag}};
+      else if(w.cls==='watch')for(var j=1;j<=12;j++)row.getCell(j).fill={type:'pattern',pattern:'solid',fgColor:{argb:watch}};
+    });
+  });
+  var l1=ws.lastRow.number; ws.autoFilter='A1:L'+l1; ws.views=[{state:'frozen',ySplit:1}];
+  // Sheet 2: Section summary (FY basis)
+  var ws2=wb.addWorksheet('Section summary');
+  ws2.columns=[{width:12},{width:34},{width:10},{width:16},{width:16},{width:16},{width:16},{width:40}];
+  var h2=ws2.addRow(['Section','Description','Parties','FY amount','TDS required (FY)','TDS deducted','Short/(Excess)','Note']); h2.eachCell(function(c){c.fill=head.fill;c.font=head.font;c.alignment=head.alignment;});
+  var bySec={}; wp.forEach(function(w){ if(!bySec[w.section])bySec[w.section]={n:0,amt:0,req:0,ded:0}; var g=bySec[w.section]; g.n++; g.amt+=w.fyAmt; g.req+=w.reqFY; g.ded+=w.tdsActual; });
+  Object.keys(bySec).sort().forEach(function(s){ var g=bySec[s]; var row=ws2.addRow([s,(SECTIONS[s]||{}).label||s,g.n,r2(g.amt),r2(g.req),r2(g.ded),r2(g.req-g.ded),(SECTIONS[s]||{}).note||'']); row.font={size:9}; [4,5,6,7].forEach(function(i){row.getCell(i).numFmt='#,##0.00';}); });
+  ws2.views=[{state:'frozen',ySplit:1}];
+  // Sheet 3: Challan reco
+  var ws3=wb.addWorksheet('Challan reco');
+  ws3.columns=[{width:12},{width:16},{width:16},{width:14},{width:16},{width:10}];
+  var h3=ws3.addRow(['Section','Deducted (qtr)','Deposited','Short','Interest 201(1A)','Late mo']); h3.eachCell(function(c){c.fill=head.fill;c.font=head.font;c.alignment=head.alignment;});
+  reco.forEach(function(r){ var row=ws3.addRow([r.section,r.deducted,r.deposited,r.short,r.late,r.months||'']); row.font={size:9}; [2,3,4,5].forEach(function(i){row.getCell(i).numFmt='#,##0.00';}); if(r.short>1||r.late>0)for(var i=1;i<=6;i++)row.getCell(i).fill={type:'pattern',pattern:'solid',fgColor:{argb:r.short>1?flag:watch}}; });
+  var chH=ws3.addRow([]); ws3.addRow(['Challans entered:']).getCell(1).font={bold:true,size:9};
+  ws3.addRow(['Section','Paid for','BSR','Challan no','Date','Amount']).eachCell(function(c){c.font={bold:true,size:8.5};});
+  challans.forEach(function(c){ var row=ws3.addRow([c.section,c.month,c.bsr,c.cno,c.date,c.amount]); row.font={size:9}; row.getCell(6).numFmt='#,##0.00'; });
+  // Sheet 4: Exceptions
+  var ws4=wb.addWorksheet('Exceptions');
+  ws4.columns=[{width:32},{width:14},{width:8},{width:16},{width:14},{width:44}];
+  var h4=ws4.addRow(['Party','PAN','Section','FY amount','TDS deducted','Issue']); h4.eachCell(function(c){c.fill=head.fill;c.font=head.font;c.alignment=head.alignment;});
+  wp.filter(function(w){return w.cls==='flag'||w.rate>=20;}).forEach(function(w){ var row=ws4.addRow([w.party,w.pan,w.section,r2(w.fyAmt),r2(w.tdsActual),w.label]); row.font={size:9}; [4,5].forEach(function(i){row.getCell(i).numFmt='#,##0.00';}); for(var i=1;i<=6;i++)row.getCell(i).fill={type:'pattern',pattern:'solid',fgColor:{argb:flag}}; });
+  wb.xlsx.writeBuffer().then(function(buf){
+    var name='tds-26q-'+(document.getElementById('clientName').value||'client').replace(/[^a-z0-9]+/gi,'-')+'-'+document.getElementById('fy').value+'-'+document.getElementById('qtr').value+'.xlsx';
+    var a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})); a.download=name; a.style.display='none'; document.body.appendChild(a); a.click(); setTimeout(function(){a.remove();URL.revokeObjectURL(a.href);},1500);
+    document.getElementById('msgExp').innerHTML='<span class="msg ok">✅ Downloaded '+name+' — Deductee-wise, Section summary, Challan reco, Exceptions.</span>';
+  });
+}
+</script>
+</body>
+</html>

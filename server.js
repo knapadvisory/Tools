@@ -223,6 +223,10 @@ app.use('/pdf-unlock', express.static(path.join(__dirname, 'pdf-unlock'), {
   setHeaders: (res) => res.set(NO_CACHE),
 }));
 
+app.use('/tds26q', express.static(path.join(__dirname, 'tds26q'), {
+  setHeaders: (res) => res.set(NO_CACHE),
+}));
+
 app.use('/debtor-creditor', express.static(path.join(__dirname, 'debtor-creditor'), {
   setHeaders: (res) => res.set(NO_CACHE),
 }));
