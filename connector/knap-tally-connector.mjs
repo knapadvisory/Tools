@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.52';
+const VERSION = '4.53';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2792,6 +2792,13 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
           else taxable = r2(taxable + dr);                 // purchase / expense base
         }
         if (!touchesTax) continue;                         // not an ITC voucher
+        // ITC set-off / utilisation journals (Input IGST/CGST/SGST CREDITED to
+        // pay the Output tax at period end) carry NO supplier party and a net
+        // CREDIT to the input ledger. They are payments of output tax using ITC,
+        // not purchases — netting them as negative ITC understates books ITC.
+        // Genuine supplier credit/debit notes always carry a party, so this only
+        // drops the party-less set-off/reversal journals. RCM legs are untouched.
+        if (!party && r2(tax.igst + tax.cgst + tax.sgst) < -0.5) continue;
         const m = masters[party] || {};
         const gstin = String(m.gstin || tag(block, 'PARTYGSTIN') || '').toUpperCase();
         // Which of OUR registrations booked this voucher. A single Tally company
