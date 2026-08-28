@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.53';
+const VERSION = '4.54';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -2961,6 +2961,17 @@ async function readPartyStatement(url, company, party, from, to) {
 // mode; the tool does the section-mapping / thresholds / reco on top.
 const TDS_LEDGER_RE = /\btds\b|tax deducted at source|194[a-z]?\b/i;
 const GST_LEDGER_RE = /\b(i?gst|cgst|sgst|igst|cess|integrated tax|central tax|state tax)\b/i;
+const ROUNDOFF_RE = /round\s*off/i;
+// Which GST bucket a tax ledger belongs to (cgst/sgst tested before igst so the
+// bare "gst" in a c/s-gst name is not mis-read as igst). Returns null for non-GST.
+function gstBucketOf(name) {
+  const n = String(name || '');
+  if (/cess/i.test(n)) return 'cess';
+  if (/\bc\.?\s*gst\b|central\s*tax/i.test(n)) return 'cgst';
+  if (/\bs\.?\s*gst\b|state\s*tax|ut\s*gst|utgst/i.test(n)) return 'sgst';
+  if (/\bi\.?\s*gst\b|integrated\s*tax/i.test(n)) return 'igst';
+  return null;
+}
 async function readTds26q(url, company, from, to) {
   const saved = state.settings.company; state.settings.company = company || '';
   try {
@@ -3010,6 +3021,85 @@ async function readTds26q(url, company, from, to) {
     });
     dcProgress.phase = '';
     return { ok: true, count: rows.length, rows };
+  } finally { state.settings.company = saved; }
+}
+
+// ERP bridge — sales & purchase vouchers over [from..to], each decomposed into
+// the legs an ERPNext posting needs: the party (customer/supplier) + GSTIN, the
+// taxable base, the GST split (igst/cgst/sgst/cess), any round-off, and the
+// gross (party leg). Amounts are in the voucher's NATURAL sign — positive for a
+// normal invoice, negative for a credit/debit note — so gross ≈ taxable + tax +
+// roundoff by construction, and a JE built from them balances. `legs` carries
+// the raw per-ledger detail (dr-positive) for faithful account mapping later.
+// A voucher is "sales" if any leg sits under Sales Accounts, else "purchase" if
+// any leg sits under Purchase Accounts; anything else is skipped.
+async function readErpVouchers(url, company, from, to, opts = {}) {
+  const kindWanted = String(opts.kind || 'both').toLowerCase();
+  const wantSales = /sales|both|all/.test(kindWanted);
+  const wantPurchase = /purchase|both|all/.test(kindWanted);
+  const saved = state.settings.company; state.settings.company = company || '';
+  try {
+    const groupByNorm = await groupTreeByNorm(url);
+    const salesSet = new Set(wantSales ? (await readGroupLeaves(url, 'Sales Accounts', to, groupByNorm)).leaves.map((l) => norm(l.name)) : []);
+    const purchaseSet = new Set(wantPurchase ? (await readGroupLeaves(url, 'Purchase Accounts', to, groupByNorm)).leaves.map((l) => norm(l.name)) : []);
+    if (!salesSet.size && !purchaseSet.size) return { rows: [] };
+    const masters = parseLedgerMasters(await askTallyFast(url, LEDGER_MASTERS_REQUEST(), 180000));
+    const fromKey = from.getUTCFullYear() * 10000 + (from.getUTCMonth() + 1) * 100 + from.getUTCDate();
+    const toKey = to.getUTCFullYear() * 10000 + (to.getUTCMonth() + 1) * 100 + to.getUTCDate();
+    const rows = []; const seen = new Set();
+    dcProgress.phase = `ERP vouchers — ${from.toISOString().slice(0, 10)} → ${to.toISOString().slice(0, 10)}…`;
+    await readVouchersRamp(url, from, to, (xml) => {
+      for (const block of xml.match(/<VOUCHER[\s>][\s\S]*?<\/VOUCHER>/gi) || []) {
+        if (/(^|>)\s*Yes\s*<\/ISCANCELLED>/i.test(block.match(/<ISCANCELLED>[\s\S]*?<\/ISCANCELLED>/i)?.[0] ?? '')) continue;
+        if (/<ISOPTIONAL>\s*Yes/i.test(block)) continue;
+        const vno = tag(block, 'VOUCHERNUMBER'), vtype = tag(block, 'VOUCHERTYPENAME');
+        const party = tag(block, 'PARTYLEDGERNAME') || '';
+        let guid = tag(block, 'GUID');
+        if (!guid) guid = `${vtype}|${tag(block, 'DATE')}|${vno}|${party}`;
+        if (seen.has(guid)) continue; seen.add(guid);
+        const dk = dateKey(tag(block, 'DATE'));
+        if (dk < fromKey || dk > toKey) continue;
+        const entryBlocks = block.match(/<ALLLEDGERENTRIES\.LIST>[\s\S]*?<\/ALLLEDGERENTRIES\.LIST>/gi) || block.match(/<LEDGERENTRIES\.LIST>[\s\S]*?<\/LEDGERENTRIES\.LIST>/gi) || [];
+        let hasSales = false, hasPurchase = false;
+        for (const e of entryBlocks) { const nm = tag(e, 'LEDGERNAME'); if (!nm) continue; if (salesSet.has(norm(nm))) hasSales = true; if (purchaseSet.has(norm(nm))) hasPurchase = true; }
+        const kind = hasSales ? 'sales' : (hasPurchase ? 'purchase' : null);
+        if (!kind) continue;
+        if (kind === 'sales' && !wantSales) continue;
+        if (kind === 'purchase' && !wantPurchase) continue;
+        const s = kind === 'sales' ? -1 : 1;   // non-party legs → natural (income Cr-pos / expense Dr-pos)
+        let taxable = 0, igst = 0, cgst = 0, sgst = 0, cess = 0, roundoff = 0, gross = 0;
+        const legs = [];
+        for (const e of entryBlocks) {
+          const nm = tag(e, 'LEDGERNAME'); if (!nm) continue;
+          const rawAmt = toNum(tag(e, 'AMOUNT'));
+          const dp = tag(e, 'ISDEEMEDPOSITIVE');
+          const dr = r2((dp ? (/yes/i.test(dp) ? 1 : -1) : (rawAmt < 0 ? 1 : -1)) * Math.abs(rawAmt)); // Dr-positive
+          if (party && norm(nm) === norm(party)) { gross = r2(gross + (kind === 'sales' ? dr : -dr)); legs.push({ ledger: nm, amount: dr, cls: 'party' }); continue; }
+          const gb = gstBucketOf(nm);
+          if (gb && GST_LEDGER_RE.test(nm)) {
+            const v = r2(s * dr);
+            if (gb === 'igst') igst = r2(igst + v); else if (gb === 'cgst') cgst = r2(cgst + v); else if (gb === 'sgst') sgst = r2(sgst + v); else cess = r2(cess + v);
+            legs.push({ ledger: nm, amount: dr, cls: (kind === 'sales' ? 'out_' : 'in_') + gb });
+            continue;
+          }
+          if (ROUNDOFF_RE.test(nm)) { roundoff = r2(roundoff + r2(s * dr)); legs.push({ ledger: nm, amount: dr, cls: 'roundoff' }); continue; }
+          taxable = r2(taxable + r2(s * dr)); legs.push({ ledger: nm, amount: dr, cls: kind });
+        }
+        if (!party) gross = r2(taxable + igst + cgst + sgst + cess + roundoff);   // cash sale/purchase, no party leg
+        if (Math.abs(gross) < 0.005 && Math.abs(taxable) < 0.005) continue;
+        const m = masters[party] || {};
+        const gstin = String(m.gstin || tag(block, 'PARTYGSTIN') || '').toUpperCase();
+        const vd = parseTallyFieldDate(tag(block, 'DATE'));
+        rows.push({
+          guid, kind, voucherType: vtype || '', voucherNo: vno || '',
+          date: vd ? vd.toISOString().slice(0, 10) : null,
+          party, gstin, pan: (m.pan || panFromGstin(gstin) || ''),
+          taxable, igst, cgst, sgst, cess, roundoff, gross, legs,
+        });
+      }
+    }, null, { firstWin: 3, attemptMs: 90000, failFast: true });
+    rows.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    return { rows };
   } finally { state.settings.company = saved; }
 }
 
@@ -4392,6 +4482,31 @@ const server = http.createServer(async (req, res) => {
       } catch (e) {
         dcProgress.active = false;
         json(res, 502, { ok: false, error: 'Could not read Tally: ' + String((e && e.message) || e) });
+      }
+      return;
+    }
+
+    // ERP bridge — sales & purchase vouchers decomposed for ERPNext posting
+    // (party + GSTIN, taxable base, GST split, round-off, gross). Consumed by
+    // erpnext/integration/sync-vouchers.mjs on the Tally PC.
+    if (req.method === 'POST' && url.pathname === '/api/erp/vouchers') {
+      if (dcProgress.active) { json(res, 409, { ok: false, error: 'A read is already running.' }); return; }
+      const body = JSON.parse(await readBody(req));
+      const from = tallyDateOf(String(body.from || '').replace(/-/g, ''));
+      const to = tallyDateOf(String(body.to || '').replace(/-/g, ''));
+      if (!from || !to || from > to) { json(res, 400, { ok: false, error: 'Bad period.' }); return; }
+      dcCancel = false;
+      dcProgress.active = true; dcProgress.done = 0; dcProgress.total = 1; dcProgress.phase = 'Starting…'; dcProgress.sub = ''; dcProgress.startedAt = Date.now();
+      try {
+        const out = await readErpVouchers(String(body.url || state.settings.tallyUrl), String(body.company || ''), from, to, { kind: body.kind || 'both' });
+        dcProgress.active = false;
+        json(res, 200, { ok: true, version: VERSION, from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10), count: out.rows.length, rows: out.rows });
+      } catch (e) {
+        dcProgress.active = false;
+        const msg = /AGEING_TOO_DENSE/.test(String((e && e.message) || e))
+          ? 'This company has too many vouchers to read invoice-by-invoice. Try a shorter period.'
+          : ('Could not read Tally: ' + String((e && e.message) || e));
+        json(res, 502, { ok: false, error: msg });
       }
       return;
     }
