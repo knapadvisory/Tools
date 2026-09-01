@@ -266,12 +266,36 @@ const key = o => o.y*10000+o.m*100+o.d;
 const jsd = o => new Date(o.y,o.m-1,o.d);
 const fmtd = o => `${String(o.d).padStart(2,"0")}-${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][o.m-1]}-${o.y}`;
 
+// Strip the noise that varies per transaction (refs, dates, bank suffixes) so
+// the same real narration groups, while KEEPING the descriptive words that
+// distinguish one payment from another to the same payee.
+function cleanNarr(s){
+  return String(s||"").toUpperCase().replace(/\s+/g," ")
+    .replace(/\b\d{5,}\b/g," ")                              // txn / account refs
+    .replace(/\b\d{1,2}[-\/.]\d{1,2}[-\/.]\d{2,4}\b/g," ")   // dates
+    .replace(/\bBANK( LIMITED| LTD)?\b/g," ").replace(/\bLIMITED\b|\bLTD\b/g," ")
+    .replace(/[^A-Z0-9 ]+/g," ").replace(/\s+/g," ").trim();
+}
+// The statement key: payee PLUS purpose, so "Bajaj EMI" and "Bajaj Interest"
+// (or "Tanya Medical" vs "Tanya Salary") become different keys → different
+// ledgers, instead of collapsing to just the payee. Refs are dropped so repeats
+// of the same narration still share one key.
 function merchantKey(p){
-  const parts=String(p||"").replace(/\s+/g," ").trim().split("/");
-  if(/^(UPI|IMPS)$/i.test(parts[0]) && parts.length>=4) return parts[3].trim().toUpperCase();
-  if(/^NEFT$/i.test(parts[0]) && parts.length>=3) return parts[2].trim().toUpperCase();
-  if(/^(ACH|ECS|NACH)/i.test(parts[0])) return String(p).slice(0,30).toUpperCase();
-  return String(p||"").slice(0,30).toUpperCase();
+  var raw=String(p||"").replace(/\s+/g," ").trim();
+  var parts=raw.split("/");
+  var pick;
+  if(/^(UPI|IMPS)$/i.test(parts[0]) && parts.length>=4){
+    // payee (parts[3]) + payer note (parts[4]), dropping generic notes + the bank
+    pick=[parts[3],parts[4]].filter(function(s){ return s && !/^\s*(paymen|payment|upi|neft|imps|na|collect|sent|received)\s*$/i.test(s.trim()); }).join(" ");
+    if(!pick) pick=parts[3]||raw;
+  } else if(/^NEFT$/i.test(parts[0]) && parts.length>=3){
+    var segs=parts.slice(2);
+    if(segs.length>1 && /BANK\b/i.test(segs[segs.length-1])) segs=segs.slice(0,-1);
+    pick=segs.join(" ");
+  } else { pick=raw; }
+  var words=cleanNarr(pick).split(" ").filter(function(w){ return w.length>1; });
+  var k=words.slice(0,6).join(" ").slice(0,48);
+  return k || cleanNarr(raw).slice(0,40) || raw.slice(0,30).toUpperCase();
 }
 function refNo(p){ const m=String(p||"").match(/[\/-](\d{9,18})[\/-]/); return m?m[1]:""; }
 
