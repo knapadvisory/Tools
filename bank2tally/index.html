@@ -192,7 +192,9 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     <div class="row" style="margin-top:18px">
       <label style="margin:0">Export</label>
       <select id="monthsel"></select>
-      <button id="dl">Download voucher file</button>
+      <button id="dlxml" style="font-weight:600">⬇ Download Tally XML</button>
+      <button id="dl" class="ghost">Excel register</button>
+      <input id="xmlco" placeholder="Company (blank = open company)" style="min-width:230px">
       <span class="muted" id="dlstat"></span>
     </div>
     <p class="muted" style="margin:12px 0 0">Import one month at a time and take a company backup first. There is no bulk undo in Tally.</p>
@@ -740,7 +742,66 @@ $("#dl").addEventListener("click",()=>{
         setStat('Could not reach the connector at '+API+'. Make sure the KNAP Tally connector is running on this PC, then click again.');
       });
   }
-  function bind(){ var b=q('#pullled'); if(b) b.addEventListener('click', pull); }
+  /* ---- Tally XML voucher export ------------------------------------------
+     Emits an Import Data envelope of balanced two-leg vouchers TallyPrime
+     imports directly (Gateway → Import → Vouchers). Tally sign convention:
+     the DEBIT leg carries ISDEEMEDPOSITIVE=Yes + a NEGATIVE amount, the CREDIT
+     leg No + a positive amount. Direction from the statement: money OUT of the
+     bank (x.dr>0) → bank credited, mapped ledger debited; money IN (x.cr>0) →
+     bank debited, mapped ledger credited. Works for Payment/Receipt/Contra. */
+  function pad(n){ return (n<10?'0':'')+n; }
+  function ymd(d){ return ''+d.y+pad(d.m)+pad(d.d); }
+  function xesc(s){ return String(s==null?'':s).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  function leg(name,isDr,amt){
+    return '<ALLLEDGERENTRIES.LIST>'
+      + '<LEDGERNAME>'+xesc(name)+'</LEDGERNAME>'
+      + '<ISDEEMEDPOSITIVE>'+(isDr?'Yes':'No')+'</ISDEEMEDPOSITIVE>'
+      + '<AMOUNT>'+(isDr?(-amt):amt).toFixed(2)+'</AMOUNT>'
+      + '</ALLLEDGERENTRIES.LIST>';
+  }
+  function buildXml(rows, company){
+    var msgs = rows.map(function(x){
+      var amt = x.dr>0 ? x.dr : x.cr;
+      if(!(amt>0)) return '';
+      var out = x.dr>0;                        // money left the bank
+      var drLed = out ? x.led : x.bank;        // debit side
+      var crLed = out ? x.bank : x.led;        // credit side
+      var dt = ymd(x.d);
+      var vt = x.vt || (out?'Payment':'Receipt');
+      return '<TALLYMESSAGE xmlns:UDF="TallyUDF">'
+        + '<VOUCHER VCHTYPE="'+xesc(vt)+'" ACTION="Create" OBJVIEW="Accounting Voucher View">'
+        + '<DATE>'+dt+'</DATE><EFFECTIVEDATE>'+dt+'</EFFECTIVEDATE>'
+        + '<VOUCHERTYPENAME>'+xesc(vt)+'</VOUCHERTYPENAME>'
+        + '<NARRATION>'+xesc(x.part||x.k||'')+'</NARRATION>'
+        + leg(drLed,true,amt) + leg(crLed,false,amt)
+        + '</VOUCHER></TALLYMESSAGE>';
+    }).filter(Boolean).join('');
+    var sv = '<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>' + (company?'<SVCURRENTCOMPANY>'+xesc(company)+'</SVCURRENTCOMPANY>':'');
+    return '<ENVELOPE><HEADER><TALLYREQUEST>Import Data</TALLYREQUEST></HEADER>'
+      + '<BODY><IMPORTDATA><REQUESTDESC><REPORTNAME>Vouchers</REPORTNAME>'
+      + '<STATICVARIABLES>'+sv+'</STATICVARIABLES></REQUESTDESC>'
+      + '<REQUESTDATA>'+msgs+'</REQUESTDATA></IMPORTDATA></BODY></ENVELOPE>';
+  }
+  function dlXml(){
+    if(typeof STATE==='undefined' || !STATE || !STATE.R || !STATE.R.length){ setStat && (q('#dlstat').textContent='Load a statement and map ledgers first.'); return; }
+    var sel = q('#monthsel').value;
+    var rows = sel==='all' ? STATE.R : STATE.R.filter(function(x){ return String(x.d.y*100+x.d.m)===sel; });
+    if(!rows.length){ q('#dlstat').textContent='No rows for the selected month.'; return; }
+    var company = (q('#xmlco') && q('#xmlco').value.trim()) || '';
+    var xml = '<?xml version="1.0" encoding="UTF-8"?>\n' + buildXml(rows, company);
+    var blob = new Blob([xml], {type:'application/xml'});
+    var url = URL.createObjectURL(blob);
+    var label = sel==='all' ? (ymd(rows[0].d)+'-'+ymd(rows[rows.length-1].d)) : sel;
+    var a = document.createElement('a'); a.href=url; a.download='Tally vouchers '+label+'.xml';
+    document.body.appendChild(a); a.click();
+    setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); }, 1500);
+    q('#dlstat').textContent = rows.length+' vouchers written to Tally XML.';
+  }
+
+  function bind(){
+    var b=q('#pullled'); if(b) b.addEventListener('click', pull);
+    var xb=q('#dlxml'); if(xb) xb.addEventListener('click', dlXml);
+  }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', bind); else bind();
 })();
 </script>
