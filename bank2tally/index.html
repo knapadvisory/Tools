@@ -192,7 +192,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     <div class="row" style="margin-top:18px">
       <label style="margin:0">Export</label>
       <select id="monthsel"></select>
-      <button id="postxml" style="font-weight:600">⚡ Post to Tally</button>
+      <button id="prevxml" style="font-weight:600">🔍 Preview &amp; check</button>
+      <button id="postxml">⚡ Post to Tally</button>
       <button id="dlxml">⬇ Download Tally XML</button>
       <button id="dl" class="ghost">Excel register</button>
       <input id="xmlco" placeholder="Company (blank = open company)" style="min-width:230px">
@@ -806,31 +807,120 @@ $("#dl").addEventListener("click",()=>{
     return sel==='all' ? STATE.R : STATE.R.filter(function(x){ return String(x.d.y*100+x.d.m)===sel; });
   }
 
-  // Post the vouchers straight into Tally via the connector (no file step).
+  // Indian-format money.
+  function inr(n){
+    var s=(Math.round(n*100)/100).toFixed(2), p=s.split('.'), x=p[0], neg=x.charAt(0)==='-'; if(neg)x=x.slice(1);
+    var last3=x.slice(-3), rest=x.slice(0,-3); if(rest) last3=','+last3;
+    rest=rest.replace(/\B(?=(\d{2})+(?!\d))/g,',');
+    return (neg?'-₹':'₹')+rest+last3+'.'+p[1];
+  }
+  // Pre-check every ledger a batch touches against the pulled Tally list.
+  function ledgerCheck(rows){
+    var have = (typeof TALLY!=='undefined' && TALLY.length>0);
+    var known = new Set((have?TALLY:[]).map(function(l){ return String(l).toLowerCase(); }));
+    var use={};
+    rows.forEach(function(x){
+      var amt=x.dr>0?x.dr:x.cr; if(!(amt>0)) return;
+      [x.led, x.bank].forEach(function(nm){ if(nm){ use[nm]=(use[nm]||0)+1; } });
+    });
+    var names=Object.keys(use).sort(function(a,b){ return a.localeCompare(b); });
+    var missing = have ? names.filter(function(nm){ return !known.has(nm.toLowerCase()); }) : [];
+    return { have:have, names:names, use:use, missing:missing, ok:function(nm){ return have ? known.has(nm.toLowerCase()) : null; } };
+  }
+
+  // The actual post (no confirm) — shared by the button and the preview.
+  function doPost(rows, company, statusEl){
+    var n = rows.filter(function(x){ return (x.dr>0?x.dr:x.cr)>0; }).length;
+    var xml = '<?xml version="1.0" encoding="UTF-8"?>\n' + buildXml(rows, company);
+    var set = function(m){ if(statusEl) statusEl.textContent=m; q('#dlstat').textContent=m; };
+    set('Posting '+n+' vouchers to Tally…');
+    return fetch(API+'/api/tally/import', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({xml:xml})})
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if(!j || !j.ok){ set('Tally import failed: '+((j&&j.error)||'unknown error')); return; }
+        var msg = 'Tally: '+j.created+' created'+(j.altered?', '+j.altered+' altered':'')+(j.errors?', '+j.errors+' error(s)':'');
+        if(j.lineErrors && j.lineErrors.length) msg += ' — '+j.lineErrors.slice(0,3).join(' | ');
+        set(msg);
+      })
+      .catch(function(){ set('Could not reach the connector at '+API+'. Is the KNAP Tally connector running on this PC?'); });
+  }
+
   function postToTally(){
     var rows = selectedRows();
     if(!rows){ q('#dlstat').textContent='Load a statement and map ledgers first.'; return; }
     if(!rows.length){ q('#dlstat').textContent='No rows for the selected month.'; return; }
     var n = rows.filter(function(x){ return (x.dr>0?x.dr:x.cr)>0; }).length;
     if(!confirm('This will CREATE '+n+' vouchers directly in Tally — there is no bulk undo.\nTake a company backup first, and make sure the target company is open.\n\nContinue?')) return;
+    doPost(rows, (q('#xmlco') && q('#xmlco').value.trim()) || '');
+  }
+
+  // Dry-run preview: what will post, plus a ledger existence pre-check.
+  function preview(){
+    var rows = selectedRows();
+    if(!rows || !rows.length){ q('#dlstat').textContent='Load a statement and map ledgers first.'; return; }
+    var live = rows.filter(function(x){ return (x.dr>0?x.dr:x.cr)>0; });
+    var vt={}, total=0, unmapped=0, susName='';
+    live.forEach(function(x){ var amt=x.dr>0?x.dr:x.cr; total+=amt; vt[x.vt]=(vt[x.vt]||0)+1; if(!x.mapped){ unmapped++; susName=x.led; } });
+    var chk = ledgerCheck(rows);
     var company = (q('#xmlco') && q('#xmlco').value.trim()) || '';
-    var xml = '<?xml version="1.0" encoding="UTF-8"?>\n' + buildXml(rows, company);
-    q('#dlstat').textContent = 'Posting '+n+' vouchers to Tally…';
-    fetch(API+'/api/tally/import', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({xml:xml})})
-      .then(function(r){ return r.json(); })
-      .then(function(j){
-        if(!j || !j.ok){ q('#dlstat').textContent = 'Tally import failed: '+((j&&j.error)||'unknown error'); return; }
-        var msg = 'Tally: '+j.created+' created'+(j.altered?', '+j.altered+' altered':'')+(j.errors?', '+j.errors+' error(s)':'');
-        if(j.lineErrors && j.lineErrors.length) msg += ' — '+j.lineErrors.slice(0,3).join(' | ');
-        q('#dlstat').textContent = msg;
-      })
-      .catch(function(){ q('#dlstat').textContent = 'Could not reach the connector at '+API+'. Is the KNAP Tally connector running on this PC?'; });
+    var vtStr = Object.keys(vt).map(function(k){ return vt[k]+' '+k; }).join(' · ') || '—';
+    var blocked = chk.have && chk.missing.length>0;
+
+    var rowsHtml = chk.names.map(function(nm){
+      var st = chk.ok(nm);
+      var pill = st===null ? '<span style="color:#8a8f98">— unchecked</span>'
+        : st ? '<span style="color:#1b6a3a;font-weight:600">✓ in Tally</span>'
+             : '<span style="color:#b42318;font-weight:600">✗ not in Tally</span>';
+      return '<tr><td style="padding:4px 10px">'+xesc(nm)+'</td><td style="padding:4px 10px;text-align:right;color:#8a8f98">'+chk.use[nm]+'</td><td style="padding:4px 10px">'+pill+'</td></tr>';
+    }).join('');
+
+    var warn = !chk.have
+      ? '<div style="margin:10px 0;padding:9px 12px;border-radius:6px;background:#fff7e6;color:#7a5b00">Ledger list not loaded — names are <b>unchecked</b>. Click “⚡ Pull ledgers from connector” to verify before posting.</div>'
+      : blocked
+        ? '<div style="margin:10px 0;padding:9px 12px;border-radius:6px;background:#fde8e6;color:#b42318"><b>'+chk.missing.length+' ledger(s) not in Tally.</b> Create these masters in Tally first, or they will fail / land in Suspense. Names: '+chk.missing.slice(0,6).map(xesc).join(', ')+(chk.missing.length>6?' …':'')+'</div>'
+        : '<div style="margin:10px 0;padding:9px 12px;border-radius:6px;background:#e9f6ee;color:#1b6a3a">All '+chk.names.length+' ledgers exist in Tally. ✓</div>';
+    var susNote = unmapped ? '<div style="margin:6px 0;color:#7a5b00">'+unmapped+' row(s) are unmapped and will post to <b>'+xesc(susName||'Suspense')+'</b>.</div>' : '';
+
+    var old=q('#knapPrevOv'); if(old) old.remove();
+    var ov=document.createElement('div'); ov.id='knapPrevOv';
+    ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;overflow:auto';
+    ov.innerHTML=
+      '<div style="background:#fff;color:#1a1a1a;max-width:720px;width:100%;border-radius:10px;padding:22px 24px;font:14px system-ui,sans-serif">'
+      + '<div style="display:flex;justify-content:space-between;align-items:center">'
+      +   '<h3 style="margin:0">Preview — '+xesc(q('#monthsel').value==='all'?'all months':q('#monthsel').value)+(company?' · '+xesc(company):'')+'</h3>'
+      +   '<button id="knapPrevClose" style="border:0;background:none;font-size:20px;cursor:pointer;color:#8a8f98">&times;</button>'
+      + '</div>'
+      + '<p style="margin:8px 0 0"><b>'+live.length+'</b> vouchers · '+vtStr+' · total <b>'+inr(total)+'</b> <span style="color:#8a8f98">(each voucher balances two legs)</span></p>'
+      + warn + susNote
+      + '<div style="max-height:300px;overflow:auto;border:1px solid #e5e7eb;border-radius:6px;margin-top:8px">'
+      +   '<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="position:sticky;top:0;background:#f6f7f8"><th style="text-align:left;padding:6px 10px">Ledger</th><th style="text-align:right;padding:6px 10px">Uses</th><th style="text-align:left;padding:6px 10px">Status</th></tr></thead><tbody>'+rowsHtml+'</tbody></table>'
+      + '</div>'
+      + '<div style="margin-top:16px;display:flex;gap:8px;justify-content:flex-end;align-items:center">'
+      +   '<span id="knapPrevStat" style="margin-right:auto;color:#555"></span>'
+      +   '<button id="knapPrevCloseB" style="padding:7px 14px">Close</button>'
+      +   '<button id="knapPrevPost" style="padding:7px 14px;font-weight:600"'+(blocked?' disabled title="Fix missing ledgers first"':'')+'>⚡ Post '+live.length+' to Tally</button>'
+      + '</div>'
+      + '</div>';
+    document.body.appendChild(ov);
+    var close=function(){ ov.remove(); };
+    q('#knapPrevClose').addEventListener('click', close);
+    q('#knapPrevCloseB').addEventListener('click', close);
+    ov.addEventListener('click', function(e){ if(e.target===ov) close(); });
+    var post=q('#knapPrevPost');
+    if(post && !blocked){
+      post.addEventListener('click', function(){
+        if(!confirm('Create '+live.length+' vouchers in Tally now? No bulk undo — back up first.')) return;
+        post.disabled=true;
+        doPost(rows, company, q('#knapPrevStat')).then(function(){ post.textContent='Done — see status'; });
+      });
+    }
   }
 
   function bind(){
     var b=q('#pullled'); if(b) b.addEventListener('click', pull);
     var xb=q('#dlxml'); if(xb) xb.addEventListener('click', dlXml);
     var pb=q('#postxml'); if(pb) pb.addEventListener('click', postToTally);
+    var pv=q('#prevxml'); if(pv) pv.addEventListener('click', preview);
   }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', bind); else bind();
 })();
