@@ -298,6 +298,13 @@ function merchantKey(p){
   return k || cleanNarr(raw).slice(0,40) || raw.slice(0,30).toUpperCase();
 }
 function refNo(p){ const m=String(p||"").match(/[\/-](\d{9,18})[\/-]/); return m?m[1]:""; }
+// Voucher narration = the remark you added PLUS the raw bank narration, so both
+// are carried into Tally (one Narration field). Deduped if they're the same.
+function narrOf(x){
+  const rem=(x.rem||"").trim(), part=(x.part||"").trim();
+  if(rem && part && rem.toLowerCase()!==part.toLowerCase()) return rem+" | "+part;
+  return rem || part || x.k || "";
+}
 
 /* ---------- 1. file ---------- */
 const drop=$("#drop");
@@ -463,7 +470,7 @@ function render(){
       else status=`<span class="pill p-bad">not in Tally</span>`;
       const sug = (TALLY.length && known!==true) ? suggest(cur||k).map(s=>
         `<button class="chip" data-k="${esc(k)}" data-v="${esc(s)}">${esc(s)}</button>`).join(" ") : "";
-      return `<tr><td title="${esc(a.sample)}">${esc(k)}</td>
+      return `<tr><td title="${esc(a.sample)}">${esc(k)}${a.sample&&esc(a.sample)!==esc(k)?`<div class="muted" style="font-size:11px;font-weight:400;margin-top:2px">${esc(a.sample)}</div>`:""}</td>
         <td><input class="led" list="ledgerlist" data-k="${esc(k)}" value="${esc(cur)}" placeholder="${esc($("#susled").value)}">
             ${sug?`<div class="sug">${sug}</div>`:""}</td>
         <td><select class="vt" data-k="${esc(k)}">
@@ -686,7 +693,7 @@ $("#dl").addEventListener("click",()=>{
     const legs = x.cr>0 ? [[x.bank,x.cr,"Dr"],[x.led,x.cr,"Cr"]] : [[x.led,x.dr,"Dr"],[x.bank,x.dr,"Cr"]];
     legs.forEach((l,i)=>{
       aoa.push(i===0
-        ? [jsd(x.d),x.vt,"",refNo(x.part),x.part,l[0],Math.round(l[1]*100)/100,l[2]]
+        ? [jsd(x.d),x.vt,"",refNo(x.part),narrOf(x),l[0],Math.round(l[1]*100)/100,l[2]]
         : ["","","","","",l[0],Math.round(l[1]*100)/100,l[2]]);
     });
   });
@@ -838,7 +845,7 @@ $("#dl").addEventListener("click",()=>{
         + '<VOUCHER VCHTYPE="'+xesc(vt)+'" ACTION="Create" OBJVIEW="Accounting Voucher View">'
         + '<DATE>'+dt+'</DATE><EFFECTIVEDATE>'+dt+'</EFFECTIVEDATE>'
         + '<VOUCHERTYPENAME>'+xesc(vt)+'</VOUCHERTYPENAME>'
-        + '<NARRATION>'+xesc(x.part||x.k||'')+'</NARRATION>'
+        + '<NARRATION>'+xesc((typeof narrOf==='function'?narrOf(x):(x.part||x.k||''))||'')+'</NARRATION>'
         + leg(drLed,true,amt) + leg(crLed,false,amt)
         + '</VOUCHER></TALLYMESSAGE>';
     }).filter(Boolean).join('');
