@@ -162,7 +162,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     </div>
     <p class="muted" style="margin:14px 0 0">Every name below must already exist in Tally, spelled identically. Create the masters before you import — auto-created ledgers land in a default group and you will re-group them by hand.</p>
     <div class="row" style="margin-top:14px">
-      <button id="loadled" class="ghost">Load ledger list from Tally</button>
+      <button id="pullled" class="ghost">⚡ Pull ledgers from connector</button>
+      <button id="loadled" class="ghost">Load ledger list from file</button>
       <input type="file" id="ledfile" accept=".xlsx,.xls,.csv,.txt" class="hide">
       <select id="ledcol" class="hide"></select>
       <span class="muted" id="ledstat">No ledger list loaded — names are unchecked.</span>
@@ -702,6 +703,46 @@ $("#dl").addEventListener("click",()=>{
   XLSX.writeFile(wb,"Tally vouchers "+label+".xlsx");
   $("#dlstat").textContent=R.length+" vouchers exported.";
 });
+</script>
+<script>
+/* KNAP connector wiring — pull the live Tally ledger master (and voucher types)
+   straight from the local connector, feeding the tool's own applyLedCol pipeline.
+   The app's symbols (LEDAOA, applyLedCol, render) are top-level globals. */
+(function(){
+  var API = 'http://127.0.0.1:8797';
+  function q(s){ return document.querySelector(s); }
+  function setStat(m){ var el=q('#ledstat'); if(el) el.textContent=m; }
+  function feedLedgers(names){
+    // Mirror what a file load does: LEDAOA = header + one column of names.
+    LEDAOA = [['Ledger Name']].concat(names.map(function(n){ return [n]; }));
+    var sel = q('#ledcol');
+    if(sel){ sel.innerHTML=''; sel.add(new Option('Ledger Name (connector)','0')); sel.value='0'; sel.classList.add('hide'); }
+    applyLedCol();                                  // builds TALLY, datalist, fixes spellings, sets #ledstat
+    if(typeof render==='function') render();        // refresh the in-Tally / not-in-Tally pills
+  }
+  function pull(){
+    setStat('Connecting to the Tally connector…');
+    fetch(API+'/api/ledgers', {cache:'no-store'})
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if(!j || !j.ok || !Array.isArray(j.ledgers) || !j.ledgers.length){
+          setStat('Connector reached, but no ledgers came back'+((j&&j.error)?': '+j.error:'')+'. Open the company in Tally and try again.');
+          return;
+        }
+        feedLedgers(j.ledgers);
+        // best-effort: stash voucher types for reference/validation later
+        fetch(API+'/api/vouchertypes', {cache:'no-store'})
+          .then(function(r){ return r.json(); })
+          .then(function(v){ if(v && v.ok && Array.isArray(v.types)) window.__KNAP_VTYPES = v.types; })
+          .catch(function(){});
+      })
+      .catch(function(){
+        setStat('Could not reach the connector at '+API+'. Make sure the KNAP Tally connector is running on this PC, then click again.');
+      });
+  }
+  function bind(){ var b=q('#pullled'); if(b) b.addEventListener('click', pull); }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', bind); else bind();
+})();
 </script>
 </body>
 </html>
