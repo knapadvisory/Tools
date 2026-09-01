@@ -470,7 +470,7 @@ function render(){
       else status=`<span class="pill p-bad">not in Tally</span>`;
       const sug = (TALLY.length && known!==true) ? suggest(cur||k).map(s=>
         `<button class="chip" data-k="${esc(k)}" data-v="${esc(s)}">${esc(s)}</button>`).join(" ") : "";
-      return `<tr><td title="${esc(a.sample)}">${esc(k)}${a.sample&&esc(a.sample)!==esc(k)?`<div class="muted" style="font-size:11px;font-weight:400;margin-top:2px">${esc(a.sample)}</div>`:""}</td>
+      return `<tr><td title="${esc(a.sample)}">${esc(k)}</td>
         <td><input class="led" list="ledgerlist" data-k="${esc(k)}" value="${esc(cur)}" placeholder="${esc($("#susled").value)}">
             ${sug?`<div class="sug">${sug}</div>`:""}</td>
         <td><select class="vt" data-k="${esc(k)}">
@@ -540,7 +540,7 @@ function render(){
     R.slice(0,60).map(x=>{
       const legs = x.cr>0 ? [[x.bank,x.cr,"Dr"],[x.led,x.cr,"Cr"]] : [[x.led,x.dr,"Dr"],[x.bank,x.dr,"Cr"]];
       return legs.map((l,i)=>`<tr><td>${i?"":fmtd(x.d)}</td><td>${i?"":x.vt}</td><td>${esc(l[0])}</td>
-        <td class="r num">${money(l[1])}</td><td>${l[2]}</td><td class="muted">${i?"":esc(x.part.slice(0,60))}</td></tr>`).join("");
+        <td class="r num">${money(l[1])}</td><td>${l[2]}</td><td class="muted" title="${i?"":esc(narrOf(x))}">${i?"":esc(narrOf(x).slice(0,80))}</td></tr>`).join("");
     }).join("")+`</tbody>`;
   STATE.R=R;
 }
@@ -899,21 +899,40 @@ $("#dl").addEventListener("click",()=>{
     return { have:have, names:names, use:use, missing:missing, ok:function(nm){ return have ? known.has(nm.toLowerCase()) : null; } };
   }
 
-  // The actual post (no confirm) — shared by the button and the preview.
-  function doPost(rows, company, statusEl){
-    var n = rows.filter(function(x){ return (x.dr>0?x.dr:x.cr)>0; }).length;
-    var xml = '<?xml version="1.0" encoding="UTF-8"?>\n' + buildXml(rows, company);
-    var set = function(m){ if(statusEl) statusEl.textContent=m; q('#dlstat').textContent=m; };
-    set('Posting '+n+' vouchers to Tally…');
-    return fetch(API+'/api/tally/import', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({xml:xml})})
-      .then(function(r){ return r.json(); })
-      .then(function(j){
-        if(!j || !j.ok){ set('Tally import failed: '+((j&&j.error)||'unknown error')); return; }
-        var msg = 'Tally: '+j.created+' created'+(j.altered?', '+j.altered+' altered':'')+(j.errors?', '+j.errors+' error(s)':'');
-        if(j.lineErrors && j.lineErrors.length) msg += ' — '+j.lineErrors.slice(0,3).join(' | ');
-        set(msg);
-      })
-      .catch(function(){ set('Could not reach the connector at '+API+'. Is the KNAP Tally connector running on this PC?'); });
+  // Post in batches so the user sees real progress + ETA (a single 1000+
+  // voucher import gives no feedback and can look hung). ui = {bar(pct), msg(t)}.
+  var BATCH = 100;
+  function fmtEta(s){ return s>=60 ? (Math.floor(s/60)+'m '+(s%60)+'s') : (s+'s'); }
+  function postBatches(rows, company, ui){
+    var live = rows.filter(function(x){ return (x.dr>0?x.dr:x.cr)>0; });
+    var total = live.length;
+    var batches=[]; for(var i=0;i<live.length;i+=BATCH) batches.push(live.slice(i,i+BATCH));
+    var created=0, altered=0, errors=0, lineErrors=[], done=0, t0=Date.now();
+    ui.bar(0); ui.msg('Posting 0 / '+total+' …');
+    function step(bi){
+      if(bi>=batches.length){
+        ui.bar(100);
+        var m='Done — Tally: '+created+' created'+(altered?', '+altered+' altered':'')+(errors?', '+errors+' error(s)':'');
+        if(lineErrors.length) m+=' — '+lineErrors.slice(0,3).join(' | ');
+        ui.msg(m); return Promise.resolve();
+      }
+      var xml='<?xml version="1.0" encoding="UTF-8"?>\n'+buildXml(batches[bi], company);
+      return fetch(API+'/api/tally/import', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({xml:xml})})
+        .then(function(r){ return r.json(); })
+        .then(function(j){
+          if(j && j.ok){ created+=j.created||0; altered+=j.altered||0; errors+=j.errors||0; if(j.lineErrors) lineErrors=lineErrors.concat(j.lineErrors); }
+          else { errors+=batches[bi].length; if(j&&j.error) lineErrors.push(j.error); }
+        })
+        .catch(function(){ errors+=batches[bi].length; lineErrors.push('connector unreachable'); })
+        .then(function(){
+          done+=batches[bi].length;
+          var pct=Math.round(done/total*100), el=(Date.now()-t0)/1000, eta=done?Math.round(el*(total-done)/done):0;
+          ui.bar(pct);
+          ui.msg('Posting '+done+' / '+total+' · '+pct+'% · ETA '+fmtEta(eta)+' · '+created+' created'+(errors?', '+errors+' err':''));
+          return step(bi+1);
+        });
+    }
+    return step(0);
   }
 
   function postToTally(){
@@ -922,7 +941,7 @@ $("#dl").addEventListener("click",()=>{
     if(!rows.length){ q('#dlstat').textContent='No rows for the selected month.'; return; }
     var n = rows.filter(function(x){ return (x.dr>0?x.dr:x.cr)>0; }).length;
     if(!confirm('This will CREATE '+n+' vouchers directly in Tally — there is no bulk undo.\nTake a company backup first, and make sure the target company is open.\n\nContinue?')) return;
-    doPost(rows, (q('#xmlco') && q('#xmlco').value.trim()) || '');
+    postBatches(rows, (q('#xmlco') && q('#xmlco').value.trim()) || '', { bar:function(){}, msg:function(m){ q('#dlstat').textContent=m; } });
   }
 
   // Dry-run preview: what will post, plus a ledger existence pre-check.
@@ -966,6 +985,7 @@ $("#dl").addEventListener("click",()=>{
       + '<div style="max-height:300px;overflow:auto;border:1px solid #e5e7eb;border-radius:6px;margin-top:8px">'
       +   '<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="position:sticky;top:0;background:#f6f7f8"><th style="text-align:left;padding:6px 10px">Ledger</th><th style="text-align:right;padding:6px 10px">Uses</th><th style="text-align:left;padding:6px 10px">Status</th></tr></thead><tbody>'+rowsHtml+'</tbody></table>'
       + '</div>'
+      + '<div id="knapBarWrap" style="height:9px;background:#e5e7eb;border-radius:5px;overflow:hidden;margin-top:14px;display:none"><div id="knapBar" style="height:100%;width:0;background:#1b6a3a;transition:width .25s"></div></div>'
       + '<div style="margin-top:16px;display:flex;gap:8px;justify-content:flex-end;align-items:center">'
       +   '<span id="knapPrevStat" style="margin-right:auto;color:#555"></span>'
       +   '<button id="knapPrevCloseB" style="padding:7px 14px">Close</button>'
@@ -982,7 +1002,10 @@ $("#dl").addEventListener("click",()=>{
       post.addEventListener('click', function(){
         if(!confirm('Create '+live.length+' vouchers in Tally now? No bulk undo — back up first.')) return;
         post.disabled=true;
-        doPost(rows, company, q('#knapPrevStat')).then(function(){ post.textContent='Done — see status'; });
+        var wrap=q('#knapBarWrap'), bar=q('#knapBar');
+        var ui={ bar:function(p){ if(wrap) wrap.style.display='block'; if(bar) bar.style.width=p+'%'; },
+                 msg:function(m){ q('#knapPrevStat').textContent=m; q('#dlstat').textContent=m; } };
+        postBatches(rows, company, ui).then(function(){ post.textContent='Done'; });
       });
     }
   }
