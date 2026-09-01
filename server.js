@@ -227,6 +227,10 @@ app.use('/tds26q', express.static(path.join(__dirname, 'tds26q'), {
   setHeaders: (res) => res.set(NO_CACHE),
 }));
 
+app.use('/bank2tally', express.static(path.join(__dirname, 'bank2tally'), {
+  setHeaders: (res) => res.set(NO_CACHE),
+}));
+
 app.use('/debtor-creditor', express.static(path.join(__dirname, 'debtor-creditor'), {
   setHeaders: (res) => res.set(NO_CACHE),
 }));
