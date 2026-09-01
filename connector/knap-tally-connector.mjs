@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.55';
+const VERSION = '4.56';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -4328,6 +4328,11 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && (url.pathname === '/api/ledgers' || url.pathname === '/api/vouchertypes')) {
       const wantTypes = url.pathname === '/api/vouchertypes';
       const objType = wantTypes ? 'VoucherType' : 'Ledger';
+      // Optional ?company= scopes the read to one open company (svCompany reads
+      // state.settings.company); restored in finally.
+      const _coOverride = url.searchParams.get('company');
+      const _savedCo = state.settings.company;
+      if (_coOverride) state.settings.company = _coOverride;
       const collect =
         '<ENVELOPE><HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE>' +
         '<ID>G2bNames</ID></HEADER><BODY><DESC><STATICVARIABLES>' +
@@ -4360,7 +4365,7 @@ const server = http.createServer(async (req, res) => {
         json(res, 200, wantTypes ? { ok: true, types: list } : { ok: true, ledgers: list });
       } catch (e) {
         json(res, 200, { ok: false, error: String(e.message || e), ledgers: [], types: [] });
-      }
+      } finally { state.settings.company = _savedCo; }
       return;
     }
 

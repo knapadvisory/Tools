@@ -111,6 +111,12 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
   <h2><span class="step">1</span>Connect to Tally</h2>
   <div class="body">
     <p class="muted" style="margin:0 0 12px">Pull your ledger master from Tally, then set which ledgers this bank's entries use. Names must match Tally exactly — the pull lets the tool check them for you.</p>
+    <div class="row" style="margin-bottom:10px">
+      <label style="margin:0">Company</label>
+      <select id="tcompany" style="min-width:300px"><option value="">— detect from Tally —</option></select>
+      <button id="detectco" class="ghost">↻ Detect open companies</button>
+      <span class="muted" id="costat"></span>
+    </div>
     <div class="row">
       <button id="pullled" class="ghost">⚡ Pull ledgers from connector</button>
       <button id="loadled" class="ghost" style="display:none">Load ledger list from file</button>
@@ -734,18 +740,42 @@ $("#dl").addEventListener("click",()=>{
     applyLedCol();                                  // builds TALLY, datalist, fixes spellings, sets #ledstat
     if(typeof render==='function') render();        // refresh the in-Tally / not-in-Tally pills
   }
+  function curCompany(){ var s=q('#tcompany'); return s ? s.value.trim() : ''; }
+  // Mirror the picked company into the post/export company field, so the XML
+  // targets it (SVCURRENTCOMPANY).
+  function syncCompany(){ var x=q('#xmlco'); if(x) x.value=curCompany(); }
+
+  // List the companies currently open in Tally into the Step-1 dropdown.
+  function detectCompanies(){
+    var st=q('#costat'); if(st) st.textContent='Detecting…';
+    fetch(API+'/api/dc/companies', {method:'POST', headers:{'content-type':'application/json'}, body:'{}'})
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        var cos=[]; ((j&&j.endpoints)||[]).forEach(function(e){ (e.companies||[]).forEach(function(c){ cos.push(c); }); });
+        var sel=q('#tcompany'); if(!sel) return; var cur=sel.value;
+        sel.innerHTML='<option value="">— '+(cos.length?'select a company':'none detected')+' —</option>'
+          + cos.map(function(c){ var g=(c.gstins&&c.gstins.length)?' ['+c.gstins[0]+']':''; return '<option value="'+xesc(c.name)+'">'+xesc(c.name+g)+'</option>'; }).join('');
+        if(cur){ sel.value=cur; }
+        if(cos.length===1){ sel.value=cos[0].name; }
+        syncCompany();
+        if(st) st.textContent = cos.length ? (cos.length+' open in Tally') : 'No open company found — open one in Tally, then ↻.';
+      })
+      .catch(function(){ if(st) st.textContent='Could not reach the connector — is it running on this PC?'; });
+  }
+
   function pull(){
-    setStat('Connecting to the Tally connector…');
-    fetch(API+'/api/ledgers', {cache:'no-store'})
+    var co=curCompany();
+    setStat('Reading ledgers'+(co?' for '+co:'')+'…');
+    fetch(API+'/api/ledgers'+(co?('?company='+encodeURIComponent(co)):''), {cache:'no-store'})
       .then(function(r){ return r.json(); })
       .then(function(j){
         if(!j || !j.ok || !Array.isArray(j.ledgers) || !j.ledgers.length){
-          setStat('Connector reached, but no ledgers came back'+((j&&j.error)?': '+j.error:'')+'. Open the company in Tally and try again.');
+          setStat('Connector reached, but no ledgers came back'+((j&&j.error)?': '+j.error:'')+'. Pick the company above (and make sure it is open in Tally), then try again.');
           return;
         }
         feedLedgers(j.ledgers);
-        // best-effort: stash voucher types for reference/validation later
-        fetch(API+'/api/vouchertypes', {cache:'no-store'})
+        syncCompany();
+        fetch(API+'/api/vouchertypes'+(co?('?company='+encodeURIComponent(co)):''), {cache:'no-store'})
           .then(function(r){ return r.json(); })
           .then(function(v){ if(v && v.ok && Array.isArray(v.types)) window.__KNAP_VTYPES = v.types; })
           .catch(function(){});
@@ -931,6 +961,9 @@ $("#dl").addEventListener("click",()=>{
     var xb=q('#dlxml'); if(xb) xb.addEventListener('click', dlXml);
     var pb=q('#postxml'); if(pb) pb.addEventListener('click', postToTally);
     var pv=q('#prevxml'); if(pv) pv.addEventListener('click', preview);
+    var dc=q('#detectco'); if(dc) dc.addEventListener('click', detectCompanies);
+    var tc=q('#tcompany'); if(tc) tc.addEventListener('change', syncCompany);
+    detectCompanies();   // auto-detect open companies on load
   }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', bind); else bind();
 })();
