@@ -108,7 +108,26 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 <main>
 
 <section>
-  <h2><span class="step">1</span>Load the statement</h2>
+  <h2><span class="step">1</span>Connect to Tally</h2>
+  <div class="body">
+    <p class="muted" style="margin:0 0 12px">Pull your ledger master from Tally, then set which ledgers this bank's entries use. Names must match Tally exactly — the pull lets the tool check them for you.</p>
+    <div class="row">
+      <button id="pullled" class="ghost">⚡ Pull ledgers from connector</button>
+      <button id="loadled" class="ghost" style="display:none">Load ledger list from file</button>
+      <input type="file" id="ledfile" accept=".xlsx,.xls,.csv,.txt" class="hide">
+      <select id="ledcol" class="hide"></select>
+      <span class="muted" id="ledstat">No ledger list loaded — names are unchecked.</span>
+    </div>
+    <div class="grid g3" style="margin-top:14px">
+      <div><label for="bankled">Bank ledger in Tally</label><input id="bankled" value="Axis Bank" style="width:100%"></div>
+      <div><label for="susled">Ledger for unmapped rows</label><input id="susled" value="Suspense A/c" style="width:100%"></div>
+      <div><label for="cashled">Cash ledger for ATM withdrawals</label><input id="cashled" value="Cash" style="width:100%"></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><span class="step">2</span>Load the bank statement</h2>
   <div class="body">
     <div id="drop">
       <p style="margin:0 0 12px">Drop an .xlsx, .xls or .csv statement here</p>
@@ -122,7 +141,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 </section>
 
 <section id="s2" class="hide">
-  <h2><span class="step">2</span>Confirm the columns</h2>
+  <h2><span class="step">3</span>Confirm the columns</h2>
   <div class="body">
     <div class="grid g3" id="colmap"></div>
     <div class="grid g4" style="margin-top:16px">
@@ -144,15 +163,10 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 </section>
 
 <section id="s3" class="hide">
-  <h2><span class="step">3</span>Translate your remarks into ledgers</h2>
+  <h2><span class="step">4</span>Translate your remarks into ledgers</h2>
   <div class="body">
-    <div class="grid g4">
-      <div><label for="bankled">Bank ledger in Tally</label><input id="bankled" value="Axis Bank" style="width:100%"></div>
-      <div><label for="susled">Ledger for unmapped rows</label><input id="susled" value="Suspense A/c" style="width:100%"></div>
-      <div><label for="cashled">Cash ledger for ATM withdrawals</label><input id="cashled" value="Cash" style="width:100%"></div>
+    <div class="grid g3">
       <div><label for="contrakw">Treat as Contra when narration has</label><input id="contrakw" value="ATM-CASH, ATM CASH, CASH WDL, ATM WDL" style="width:100%"></div>
-    </div>
-    <div class="grid g3" style="margin-top:14px">
       <div><label for="noremark">Rows where you left the remark blank</label>
         <select id="noremark" style="width:100%">
           <option value="block">Block the export until I fill them in</option>
@@ -160,14 +174,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
           <option value="sus">Send to the unmapped ledger</option>
         </select></div>
     </div>
-    <p class="muted" style="margin:14px 0 0">Every name below must already exist in Tally, spelled identically. Create the masters before you import — auto-created ledgers land in a default group and you will re-group them by hand.</p>
-    <div class="row" style="margin-top:14px">
-      <button id="pullled" class="ghost">⚡ Pull ledgers from connector</button>
-      <button id="loadled" class="ghost" style="display:none">Load ledger list from file</button>
-      <input type="file" id="ledfile" accept=".xlsx,.xls,.csv,.txt" class="hide">
-      <select id="ledcol" class="hide"></select>
-      <span class="muted" id="ledstat">No ledger list loaded — names are unchecked.</span>
-    </div>
+    <p class="muted" style="margin:14px 0 0">Every ledger name must already exist in Tally, spelled identically (set the bank/cash/suspense ledgers and pull the list in Step 1). Create any missing masters before you import — auto-created ledgers land in a default group.</p>
     <div class="row" style="margin-top:10px">
       <button id="loadmap" class="ghost">Load my remark dictionary</button>
       <button id="savejson" class="ghost" style="display:none">Save as JSON</button>
@@ -184,7 +191,7 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 </section>
 
 <section id="s4" class="hide">
-  <h2><span class="step">4</span>Check before importing</h2>
+  <h2><span class="step">5</span>Check before importing</h2>
   <div class="body">
     <div id="checks"></div>
     <div class="grid g3" style="margin-top:16px">
