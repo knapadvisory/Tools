@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.54';
+const VERSION = '4.55';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -4360,6 +4360,34 @@ const server = http.createServer(async (req, res) => {
         json(res, 200, wantTypes ? { ok: true, types: list } : { ok: true, ledgers: list });
       } catch (e) {
         json(res, 200, { ok: false, error: String(e.message || e), ledgers: [], types: [] });
+      }
+      return;
+    }
+
+    // Post a voucher-import ENVELOPE straight to Tally (used by the bank→Tally
+    // tool's "Post to Tally via connector" button). The XML is built in the
+    // browser; we only forward it to the local Tally HTTP port and parse the
+    // CREATED / ALTERED / ERRORS / LINEERROR rollup Tally returns.
+    if (req.method === 'POST' && url.pathname === '/api/tally/import') {
+      const body = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
+      const xml = String(body.xml || '');
+      if (!/<TALLYREQUEST>\s*Import Data/i.test(xml)) { json(res, 400, { ok: false, error: 'Not a Tally Import Data envelope.' }); return; }
+      try {
+        const r = await fetch(String(body.url || state.settings.tallyUrl), {
+          method: 'POST', body: xml, headers: { 'content-type': 'text/xml' }, signal: AbortSignal.timeout(120000),
+        });
+        const text = await r.text();
+        const num = (re) => { const m = text.match(re); return m ? +m[1] : 0; };
+        const created = num(/<CREATED>(\d+)<\/CREATED>/i);
+        const altered = num(/<ALTERED>(\d+)<\/ALTERED>/i);
+        const errors = num(/<ERRORS>(\d+)<\/ERRORS>/i) + num(/<EXCEPTIONS>(\d+)<\/EXCEPTIONS>/i);
+        const lineErrors = [...text.matchAll(/<LINEERROR>([\s\S]*?)<\/LINEERROR>/gi)].map((m) => decodeXml(m[1]).trim()).filter(Boolean);
+        json(res, 200, { ok: true, version: VERSION, created, altered, errors, lineErrors, raw: text.slice(0, 4000) });
+      } catch (e) {
+        const msg = /timed out|timeout|abort/i.test(String((e && e.message) || e))
+          ? 'Tally did not respond. Keep Tally on the Gateway with the target company open, then try again.'
+          : ('Could not reach Tally: ' + String((e && e.message) || e));
+        json(res, 502, { ok: false, error: msg });
       }
       return;
     }

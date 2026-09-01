@@ -192,7 +192,8 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     <div class="row" style="margin-top:18px">
       <label style="margin:0">Export</label>
       <select id="monthsel"></select>
-      <button id="dlxml" style="font-weight:600">⬇ Download Tally XML</button>
+      <button id="postxml" style="font-weight:600">⚡ Post to Tally</button>
+      <button id="dlxml">⬇ Download Tally XML</button>
       <button id="dl" class="ghost">Excel register</button>
       <input id="xmlco" placeholder="Company (blank = open company)" style="min-width:230px">
       <span class="muted" id="dlstat"></span>
@@ -798,9 +799,38 @@ $("#dl").addEventListener("click",()=>{
     q('#dlstat').textContent = rows.length+' vouchers written to Tally XML.';
   }
 
+  // Rows for the currently-selected month (shared by download + post).
+  function selectedRows(){
+    if(typeof STATE==='undefined' || !STATE || !STATE.R || !STATE.R.length) return null;
+    var sel = q('#monthsel').value;
+    return sel==='all' ? STATE.R : STATE.R.filter(function(x){ return String(x.d.y*100+x.d.m)===sel; });
+  }
+
+  // Post the vouchers straight into Tally via the connector (no file step).
+  function postToTally(){
+    var rows = selectedRows();
+    if(!rows){ q('#dlstat').textContent='Load a statement and map ledgers first.'; return; }
+    if(!rows.length){ q('#dlstat').textContent='No rows for the selected month.'; return; }
+    var n = rows.filter(function(x){ return (x.dr>0?x.dr:x.cr)>0; }).length;
+    if(!confirm('This will CREATE '+n+' vouchers directly in Tally — there is no bulk undo.\nTake a company backup first, and make sure the target company is open.\n\nContinue?')) return;
+    var company = (q('#xmlco') && q('#xmlco').value.trim()) || '';
+    var xml = '<?xml version="1.0" encoding="UTF-8"?>\n' + buildXml(rows, company);
+    q('#dlstat').textContent = 'Posting '+n+' vouchers to Tally…';
+    fetch(API+'/api/tally/import', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({xml:xml})})
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if(!j || !j.ok){ q('#dlstat').textContent = 'Tally import failed: '+((j&&j.error)||'unknown error'); return; }
+        var msg = 'Tally: '+j.created+' created'+(j.altered?', '+j.altered+' altered':'')+(j.errors?', '+j.errors+' error(s)':'');
+        if(j.lineErrors && j.lineErrors.length) msg += ' — '+j.lineErrors.slice(0,3).join(' | ');
+        q('#dlstat').textContent = msg;
+      })
+      .catch(function(){ q('#dlstat').textContent = 'Could not reach the connector at '+API+'. Is the KNAP Tally connector running on this PC?'; });
+  }
+
   function bind(){
     var b=q('#pullled'); if(b) b.addEventListener('click', pull);
     var xb=q('#dlxml'); if(xb) xb.addEventListener('click', dlXml);
+    var pb=q('#postxml'); if(pb) pb.addEventListener('click', postToTally);
   }
   if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', bind); else bind();
 })();
