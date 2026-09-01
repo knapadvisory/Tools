@@ -171,8 +171,8 @@
     </div>
   </div>
 
-  <div class="section-label">Tools</div>
-  <div class="grid">
+  <div id="toolsections"></div>
+  <div class="grid" id="allcards" hidden>
 
     <!-- 1 · Marketplace / Amazon invoice parser -->
     <div class="card">
@@ -427,6 +427,38 @@
   KNAP Advisory · internal tools ·
   <a href="https://teamhub.knapadvisory.com">teamhub.knapadvisory.com</a>
 </footer>
+
+<script>
+/* Group the tool cards into Ready / WIP / Raw sections. Re-bucket a tool by
+   moving its path between the lists below — nothing else to touch. */
+(function(){
+  var LABELS=[['ready','Ready to use'],['wip','Work in progress'],['raw','Raw / experimental']];
+  var MAP=[
+    ['/fee-parser/','ready'],['/itc-reco/','ready'],['/tds26as/','ready'],['/gstr2b/','ready'],
+    ['/gstr1/','ready'],['/debtor-creditor/','ready'],['/pdf-unlock/','ready'],
+    ['/tds26q/','wip'],['/bank2tally/','wip'],['/finprep/','wip'],['dashboard.knapadvisory.com','wip'],
+    ['/audit/','raw']
+  ];
+  function bucketOf(card){
+    var a=card.querySelector('a[href]'), h=a?a.getAttribute('href'):'';
+    for(var i=0;i<MAP.length;i++){ if(h.indexOf(MAP[i][0])>=0) return MAP[i][1]; }
+    return 'wip';
+  }
+  var host=document.getElementById('toolsections'), src=document.getElementById('allcards');
+  if(!host||!src) return;
+  var g={};
+  LABELS.forEach(function(L){
+    var lab=document.createElement('div'); lab.className='section-label'; lab.textContent=L[1];
+    var grid=document.createElement('div'); grid.className='grid';
+    host.appendChild(lab); host.appendChild(grid); g[L[0]]={lab:lab,grid:grid,n:0};
+  });
+  Array.prototype.slice.call(src.querySelectorAll('.card')).forEach(function(card){
+    var b=bucketOf(card); g[b].grid.appendChild(card); g[b].n++;
+  });
+  LABELS.forEach(function(L){ if(!g[L[0]].n){ g[L[0]].lab.hidden=true; g[L[0]].grid.hidden=true; } });
+  src.remove();
+})();
+</script>
 
 </body>
 </html>
