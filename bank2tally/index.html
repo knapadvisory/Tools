@@ -163,20 +163,23 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
     <p class="muted" style="margin:14px 0 0">Every name below must already exist in Tally, spelled identically. Create the masters before you import — auto-created ledgers land in a default group and you will re-group them by hand.</p>
     <div class="row" style="margin-top:14px">
       <button id="pullled" class="ghost">⚡ Pull ledgers from connector</button>
-      <button id="loadled" class="ghost">Load ledger list from file</button>
+      <button id="loadled" class="ghost" style="display:none">Load ledger list from file</button>
       <input type="file" id="ledfile" accept=".xlsx,.xls,.csv,.txt" class="hide">
       <select id="ledcol" class="hide"></select>
       <span class="muted" id="ledstat">No ledger list loaded — names are unchecked.</span>
     </div>
     <div class="row" style="margin-top:10px">
       <button id="loadmap" class="ghost">Load my remark dictionary</button>
-      <button id="savemap" class="ghost">Save dictionary as Excel</button>
-      <button id="savejson" class="ghost">Save as JSON</button>
+      <button id="savejson" class="ghost" style="display:none">Save as JSON</button>
       <input type="file" id="mapfile" accept=".xlsx,.xls,.csv,.json" class="hide">
       <span class="muted" id="mapstat"></span>
     </div>
     <datalist id="ledgerlist"></datalist>
     <div class="scroll" style="margin-top:14px"><table id="maptbl"></table></div>
+    <div class="row" style="margin-top:12px">
+      <button id="savemap" class="ghost">Save dictionary as Excel</button>
+      <span class="muted">Saves your remark → ledger mapping so you can reload it next month.</span>
+    </div>
   </div>
 </section>
 
