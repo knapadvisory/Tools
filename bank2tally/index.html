@@ -939,13 +939,50 @@ $("#dl").addEventListener("click",()=>{
     return step(0);
   }
 
+  // Duplicate guard --------------------------------------------------------
+  // A per-voucher signature that MUST match the one the connector builds from
+  // Tally: date | abs amount | bank-leg Dr/Cr | normalised narration.
+  function isoOf(d){ return ''+d.y+'-'+pad(d.m)+'-'+pad(d.d); }
+  function sigOf(x){
+    var amt=(x.dr>0?x.dr:x.cr), bankDr=x.cr>0;   // money in → bank debited
+    var narr=String(narrOf(x)).toLowerCase().replace(/\s+/g,' ').trim();
+    return isoOf(x.d)+'|'+amt.toFixed(2)+'|'+(bankDr?'D':'C')+'|'+narr;
+  }
+  function dateRange(rows){
+    var lo=null,hi=null;
+    rows.forEach(function(x){ if(!x.d) return; var iso=isoOf(x.d); if(lo===null||iso<lo)lo=iso; if(hi===null||iso>hi)hi=iso; });
+    return {from:lo,to:hi};
+  }
+  // Resolves to {fresh, dups, checked}. Falls back to "all fresh, unchecked" if
+  // the connector is old/unreachable, so posting still works (with a warning).
+  function guardRows(rows, company){
+    var live=rows.filter(function(x){ return (x.dr>0?x.dr:x.cr)>0; });
+    var rng=dateRange(live), bank=(q('#bankled')&&q('#bankled').value.trim())||'';
+    if(!rng.from||!bank) return Promise.resolve({fresh:live,dups:[],checked:false,error:'no bank ledger / dates'});
+    return fetch(API+'/api/bank/existing',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({company:company,bankLedger:bank,from:rng.from,to:rng.to})})
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        if(!j||!j.ok||!Array.isArray(j.sigs)) return {fresh:live,dups:[],checked:false,error:(j&&j.error)||'guard unavailable'};
+        var ex=new Set(j.sigs), fresh=[], dups=[];
+        live.forEach(function(x){ (ex.has(sigOf(x))?dups:fresh).push(x); });
+        return {fresh:fresh,dups:dups,checked:true};
+      })
+      .catch(function(){ return {fresh:live,dups:[],checked:false,error:'connector unreachable'}; });
+  }
+
   function postToTally(){
     var rows = selectedRows();
     if(!rows){ q('#dlstat').textContent='Load a statement and map ledgers first.'; return; }
     if(!rows.length){ q('#dlstat').textContent='No rows for the selected month.'; return; }
-    var n = rows.filter(function(x){ return (x.dr>0?x.dr:x.cr)>0; }).length;
-    if(!confirm('This will CREATE '+n+' vouchers directly in Tally — there is no bulk undo.\nTake a company backup first, and make sure the target company is open.\n\nContinue?')) return;
-    postBatches(rows, (q('#xmlco') && q('#xmlco').value.trim()) || '', { bar:function(){}, msg:function(m){ q('#dlstat').textContent=m; } });
+    var company=(q('#xmlco') && q('#xmlco').value.trim()) || '';
+    q('#dlstat').textContent='Checking Tally for already-imported vouchers…';
+    guardRows(rows, company).then(function(g){
+      var toPost=g.fresh, skipped=g.dups.length;
+      if(!toPost.length){ q('#dlstat').textContent='All vouchers are already in Tally — nothing to post.'; return; }
+      var extra = g.checked ? (skipped?(' ('+skipped+' duplicate(s) will be skipped)'):'') : ' (duplicate check unavailable — update the connector)';
+      if(!confirm('This will CREATE '+toPost.length+' vouchers in Tally'+extra+'.\nNo bulk undo — back up first, and keep the target company open.\n\nContinue?')) return;
+      postBatches(toPost, company, { bar:function(){}, msg:function(m){ q('#dlstat').textContent=m; } });
+    });
   }
 
   // Dry-run preview: what will post, plus a ledger existence pre-check.
@@ -986,6 +1023,8 @@ $("#dl").addEventListener("click",()=>{
       + '</div>'
       + '<p style="margin:8px 0 0"><b>'+live.length+'</b> vouchers · '+vtStr+' · total <b>'+inr(total)+'</b> <span style="color:#8a8f98">(each voucher balances two legs)</span></p>'
       + warn + susNote
+      + '<div id="knapDupNote" style="margin:8px 0;color:#555">Checking Tally for already-imported vouchers…</div>'
+      + '<label id="knapDupOvWrap" style="display:none;font-size:13px;color:#7a5b00"><input type="checkbox" id="knapDupOv"> also re-post the duplicates</label>'
       + '<div style="max-height:300px;overflow:auto;border:1px solid #e5e7eb;border-radius:6px;margin-top:8px">'
       +   '<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr style="position:sticky;top:0;background:#f6f7f8"><th style="text-align:left;padding:6px 10px">Ledger</th><th style="text-align:right;padding:6px 10px">Uses</th><th style="text-align:left;padding:6px 10px">Status</th></tr></thead><tbody>'+rowsHtml+'</tbody></table>'
       + '</div>'
@@ -1002,14 +1041,30 @@ $("#dl").addEventListener("click",()=>{
     q('#knapPrevCloseB').addEventListener('click', close);
     ov.addEventListener('click', function(e){ if(e.target===ov) close(); });
     var post=q('#knapPrevPost');
+
+    // Duplicate guard — mark re-imports and post only the fresh ones by default.
+    var G={ fresh: live, dups: [], checked:false };
+    function setPostLabel(){ var ovc=q('#knapDupOv'); if(post && !blocked) post.textContent='⚡ Post '+((ovc&&ovc.checked)?live.length:G.fresh.length)+' to Tally'; }
+    guardRows(rows, company).then(function(g){
+      G=g; var note=q('#knapDupNote');
+      if(!g.checked){ if(note){ note.textContent='Duplicate check skipped ('+(g.error||'update the connector to enable it')+').'; note.style.color='#7a5b00'; } return; }
+      if(!g.dups.length){ if(note){ note.textContent='No already-imported vouchers found in this period. ✓'; note.style.color='#1b6a3a'; } return; }
+      if(note){ note.innerHTML='<b>'+g.dups.length+'</b> of '+live.length+' are already in Tally for “'+xesc((q('#bankled')&&q('#bankled').value)||'')+'” this period — they will be <b>skipped</b>.'; note.style.color='#7a5b00'; }
+      var w=q('#knapDupOvWrap'); if(w) w.style.display='inline-block';
+      setPostLabel();
+    });
+    var ovc=q('#knapDupOv'); if(ovc) ovc.addEventListener('change', setPostLabel);
+
     if(post && !blocked){
       post.addEventListener('click', function(){
-        if(!confirm('Create '+live.length+' vouchers in Tally now? No bulk undo — back up first.')) return;
+        var ov2=q('#knapDupOv'); var toPost=(ov2&&ov2.checked)? live : G.fresh;
+        if(!toPost.length){ q('#knapPrevStat').textContent='Nothing to post — all are already in Tally.'; return; }
+        if(!confirm('Create '+toPost.length+' vouchers in Tally now? No bulk undo — back up first.')) return;
         post.disabled=true;
         var wrap=q('#knapBarWrap'), bar=q('#knapBar');
         var ui={ bar:function(p){ if(wrap) wrap.style.display='block'; if(bar) bar.style.width=p+'%'; },
                  msg:function(m){ q('#knapPrevStat').textContent=m; q('#dlstat').textContent=m; } };
-        postBatches(rows, company, ui).then(function(){ post.textContent='Done'; });
+        postBatches(toPost, company, ui).then(function(){ post.textContent='Done'; });
       });
     }
   }

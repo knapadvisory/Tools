@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.56';
+const VERSION = '4.57';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -3103,6 +3103,42 @@ async function readErpVouchers(url, company, from, to, opts = {}) {
   } finally { state.settings.company = saved; }
 }
 
+// Duplicate guard for the bank→Tally tool: the signatures of vouchers already
+// booked against a bank ledger in [from,to], so a re-import can be skipped.
+// Signature = date | abs amount | bank-leg Dr/Cr | normalised narration — the
+// same key the tool builds for each row it is about to post.
+async function readBankExisting(url, company, bankLedger, from, to) {
+  const saved = state.settings.company; state.settings.company = company || '';
+  try {
+    const bn = norm(bankLedger);
+    const fromKey = from.getUTCFullYear() * 10000 + (from.getUTCMonth() + 1) * 100 + from.getUTCDate();
+    const toKey = to.getUTCFullYear() * 10000 + (to.getUTCMonth() + 1) * 100 + to.getUTCDate();
+    const sigs = new Set(); const seen = new Set();
+    dcProgress.phase = `Duplicate check — ${bankLedger} ${from.toISOString().slice(0, 10)} → ${to.toISOString().slice(0, 10)}…`;
+    await readVouchersRamp(url, from, to, (xml) => {
+      for (const block of xml.match(/<VOUCHER[\s>][\s\S]*?<\/VOUCHER>/gi) || []) {
+        if (/(^|>)\s*Yes\s*<\/ISCANCELLED>/i.test(block.match(/<ISCANCELLED>[\s\S]*?<\/ISCANCELLED>/i)?.[0] ?? '')) continue;
+        if (/<ISOPTIONAL>\s*Yes/i.test(block)) continue;
+        let guid = tag(block, 'GUID'); if (!guid) guid = `${tag(block, 'VOUCHERTYPENAME')}|${tag(block, 'DATE')}|${tag(block, 'VOUCHERNUMBER')}`;
+        if (seen.has(guid)) continue; seen.add(guid);
+        const dk = dateKey(tag(block, 'DATE')); if (dk < fromKey || dk > toKey) continue;
+        const entryBlocks = block.match(/<ALLLEDGERENTRIES\.LIST>[\s\S]*?<\/ALLLEDGERENTRIES\.LIST>/gi) || block.match(/<LEDGERENTRIES\.LIST>[\s\S]*?<\/LEDGERENTRIES\.LIST>/gi) || [];
+        let hit = null;
+        for (const e of entryBlocks) { const nm = tag(e, 'LEDGERNAME'); if (nm && norm(nm) === bn) { hit = e; break; } }
+        if (!hit) continue;
+        const amt = Math.abs(toNum(tag(hit, 'AMOUNT')));
+        const dr = /yes/i.test(tag(hit, 'ISDEEMEDPOSITIVE') || '');
+        const vd = parseTallyFieldDate(tag(block, 'DATE'));
+        const iso = vd ? vd.toISOString().slice(0, 10) : '';
+        const narr = String(tag(block, 'NARRATION') || '').toLowerCase().replace(/\s+/g, ' ').trim();
+        sigs.add(`${iso}|${amt.toFixed(2)}|${dr ? 'D' : 'C'}|${narr}`);
+      }
+    }, null, { firstWin: 5, attemptMs: 90000 });
+    dcProgress.phase = '';
+    return { sigs: [...sigs] };
+  } finally { state.settings.company = saved; }
+}
+
 // "Full pull" — every debtor OR creditor party's full statement for [from..to]
 // in ONE movement pass (same cost as the ageing rail), so the dashboard can
 // store them and the drill-down popup opens instantly for staff AND for a
@@ -4393,6 +4429,28 @@ const server = http.createServer(async (req, res) => {
           ? 'Tally did not respond. Keep Tally on the Gateway with the target company open, then try again.'
           : ('Could not reach Tally: ' + String((e && e.message) || e));
         json(res, 502, { ok: false, error: msg });
+      }
+      return;
+    }
+
+    // Duplicate guard — signatures already booked against a bank ledger over a
+    // period, so the bank→Tally tool can skip a re-import.
+    if (req.method === 'POST' && url.pathname === '/api/bank/existing') {
+      if (dcProgress.active) { json(res, 409, { ok: false, error: 'A read is already running.' }); return; }
+      const body = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
+      const bankLedger = String(body.bankLedger || '').trim();
+      const from = tallyDateOf(String(body.from || '').replace(/-/g, ''));
+      const to = tallyDateOf(String(body.to || '').replace(/-/g, ''));
+      if (!bankLedger) { json(res, 400, { ok: false, error: 'bankLedger is required.' }); return; }
+      if (!from || !to || from > to) { json(res, 400, { ok: false, error: 'Bad period.' }); return; }
+      dcCancel = false; dcProgress.active = true; dcProgress.startedAt = Date.now();
+      try {
+        const out = await readBankExisting(String(body.url || state.settings.tallyUrl), String(body.company || ''), bankLedger, from, to);
+        dcProgress.active = false;
+        json(res, 200, { ok: true, version: VERSION, count: out.sigs.length, sigs: out.sigs });
+      } catch (e) {
+        dcProgress.active = false;
+        json(res, 502, { ok: false, error: 'Could not read Tally: ' + String((e && e.message) || e) });
       }
       return;
     }
