@@ -96,6 +96,10 @@ var o=[];var l=Array.isArray(e);for(f=n.s.c;f<=n.e.c;++f)s[f]=ya(f);for(var c=n.
 <header>
   <a href="/" style="display:inline-block;margin-bottom:8px;color:var(--ledger,#1b6a3a);text-decoration:none;font-size:13px">&larr; All tools</a>
   <h1>Bank statement to Tally vouchers</h1>
+  <div id="connbar" style="margin:6px 0 2px;display:flex;align-items:center;gap:10px;font-size:13px">
+    <span id="conn-ver" style="color:#555">checking connector…</span>
+    <button id="conn-upd" class="ghost" title="Fetch the newest connector">⟳ Update connector</button>
+  </div>
   <p>Drop a statement in, map the ledgers once, download an Accounting Voucher file that TallyPrime will import as balanced two-leg vouchers. Nothing leaves this page — the file is read in your browser.</p>
 </header>
 
@@ -1010,7 +1014,31 @@ $("#dl").addEventListener("click",()=>{
     }
   }
 
+  // Connector status + one-click self-update (always available in the header).
+  function checkConn(){
+    var e=q('#conn-ver'); if(!e) return;
+    fetch(API+'/health', {cache:'no-store'})
+      .then(function(r){ return r.json(); })
+      .then(function(h){ window.__connVer=h.version||''; e.textContent='Connector v'+(h.version||'?')+' · running'; e.style.color='#1b6a3a'; })
+      .catch(function(){ e.textContent='Connector not reachable — start the KNAP connector on this PC.'; e.style.color='#b42318'; });
+  }
+  function updateConnector(){
+    var el=q('#conn-upd'); if(!el) return;
+    var was=window.__connVer||''; el.disabled=true; el.textContent='⏳ Updating…';
+    fetch(API+'/update', {method:'POST'}).then(function(resp){
+      if(!resp.ok){ el.disabled=false; el.textContent='⟳ Update connector'; return; }
+      var tries=0, t=setInterval(function(){ tries++;
+        fetch(API+'/health', {cache:'no-store'}).then(function(r){ return r.json(); }).then(function(h){
+          if(h.version && h.version!==was){ clearInterval(t); el.disabled=false; el.textContent='⟳ Update connector'; checkConn(); }
+        }).catch(function(){});
+        if(tries>30){ clearInterval(t); el.disabled=false; el.textContent='⟳ Update connector'; checkConn(); }
+      }, 1000);
+    }).catch(function(){ el.disabled=false; el.textContent='⟳ Update connector'; });
+  }
+
   function bind(){
+    var cu=q('#conn-upd'); if(cu) cu.addEventListener('click', updateConnector);
+    checkConn();
     var b=q('#pullled'); if(b) b.addEventListener('click', pull);
     var xb=q('#dlxml'); if(xb) xb.addEventListener('click', dlXml);
     var pb=q('#postxml'); if(pb) pb.addEventListener('click', postToTally);
