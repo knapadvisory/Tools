@@ -120,7 +120,8 @@ function fill(d){
   $('#svcBody').innerHTML=''; (d.services&&d.services.length?d.services:[{}]).forEach(function(s){$('#svcBody').appendChild(svcRow(s.desc,s.qty,s.rate));});
   recompute();
 }
-function applyCompanyBank(){ var co=companies.find(function(x){return x.id===$('#companyId').value;}); if(!co) return; var b=co.bank||{}; ['ac','entity','ifsc','upi','terms','contact','phone','email'].forEach(function(k){ if(!$('#b_'+k).value) $('#b_'+k).value=b[k]||''; }); document.documentElement.style.setProperty('--brand', '#'+(co.brand||'0070C0')); }
+function setCompanyBank(force){ var co=companies.find(function(x){return x.id===$('#companyId').value;}); if(!co) return; var b=co.bank||{}; ['ac','entity','ifsc','upi','terms','contact','phone','email'].forEach(function(k){ if(force||!$('#b_'+k).value) $('#b_'+k).value=b[k]||''; }); document.documentElement.style.setProperty('--brand', '#'+(co.brand||'0070C0')); }
+function applyCompanyBank(){ setCompanyBank(false); }
 
 function newBlank(){
   editingId=null; $('#editBadge').classList.add('hide'); $('#revise').classList.add('hide');
@@ -132,7 +133,7 @@ function newBlank(){
     deliverables:['Certificate / registration','Supporting documents'], checklist:['PAN & Aadhaar','Address proof','Mobile number & email id'],
     services:[{qty:1},{qty:1}] });
   document.querySelectorAll('#b_ac,#b_entity,#b_ifsc,#b_upi,#b_terms,#b_contact,#b_phone,#b_email').forEach(function(el){el.value='';});
-  applyCompanyBank(); $('#stat').textContent='';
+  setCompanyBank(true); $('#stat').textContent='';
 }
 
 /* ---------- logo bytes ---------- */
@@ -262,9 +263,9 @@ function show(v){
 /* ---------- init ---------- */
 $('#addRow').addEventListener('click',function(){$('#svcBody').appendChild(svcRow('',1,''));recompute();});
 ['gstOn','gstRate','gstMode','round','discMode','discVal','currency'].forEach(function(id){$('#'+id).addEventListener('input',recompute);});
-$('#companyId').addEventListener('change',function(){ // switching company: refill bank if empty + brand
+$('#companyId').addEventListener('change',function(){ // switching company: overwrite bank + brand with that firm's details
   var co=companies.find(function(x){return x.id===$('#companyId').value;}); if(co){ document.documentElement.style.setProperty('--brand','#'+(co.brand||'0070C0')); }
-  applyCompanyBank(); recompute();
+  setCompanyBank(true); recompute();
 });
 $('#dl').addEventListener('click',downloadWord);
 $('#save').addEventListener('click',saveQuote);
