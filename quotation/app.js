@@ -74,6 +74,55 @@ function buildQuoteDoc(docx, data, logo, logoType){
   return new Document({styles:{default:{document:{run:{font:FONT,size:19,color:INK}}}},sections:[{properties:{page:{margin:{top:900,bottom:900,left:1000,right:1000}}},children:kids}]});
 }
 
+/* ---------- PDF generator (pdfmake) ---------- */
+// PDF uses "Rs." for INR (pdfmake's bundled Roboto renders that reliably); the
+// Word doc keeps the ₹ glyph. Other currencies use their symbol.
+function pmoney(n,cur){ cur=cur||'₹'; var v=Math.round((+n||0)*100)/100; var loc=cur==='₹'?'en-IN':'en-US'; var sym=cur==='₹'?'Rs. ':(cur+' '); return sym+v.toLocaleString(loc,{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function buildQuotePdf(data, logoDataUrl){
+  var c=calcOf(data), cur=data.currency||'₹', brand='#'+String(data.company&&data.company.brand||'0070C0').replace('#',''), DARK='#0B2A4A';
+  var services=(data.services||[]).filter(function(s){return (s.desc||'').trim();});
+  var hdr=function(t,al){return {text:t,bold:true,color:'white',fontSize:9,fillColor:brand,alignment:al||'left',margin:[0,3,0,3]};};
+  var td=function(t,al){return {text:t,fontSize:9,alignment:al||'left',margin:[0,2,0,2]};};
+  var body=[[hdr('#','center'),hdr('Particulars'),hdr('Qty','center'),hdr('Rate','right'),hdr('Amount','right')]];
+  services.forEach(function(s,i){ body.push([td(String(i+1),'center'),td(s.desc),td(String(s.qty||''),'center'),td(pmoney(s.rate,cur),'right'),td(pmoney((+s.qty||0)*(+s.rate||0),cur),'right')]); });
+  var trows=[]; var tr=function(l,v,o){o=o||{};trows.push([{text:l,alignment:'right',bold:!!o.b,fontSize:o.b?11:9,color:o.b?brand:'#292928'},{text:v,alignment:'right',bold:!!o.b,fontSize:o.b?11:9,color:o.b?brand:'#292928'}]);};
+  tr('Subtotal',pmoney(c.sub,cur));
+  if(c.disc>0.005) tr('Discount','- '+pmoney(c.disc,cur));
+  if(c.disc>0.005||c.gstOn) tr('Taxable value',pmoney(c.taxable,cur));
+  if(c.gstOn&&c.inter) tr('IGST @ '+c.rate+'%',pmoney(c.igst,cur));
+  if(c.gstOn&&!c.inter){ tr('CGST @ '+(c.rate/2)+'%',pmoney(c.cgst,cur)); tr('SGST @ '+(c.rate/2)+'%',pmoney(c.sgst,cur)); }
+  if(Math.abs(c.roundOff)>0.004) tr('Round off',(c.roundOff>0?'+ ':'- ')+pmoney(Math.abs(c.roundOff),cur));
+  tr('Grand Total',pmoney(c.rounded,cur),{b:true});
+  var content=[];
+  if(logoDataUrl) content.push({image:logoDataUrl,width:175,margin:[0,0,0,8]});
+  content.push({columns:[
+    {width:'*',fontSize:10,stack:[{text:[{text:'Quotation No: ',bold:true},data.quoteNo||'']},{text:[{text:'Applicant: ',bold:true},data.name||'']},{text:[{text:'City: ',bold:true},data.city||'']}]},
+    {width:'auto',fontSize:10,alignment:'right',text:[{text:'Date: ',bold:true},data.date||'']}
+  ]});
+  content.push({text:data.subject||'Quotation',bold:true,fontSize:15,color:DARK,alignment:'center',margin:[0,12,0,10]});
+  content.push({table:{headerRows:1,widths:[18,'*',34,66,72],body:body},layout:{hLineColor:function(){return '#dddddd';},vLineColor:function(){return '#dddddd';},hLineWidth:function(){return 0.5;},vLineWidth:function(){return 0.5;}}});
+  content.push({columns:[{width:'*',text:''},{width:230,table:{widths:['*',95],body:trows},layout:'noBorders'}],margin:[0,8,0,0]});
+  var section=function(title,arr){ if(!arr||!arr.length) return; content.push({text:title,bold:true,color:brand,fontSize:11,margin:[0,12,0,3]}); content.push({ul:arr,fontSize:9}); };
+  section('Terms',data.terms); section('Deliverables',data.deliverables); section('Documents / Checklist',data.checklist);
+  content.push({table:{widths:['*'],body:[[{text:'PAYMENT  DETAILS',color:'white',bold:true,fontSize:12,fillColor:DARK,margin:[8,6,8,6]}]]},layout:'noBorders',margin:[0,14,0,6]});
+  var bank=data.bank||{};
+  [['Account No.',bank.ac],['Entity Name',bank.entity],['IFSC Code',bank.ifsc],['Google Pay / Paytm / PhonePe',bank.upi],['Payment terms',bank.terms],['Contact person',bank.contact],['Phone',bank.phone],['Email',bank.email]]
+    .filter(function(x){return x[1];}).forEach(function(x){ content.push({text:[{text:x[0]+'  ',bold:true},x[1]],fontSize:9,margin:[0,0,0,2]}); });
+  return { pageSize:'A4', pageMargins:[40,40,40,44], content:content, defaultStyle:{font:'Roboto',fontSize:10,color:'#292928'} };
+}
+function logoDataUrlFor(id){
+  var co=companies.find(function(x){return x.id===id;}); if(!co||!co.logoFile) return Promise.resolve(null);
+  return fetch(API+'/companies/'+id+'/logo',{cache:'no-store'}).then(function(r){return r.blob();}).then(function(b){ return new Promise(function(res){ var fr=new FileReader(); fr.onload=function(){res(fr.result);}; fr.onerror=function(){res(null);}; fr.readAsDataURL(b); }); }).catch(function(){return null;});
+}
+function downloadPdf(){
+  var d=gather(); if(!d.services.length){ $('#stat').textContent='Add at least one service.'; return; }
+  if(!window.pdfMake){ $('#stat').textContent='PDF engine not loaded.'; return; }
+  $('#stat').textContent='Building PDF…';
+  logoDataUrlFor(d.companyId).then(function(logo){
+    window.pdfMake.createPdf(buildQuotePdf(d,logo)).download('Quotation '+(d.name||'client')+' '+(d.no||'')+'.pdf', function(){ $('#stat').textContent='Downloaded PDF.'; });
+  }).catch(function(e){ $('#stat').textContent='PDF error: '+e.message; });
+}
+
 /* ---------- form ---------- */
 function fyLabel(d){var y=d.getFullYear(),m=d.getMonth(),s=(m>=3)?y:y-1;return String(s%100)+'-'+String((s+1)%100);}
 function svcRow(desc,qty,rate){
@@ -268,6 +317,7 @@ $('#companyId').addEventListener('change',function(){ // switching company: over
   setCompanyBank(true); recompute();
 });
 $('#dl').addEventListener('click',downloadWord);
+$('#dlpdf').addEventListener('click',downloadPdf);
 $('#save').addEventListener('click',saveQuote);
 $('#revise').addEventListener('click',reviseQuote);
 $('#newBlank').addEventListener('click',newBlank);
