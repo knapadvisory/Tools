@@ -238,6 +238,7 @@ function openCoModal(c){
   c=c||{bank:{}};
   $('#coTitle').textContent=c.id?'Edit company':'Add company';
   $('#c_id').value=c.id||''; $('#c_name').value=c.name||''; $('#c_tagline').value=c.tagline||''; $('#c_brand').value=c.brand||'0070C0';
+  $('#c_brandPick').value='#'+String(c.brand||'0070C0').replace('#','');
   var b=c.bank||{}; ['ac','entity','ifsc','upi','terms','contact','phone','email'].forEach(function(k){$('#c_'+k).value=b[k]||'';});
   $('#c_logo').value=''; $('#coStat').textContent=''; $('#coModal').classList.remove('hide');
 }
@@ -274,6 +275,8 @@ $('#tabList').addEventListener('click',function(){show('List');});
 $('#tabCo').addEventListener('click',function(){show('Co');});
 $('#histClose').addEventListener('click',function(){$('#histModal').classList.add('hide');});
 $('#coAdd').addEventListener('click',function(){openCoModal(null);});
+$('#c_brandPick').addEventListener('input',function(){ $('#c_brand').value=this.value.replace('#','').toUpperCase(); });
+$('#c_brand').addEventListener('input',function(){ var h=this.value.replace(/[^0-9a-fA-F]/g,'').slice(0,6); if(h.length===6) $('#c_brandPick').value='#'+h; });
 $('#coCancel').addEventListener('click',function(){$('#coModal').classList.add('hide');});
 $('#coSave').addEventListener('click',saveCo);
 
