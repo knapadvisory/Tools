@@ -5,204 +5,172 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Quotation Maker · KNAP</title>
 <style>
-  :root{ --green:#1b6a3a; --head:#173f28; --ink:#1f2937; --mut:#6b7280; --rule:#e5e7eb; --card:#fff; --bg:#f4f6f4; --blue:#0070C0; }
+  :root{ --green:#1b6a3a; --head:#173f28; --ink:#1f2937; --mut:#6b7280; --rule:#e5e7eb; --card:#fff; --bg:#f4f6f4; --brand:#0070C0; }
   *{box-sizing:border-box} body{margin:0;font:14px/1.5 system-ui,Segoe UI,Roboto,sans-serif;color:var(--ink);background:var(--bg)}
-  .band{background:var(--head);color:#fff;padding:14px 22px}
-  .band a.back{color:#bfe6cd;text-decoration:none;font-size:13px} .band h1{margin:6px 0 0;font-size:20px}
-  .band p{margin:4px 0 0;color:#cfe6d8;font-size:13px;max-width:760px}
-  main{max-width:1000px;margin:0 auto;padding:20px 16px 60px}
-  .card{background:var(--card);border:1px solid var(--rule);border-radius:10px;padding:18px 20px;margin-top:16px}
-  .card h2{margin:0 0 12px;font-size:15px;color:var(--green)}
+  .band{background:var(--head);color:#fff;padding:12px 22px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  .band a.back{color:#bfe6cd;text-decoration:none;font-size:13px} .band h1{margin:0;font-size:19px}
+  .tabs{margin-left:auto;display:flex;gap:6px}
+  .tabs button{background:transparent;border:0;color:#cfe6d8;padding:7px 14px;border-radius:7px;cursor:pointer;font:inherit}
+  .tabs button.on{background:var(--green);color:#fff;font-weight:600}
+  main{max-width:1040px;margin:0 auto;padding:18px 16px 70px}
+  .card{background:var(--card);border:1px solid var(--rule);border-radius:10px;padding:16px 18px;margin-top:14px}
+  .card h2{margin:0 0 12px;font-size:14px;color:var(--green)}
   label{display:block;font-size:12px;color:var(--mut);margin:0 0 3px}
   input,textarea,select{width:100%;padding:7px 9px;border:1px solid var(--rule);border-radius:6px;font:inherit;color:var(--ink);background:#fff}
-  textarea{min-height:96px;resize:vertical}
-  .grid{display:grid;gap:12px} .g2{grid-template-columns:1fr 1fr} .g3{grid-template-columns:2fr 1fr 1fr} .g4{grid-template-columns:1fr 1fr 1fr 1fr}
+  textarea{min-height:88px;resize:vertical}
+  .grid{display:grid;gap:12px} .g2{grid-template-columns:1fr 1fr} .g3{grid-template-columns:1fr 1fr 1fr} .g4{grid-template-columns:1fr 1fr 1fr 1fr}
   @media(max-width:720px){.g2,.g3,.g4{grid-template-columns:1fr 1fr}}
-  table{width:100%;border-collapse:collapse;margin-top:6px} th,td{padding:6px 6px;text-align:left}
+  table{width:100%;border-collapse:collapse} th,td{padding:6px 6px;text-align:left}
   th{font-size:11px;color:var(--mut);border-bottom:1px solid var(--rule)}
-  .svc td{border-bottom:1px solid #f0f2f0;vertical-align:top}
-  .svc input{padding:6px 7px}
-  .amt{font-variant-numeric:tabular-nums;text-align:right;color:var(--ink);padding-top:12px}
-  .btn{border:1px solid var(--green);background:var(--green);color:#fff;padding:8px 16px;border-radius:7px;font:inherit;font-weight:600;cursor:pointer}
-  .btn.ghost{background:#fff;color:var(--green)} .btn:disabled{opacity:.5;cursor:default}
+  .svc td{border-bottom:1px solid #f0f2f0;vertical-align:top} .svc input{padding:6px 7px}
+  .amt{font-variant-numeric:tabular-nums;text-align:right;padding-top:12px}
+  .btn{border:1px solid var(--green);background:var(--green);color:#fff;padding:8px 15px;border-radius:7px;font:inherit;font-weight:600;cursor:pointer}
+  .btn.ghost{background:#fff;color:var(--green)} .btn.sm{padding:5px 10px;font-weight:500;font-size:13px} .btn:disabled{opacity:.5;cursor:default}
   .rm{border:0;background:none;color:#b42318;cursor:pointer;font-size:16px;padding:6px}
-  .tot{display:flex;justify-content:flex-end;gap:14px;align-items:center;margin-top:10px;font-weight:600}
-  .tot b{color:var(--blue);font-size:16px}
   .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px}
   .muted{color:var(--mut);font-size:12px}
-  .hint{font-size:11px;color:var(--mut);margin-top:3px}
+  .totals{margin-left:auto;min-width:320px} .totals div{display:flex;justify-content:space-between;padding:3px 0;font-variant-numeric:tabular-nums}
+  .totals .grand{border-top:1px solid var(--rule);margin-top:4px;padding-top:6px;font-weight:700;font-size:16px;color:var(--brand)}
+  .pill{display:inline-block;font-size:11px;padding:1px 8px;border-radius:999px;background:#eef2ff;color:#3730a3}
+  .st{font-size:12px;padding:2px 8px;border-radius:999px}
+  .st.Draft{background:#f3f4f6;color:#6b7280}.st.Sent{background:#eef6ff;color:#0369a1}.st.Approved{background:#e9f6ee;color:#1b6a3a}.st.Rejected{background:#fde8e6;color:#b42318}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:flex-start;justify-content:center;padding:36px 16px;overflow:auto;z-index:50}
+  .modal .box{background:#fff;border-radius:10px;max-width:640px;width:100%;padding:20px 22px}
+  .clk{cursor:pointer;color:var(--green);text-decoration:underline}
+  .hide{display:none}
 </style>
 </head>
 <body>
 <div class="band">
   <a class="back" href="/">← All tools</a>
   <h1>Quotation Maker</h1>
-  <p>Fill in the client, services and terms, then download a KNAP-branded quotation in Word (.docx). Everything is generated in your browser.</p>
+  <div class="tabs">
+    <button id="tabNew" class="on" type="button">New / Edit</button>
+    <button id="tabList" type="button">Quotations</button>
+    <button id="tabCo" type="button">Companies</button>
+  </div>
 </div>
 
 <main>
-  <div class="card">
-    <h2>1 · Client & quote</h2>
-    <div class="grid g4">
-      <div><label>Quotation No</label><input id="quoteNo"></div>
-      <div><label>Date</label><input id="date"></div>
-      <div><label>Name</label><input id="name" placeholder="Applicant / client name"></div>
-      <div><label>City</label><input id="city" placeholder="e.g. New Delhi"></div>
+  <!-- ============ NEW / EDIT ============ -->
+  <div id="viewNew">
+    <div class="card">
+      <h2>1 · Company & client <span id="editBadge" class="pill hide"></span></h2>
+      <div class="grid g4">
+        <div><label>From company</label><select id="companyId"></select></div>
+        <div><label>Quotation No</label><input id="quoteNo"></div>
+        <div><label>Date</label><input id="date"></div>
+        <div><label>Currency</label><select id="currency"><option>₹</option><option>$</option><option>€</option><option>£</option></select></div>
+      </div>
+      <div class="grid g3" style="margin-top:12px">
+        <div><label>Client name</label><input id="name" placeholder="Applicant / client"></div>
+        <div><label>City</label><input id="city"></div>
+        <div><label>Requirement / Subject</label><input id="subject"></div>
+      </div>
     </div>
-    <div class="grid" style="margin-top:12px"><div><label>Requirement / Subject</label><input id="subject" placeholder="e.g. Incorporation of Private Limited Company"></div></div>
-  </div>
 
-  <div class="card">
-    <h2>2 · Services</h2>
-    <table id="svcTbl"><thead><tr><th style="width:48px">#</th><th>Particulars</th><th style="width:80px">Qty</th><th style="width:130px">Rate (₹)</th><th style="width:130px;text-align:right">Amount</th><th style="width:36px"></th></tr></thead><tbody id="svcBody"></tbody></table>
-    <div class="row"><button class="btn ghost" id="addRow" type="button">+ Add service</button></div>
-    <div class="tot">Total: <b id="totOut">₹ 0</b></div>
-  </div>
+    <div class="card">
+      <h2>2 · Services</h2>
+      <table id="svcTbl"><thead><tr><th style="width:44px">#</th><th>Particulars</th><th style="width:76px">Qty</th><th style="width:120px">Rate</th><th style="width:120px;text-align:right">Amount</th><th style="width:34px"></th></tr></thead><tbody id="svcBody"></tbody></table>
+      <div class="row"><button class="btn ghost sm" id="addRow" type="button">+ Add service</button></div>
+    </div>
 
-  <div class="card">
-    <h2>3 · Terms, deliverables & checklist</h2>
-    <div class="grid g3">
-      <div><label>Terms (one per line)</label><textarea id="terms"></textarea></div>
-      <div><label>Deliverables (one per line)</label><textarea id="deliverables"></textarea></div>
-      <div><label>Documents / Checklist (one per line)</label><textarea id="checklist"></textarea></div>
+    <div class="card">
+      <h2>3 · Tax, discount & totals</h2>
+      <div class="grid g4">
+        <div><label>GST</label><select id="gstOn"><option value="no">No GST</option><option value="yes">Add GST</option></select></div>
+        <div><label>GST rate %</label><select id="gstRate"><option>0</option><option>5</option><option>12</option><option selected>18</option><option>28</option></select></div>
+        <div><label>GST type</label><select id="gstMode"><option value="intra">Intra-state (CGST + SGST)</option><option value="inter">Inter-state (IGST)</option></select></div>
+        <div><label>Round off total</label><select id="round"><option value="yes">Yes</option><option value="no">No</option></select></div>
+      </div>
+      <div class="grid g4" style="margin-top:12px">
+        <div><label>Discount</label><select id="discMode"><option value="none">None</option><option value="pct">Percent %</option><option value="amt">Amount</option></select></div>
+        <div><label>Discount value</label><input id="discVal" type="number" min="0" step="0.01" value="0"></div>
+      </div>
+      <div class="row"><div class="totals" id="totals"></div></div>
+    </div>
+
+    <div class="card">
+      <h2>4 · Terms, deliverables & checklist</h2>
+      <div class="grid g3">
+        <div><label>Terms (one per line)</label><textarea id="terms"></textarea></div>
+        <div><label>Deliverables (one per line)</label><textarea id="deliverables"></textarea></div>
+        <div><label>Documents / Checklist (one per line)</label><textarea id="checklist"></textarea></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>5 · Payment / bank details <span class="muted">(from the selected company — editable per quote)</span></h2>
+      <div class="grid g4">
+        <div><label>Account No.</label><input id="b_ac"></div>
+        <div><label>Entity Name</label><input id="b_entity"></div>
+        <div><label>IFSC Code</label><input id="b_ifsc"></div>
+        <div><label>Google Pay / Paytm / PhonePe</label><input id="b_upi"></div>
+        <div><label>Payment terms</label><input id="b_terms"></div>
+        <div><label>Contact person</label><input id="b_contact"></div>
+        <div><label>Phone</label><input id="b_phone"></div>
+        <div><label>Email</label><input id="b_email"></div>
+      </div>
+    </div>
+
+    <div class="row">
+      <button class="btn" id="dl" type="button">⬇ Download Word</button>
+      <button class="btn ghost" id="save" type="button">💾 Save quotation</button>
+      <button class="btn ghost hide" id="revise" type="button">＋ Save as new version</button>
+      <button class="btn ghost sm" id="newBlank" type="button">Clear / new</button>
+      <span class="muted" id="stat"></span>
     </div>
   </div>
 
-  <div class="card">
-    <h2>4 · Payment / bank details</h2>
-    <div class="grid g4">
-      <div><label>Account No.</label><input id="b_ac"></div>
-      <div><label>Entity Name</label><input id="b_entity"></div>
-      <div><label>IFSC Code</label><input id="b_ifsc"></div>
-      <div><label>Google Pay / Paytm / PhonePe</label><input id="b_upi"></div>
-      <div><label>Payment terms</label><input id="b_terms"></div>
-      <div><label>Contact person</label><input id="b_contact"></div>
-      <div><label>Phone</label><input id="b_phone"></div>
-      <div><label>Email</label><input id="b_email"></div>
+  <!-- ============ LIST ============ -->
+  <div id="viewList" class="hide">
+    <div class="card">
+      <h2>All quotations</h2>
+      <table><thead><tr><th>No</th><th>Company</th><th>Client</th><th>Subject</th><th style="text-align:right">Total</th><th>Rev</th><th>Status</th><th>Updated</th><th></th></tr></thead><tbody id="listBody"></tbody></table>
+      <p class="muted" id="listEmpty" style="margin-top:10px"></p>
     </div>
   </div>
 
-  <div class="row">
-    <button class="btn" id="dl" type="button">⬇ Download Word (.docx)</button>
-    <span class="muted" id="stat"></span>
+  <!-- ============ COMPANIES ============ -->
+  <div id="viewCo" class="hide">
+    <div class="card">
+      <h2>Companies <button class="btn ghost sm" id="coAdd" type="button" style="float:right">+ Add company</button></h2>
+      <table><thead><tr><th>Logo</th><th>Name</th><th>Brand</th><th>Bank A/c</th><th></th></tr></thead><tbody id="coBody"></tbody></table>
+    </div>
   </div>
 </main>
 
+<!-- history modal -->
+<div id="histModal" class="modal hide"><div class="box">
+  <div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0;color:var(--green)">Version history</h2><button class="btn ghost sm" id="histClose" type="button">Close</button></div>
+  <table style="margin-top:10px"><thead><tr><th>Rev</th><th>When</th><th style="text-align:right">Total</th><th>Note</th><th></th></tr></thead><tbody id="histBody"></tbody></table>
+</div></div>
+
+<!-- company edit modal -->
+<div id="coModal" class="modal hide"><div class="box">
+  <div style="display:flex;justify-content:space-between;align-items:center"><h2 style="margin:0;color:var(--green)" id="coTitle">Company</h2><button class="btn ghost sm" id="coCancel" type="button">Cancel</button></div>
+  <input type="hidden" id="c_id">
+  <div class="grid g2" style="margin-top:10px">
+    <div><label>Name</label><input id="c_name"></div>
+    <div><label>Tagline</label><input id="c_tagline" placeholder="WE CARE | WE DELIVER | WE HONOR"></div>
+    <div><label>Brand colour (hex)</label><input id="c_brand" placeholder="0070C0"></div>
+    <div><label>Logo (PNG/JPG)</label><input id="c_logo" type="file" accept="image/png,image/jpeg"></div>
+  </div>
+  <h2 style="margin:14px 0 6px;color:var(--green);font-size:13px">Bank / payment</h2>
+  <div class="grid g2">
+    <div><label>Account No.</label><input id="c_ac"></div>
+    <div><label>Entity Name</label><input id="c_entity"></div>
+    <div><label>IFSC</label><input id="c_ifsc"></div>
+    <div><label>Google Pay / Paytm / PhonePe</label><input id="c_upi"></div>
+    <div><label>Payment terms</label><input id="c_terms"></div>
+    <div><label>Contact person</label><input id="c_contact"></div>
+    <div><label>Phone</label><input id="c_phone"></div>
+    <div><label>Email</label><input id="c_email"></div>
+  </div>
+  <div class="row"><button class="btn" id="coSave" type="button">Save company</button><span class="muted" id="coStat"></span></div>
+</div></div>
+
 <script src="docx.umd.js"></script>
-<script>
-/* ---- the tested generator (identical to the Node prototype) ---- */
-function buildQuoteDoc(docx, data, logo){
-  const { Document, Paragraph, TextRun, ImageRun, Table, TableRow, TableCell,
-    WidthType, AlignmentType, ShadingType, BorderStyle, VerticalAlign } = docx;
-  const INK='292928', BLUE='0070C0', DARK='0B2A4A', FONT='Tahoma';
-  const money=(n)=>'₹ '+(Math.round((+n||0)*100)/100).toLocaleString('en-IN');
-  const services=(data.services||[]).filter(s=>(s.desc||'').trim());
-  const total=services.reduce((t,s)=>t+(+s.qty||0)*(+s.rate||0),0);
-  const run=(text,o={})=>new TextRun({text:String(text==null?'':text),font:FONT,...o});
-  const P=(children,o={})=>new Paragraph({children:Array.isArray(children)?children:[children],...o});
-  const bullet=(text)=>new Paragraph({children:[run(text,{size:19,color:INK})],bullet:{level:0},spacing:{after:20}});
-  const heading=(text)=>P([run(text,{bold:true,size:22,color:BLUE})],{spacing:{before:200,after:80},border:{bottom:{style:BorderStyle.SINGLE,size:6,color:BLUE,space:2}}});
-  const noB=()=>{const n={style:BorderStyle.NONE};return{top:n,bottom:n,left:n,right:n};};
-  const cols=[560,4906,900,1330,1330];
-  const cell=(children,w,o={})=>new TableCell({width:{size:w,type:WidthType.DXA},verticalAlign:VerticalAlign.CENTER,shading:o.fill?{type:ShadingType.CLEAR,color:'auto',fill:o.fill}:undefined,margins:{top:40,bottom:40,left:90,right:90},children:Array.isArray(children)?children:[children]});
-  const hCell=(t,w,al)=>cell(P([run(t,{bold:true,size:18,color:'FFFFFF'})],{alignment:al||AlignmentType.LEFT}),w,{fill:BLUE});
-  const tCell=(t,w,al,bold)=>cell(P([run(t,{size:18,color:INK,bold:!!bold})],{alignment:al||AlignmentType.LEFT}),w);
-  const headerRow=new TableRow({tableHeader:true,children:[hCell('#',cols[0],AlignmentType.CENTER),hCell('Particulars',cols[1]),hCell('Qty',cols[2],AlignmentType.CENTER),hCell('Rate',cols[3],AlignmentType.RIGHT),hCell('Amount',cols[4],AlignmentType.RIGHT)]});
-  const bodyRows=services.map((s,i)=>new TableRow({children:[tCell(String(i+1),cols[0],AlignmentType.CENTER),tCell(s.desc,cols[1]),tCell(String(s.qty||''),cols[2],AlignmentType.CENTER),tCell(money(s.rate),cols[3],AlignmentType.RIGHT),tCell(money((+s.qty||0)*(+s.rate||0)),cols[4],AlignmentType.RIGHT)]}));
-  const totalRow=new TableRow({children:[new TableCell({columnSpan:4,width:{size:cols[0]+cols[1]+cols[2]+cols[3],type:WidthType.DXA},margins:{top:60,bottom:60,left:90,right:90},children:[P([run('Total',{bold:true,size:20,color:INK})],{alignment:AlignmentType.RIGHT})]}),new TableCell({width:{size:cols[4],type:WidthType.DXA},verticalAlign:VerticalAlign.CENTER,shading:{type:ShadingType.CLEAR,color:'auto',fill:'EAF3FB'},margins:{top:60,bottom:60,left:90,right:90},children:[P([run(money(total),{bold:true,size:20,color:BLUE})],{alignment:AlignmentType.RIGHT})]})]});
-  const servicesTable=new Table({columnWidths:cols,width:{size:cols.reduce((a,b)=>a+b,0),type:WidthType.DXA},rows:[headerRow,...bodyRows,totalRow]});
-  const bank=data.bank||{};
-  const bankLine=(label,val)=>val?P([run(label+'  ',{bold:true,size:18,color:INK}),run(val,{size:18,color:INK})],{spacing:{after:10}}):null;
-  const banner=new Table({columnWidths:[9026],width:{size:9026,type:WidthType.DXA},rows:[new TableRow({children:[new TableCell({width:{size:9026,type:WidthType.DXA},shading:{type:ShadingType.CLEAR,color:'auto',fill:DARK},margins:{top:80,bottom:80,left:160,right:160},children:[P([run('PAYMENT  DETAILS',{bold:true,size:24,color:'FFFFFF'})])]})]})]});
-  const kids=[];
-  if(logo) kids.push(P([new ImageRun({type:'png',data:logo,transformation:{width:232,height:92}})],{spacing:{after:60}}));
-  kids.push(new Table({columnWidths:[5400,3626],width:{size:9026,type:WidthType.DXA},borders:{top:{style:BorderStyle.NONE},bottom:{style:BorderStyle.NONE},left:{style:BorderStyle.NONE},right:{style:BorderStyle.NONE},insideHorizontal:{style:BorderStyle.NONE},insideVertical:{style:BorderStyle.NONE}},rows:[new TableRow({children:[new TableCell({width:{size:5400,type:WidthType.DXA},borders:noB(),children:[P([run('Quotation No: ',{bold:true,size:19,color:INK}),run(data.quoteNo||'',{size:19,color:INK})]),P([run('Applicant: ',{bold:true,size:19,color:INK}),run(data.name||'',{size:19,color:INK})]),P([run('City: ',{bold:true,size:19,color:INK}),run(data.city||'',{size:19,color:INK})])]}),new TableCell({width:{size:3626,type:WidthType.DXA},borders:noB(),children:[P([run('Date: ',{bold:true,size:19,color:INK}),run(data.date||'',{size:19,color:INK})],{alignment:AlignmentType.RIGHT})]})]})]}));
-  kids.push(P([run(data.subject||'Quotation',{bold:true,size:26,color:DARK})],{alignment:AlignmentType.CENTER,spacing:{before:200,after:160}}));
-  kids.push(servicesTable);
-  if((data.terms||[]).length){kids.push(heading('Terms'));(data.terms||[]).forEach(t=>kids.push(bullet(t)));}
-  if((data.deliverables||[]).length){kids.push(heading('Deliverables'));(data.deliverables||[]).forEach(t=>kids.push(bullet(t)));}
-  if((data.checklist||[]).length){kids.push(heading('Documents / Checklist'));(data.checklist||[]).forEach(t=>kids.push(bullet(t)));}
-  kids.push(P([run('')],{spacing:{before:160}}));
-  kids.push(banner);
-  [bankLine('Account No.',bank.ac),bankLine('Entity Name',bank.entity),bankLine('IFSC Code',bank.ifsc),bankLine('Google Pay / Paytm / PhonePe',bank.upi),bankLine('Payment terms',bank.terms),bankLine('Contact person',bank.contact),bankLine('Phone',bank.phone),bankLine('Email',bank.email)].filter(Boolean).forEach(p=>kids.push(p));
-  return new Document({styles:{default:{document:{run:{font:FONT,size:19,color:INK}}}},sections:[{properties:{page:{margin:{top:900,bottom:900,left:1000,right:1000}}},children:kids}]});
-}
-
-/* ---- form wiring ---- */
-var $=function(s){return document.querySelector(s);};
-var LOGO=null;
-fetch('logo.png').then(function(r){return r.arrayBuffer();}).then(function(b){ LOGO=new Uint8Array(b); }).catch(function(){});
-
-function fyLabel(d){ var y=d.getFullYear(), m=d.getMonth(); var s=(m>=3)?y:y-1; return String(s%100)+'-'+String((s+1)%100); }
-function defaults(){
-  var today=new Date();
-  $('#date').value = today.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
-  var seq=(parseInt(localStorage.getItem('knap_quote_seq')||'44',10)+1);
-  $('#quoteNo').value='QT-'+fyLabel(today)+'-'+String(seq).padStart(3,'0');
-  $('#terms').value=['50% in advance, 50% on completion','Government / statutory fees at actuals','Timeline subject to timely submission of documents'].join('\n');
-  $('#deliverables').value=['Certificate / registration','Supporting documents','Post-completion support'].join('\n');
-  $('#checklist').value=['PAN & Aadhaar','Passport-size photo','Address proof','Mobile number & email id'].join('\n');
-  $('#b_ac').value='50200068721478'; $('#b_entity').value='KNAP Advisory Private Limited'; $('#b_ifsc').value='HDFC0004737';
-  $('#b_upi').value='9599406069'; $('#b_terms').value='50% in advance, 50% on completion';
-  $('#b_contact').value='Vipin Kumar'; $('#b_phone').value='9319957902'; $('#b_email').value='vipin@knapadvisory.com';
-}
-
-function svcRow(desc,qty,rate){
-  var tr=document.createElement('tr'); tr.className='svc';
-  tr.innerHTML='<td class="idx"></td>'
-    +'<td><input class="d" placeholder="Service / particular" value="'+(desc||'')+'"></td>'
-    +'<td><input class="q" type="number" min="0" step="1" value="'+(qty==null?1:qty)+'"></td>'
-    +'<td><input class="r" type="number" min="0" step="0.01" value="'+(rate==null?'':rate)+'"></td>'
-    +'<td class="amt">₹ 0</td><td><button class="rm" title="Remove">✕</button></td>';
-  tr.querySelector('.rm').addEventListener('click',function(){ tr.remove(); recompute(); });
-  ['input'].forEach(function(ev){ tr.addEventListener(ev,recompute); });
-  return tr;
-}
-var money=function(n){return '₹ '+(Math.round((+n||0)*100)/100).toLocaleString('en-IN');};
-function recompute(){
-  var tot=0, rows=document.querySelectorAll('#svcBody tr');
-  rows.forEach(function(tr,i){
-    var q=+tr.querySelector('.q').value||0, r=+tr.querySelector('.r').value||0, a=q*r;
-    tr.querySelector('.idx').textContent=i+1; tr.querySelector('.amt').textContent=money(a); tot+=a;
-  });
-  $('#totOut').textContent=money(tot);
-}
-function gather(){
-  var lines=function(id){ return ($('#'+id).value||'').split(/\r?\n/).map(function(s){return s.trim();}).filter(Boolean); };
-  var services=[]; document.querySelectorAll('#svcBody tr').forEach(function(tr){
-    var d=tr.querySelector('.d').value.trim(); if(!d) return;
-    services.push({desc:d, qty:+tr.querySelector('.q').value||0, rate:+tr.querySelector('.r').value||0});
-  });
-  return {
-    quoteNo:$('#quoteNo').value.trim(), name:$('#name').value.trim(), city:$('#city').value.trim(),
-    date:$('#date').value.trim(), subject:$('#subject').value.trim(), services:services,
-    terms:lines('terms'), deliverables:lines('deliverables'), checklist:lines('checklist'),
-    bank:{ ac:$('#b_ac').value.trim(), entity:$('#b_entity').value.trim(), ifsc:$('#b_ifsc').value.trim(),
-      upi:$('#b_upi').value.trim(), terms:$('#b_terms').value.trim(), contact:$('#b_contact').value.trim(),
-      phone:$('#b_phone').value.trim(), email:$('#b_email').value.trim() }
-  };
-}
-function download(){
-  var data=gather();
-  if(!data.services.length){ $('#stat').textContent='Add at least one service.'; return; }
-  $('#stat').textContent='Building…';
-  try{
-    var doc=buildQuoteDoc(window.docx, data, LOGO);
-    window.docx.Packer.toBlob(doc).then(function(blob){
-      var url=URL.createObjectURL(blob), a=document.createElement('a');
-      a.href=url; a.download='Quotation '+(data.name||'client')+' '+(data.quoteNo||'')+'.docx';
-      document.body.appendChild(a); a.click(); setTimeout(function(){document.body.removeChild(a);URL.revokeObjectURL(url);},1500);
-      var seq=parseInt((data.quoteNo.match(/(\d+)$/)||[])[1]||'0',10); if(seq) localStorage.setItem('knap_quote_seq',String(seq));
-      $('#stat').textContent='Downloaded '+a.download;
-    }).catch(function(e){ $('#stat').textContent='Error: '+e.message; });
-  }catch(e){ $('#stat').textContent='Error: '+e.message; }
-}
-
-defaults();
-[svcRow('',1,''),svcRow('',1,''),svcRow('',1,'')].forEach(function(tr){ $('#svcBody').appendChild(tr); });
-recompute();
-$('#addRow').addEventListener('click',function(){ $('#svcBody').appendChild(svcRow('',1,'')); recompute(); });
-$('#dl').addEventListener('click',download);
-</script>
+<script src="app.js"></script>
 </body>
 </html>

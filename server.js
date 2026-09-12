@@ -231,6 +231,83 @@ app.use('/bank2tally', express.static(path.join(__dirname, 'bank2tally'), {
   setHeaders: (res) => res.set(NO_CACHE),
 }));
 
+// ------------------------------------------------------------ Quotation store
+// Persistent JSON store on the data volume (KNAP_DATA=/data): company profiles
+// (multi-firm branding) + quotations with revision history. Zero new deps.
+const QDIR = path.join(process.env.KNAP_DATA || path.join(__dirname, 'data'), 'quotation');
+const QLOGOS = path.join(QDIR, 'logos');
+try { fs.mkdirSync(QLOGOS, { recursive: true }); } catch { /* ignore */ }
+const COMPANIES_F = path.join(QDIR, 'companies.json');
+const QUOTES_F = path.join(QDIR, 'quotes.json');
+const qRead = (f, def) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return def; } };
+const qWrite = (f, obj) => { const t = f + '.tmp'; fs.writeFileSync(t, JSON.stringify(obj, null, 2)); fs.renameSync(t, f); };
+const qUid = () => crypto.randomBytes(6).toString('hex');
+
+// Seed KNAP Advisory as the first company (its logo ships in quotation/logo.png).
+(function seedCompanies() {
+  if (fs.existsSync(COMPANIES_F)) return;
+  try { fs.copyFileSync(path.join(__dirname, 'quotation', 'logo.png'), path.join(QLOGOS, 'knap.png')); } catch { /* ignore */ }
+  qWrite(COMPANIES_F, [{
+    id: 'knap', name: 'KNAP Advisory Private Limited', tagline: 'WE CARE | WE DELIVER | WE HONOR',
+    brand: '0070C0', logoFile: 'knap.png',
+    bank: { ac: '50200068721478', entity: 'KNAP Advisory Private Limited', ifsc: 'HDFC0004737', upi: '9599406069',
+      terms: '50% in advance, 50% on completion', contact: 'Vipin Kumar', phone: '9319957902', email: 'vipin@knapadvisory.com' },
+  }]);
+})();
+
+const quoteLogoUpload = multer({
+  storage: multer.diskStorage({ destination: (_r, _f, cb) => cb(null, QLOGOS), filename: (_r, file, cb) => cb(null, qUid() + (path.extname(file.originalname || '') || '.png')) }),
+  limits: { fileSize: 3 * 1024 * 1024 },
+});
+
+// ---- companies ----
+app.get('/quotation/api/companies', (_req, res) => res.json({ companies: qRead(COMPANIES_F, []) }));
+app.post('/quotation/api/companies', quoteLogoUpload.single('logo'), (req, res) => {
+  const list = qRead(COMPANIES_F, []); const b = req.body || {};
+  const id = b.id || qUid();
+  let c = list.find((x) => x.id === id);
+  if (!c) { c = { id }; list.push(c); }
+  c.name = b.name || c.name || ''; c.tagline = b.tagline || ''; c.brand = String(b.brand || '0070C0').replace('#', '');
+  c.bank = { ac: b.ac || '', entity: b.entity || '', ifsc: b.ifsc || '', upi: b.upi || '', terms: b.terms || '', contact: b.contact || '', phone: b.phone || '', email: b.email || '' };
+  if (req.file) { if (c.logoFile) { try { fs.unlinkSync(path.join(QLOGOS, c.logoFile)); } catch { /* ignore */ } } c.logoFile = req.file.filename; }
+  qWrite(COMPANIES_F, list); res.json({ ok: true, company: c });
+});
+app.delete('/quotation/api/companies/:id', (req, res) => {
+  let list = qRead(COMPANIES_F, []); const c = list.find((x) => x.id === req.params.id);
+  if (c && c.logoFile) { try { fs.unlinkSync(path.join(QLOGOS, c.logoFile)); } catch { /* ignore */ } }
+  list = list.filter((x) => x.id !== req.params.id); qWrite(COMPANIES_F, list); res.json({ ok: true });
+});
+app.get('/quotation/api/companies/:id/logo', (req, res) => {
+  const c = qRead(COMPANIES_F, []).find((x) => x.id === req.params.id);
+  if (!c || !c.logoFile) return res.status(404).end();
+  res.set('Cache-Control', 'no-cache'); res.sendFile(path.join(QLOGOS, c.logoFile));
+});
+
+// ---- quotations (with revision history) ----
+const quoteSummary = (x) => ({ id: x.id, no: x.no, companyId: x.companyId, client: x.client, subject: x.subject, total: x.total, status: x.status, rev: x.rev, createdAt: x.createdAt, updatedAt: x.updatedAt });
+app.get('/quotation/api/quotes', (_req, res) => res.json({ quotes: qRead(QUOTES_F, []).map(quoteSummary).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt))) }));
+app.get('/quotation/api/quotes/:id', (req, res) => { const x = qRead(QUOTES_F, []).find((q) => q.id === req.params.id); if (!x) return res.status(404).json({ error: 'not found' }); res.json({ quote: x }); });
+app.post('/quotation/api/quotes', express.json({ limit: '3mb' }), (req, res) => {
+  const list = qRead(QUOTES_F, []); const d = req.body || {}; const now = new Date().toISOString();
+  const x = { id: qUid(), no: d.no || '', companyId: d.companyId || '', client: d.client || {}, subject: d.subject || '',
+    total: +d.total || 0, status: d.status || 'Draft', rev: 1, createdAt: now, updatedAt: now, token: qUid() + qUid(),
+    revisions: [{ rev: 1, at: now, note: d.note || '', data: d }] };
+  list.push(x); qWrite(QUOTES_F, list); res.json({ ok: true, quote: x });
+});
+app.post('/quotation/api/quotes/:id/revise', express.json({ limit: '3mb' }), (req, res) => {
+  const list = qRead(QUOTES_F, []); const x = list.find((q) => q.id === req.params.id); if (!x) return res.status(404).json({ error: 'not found' });
+  const d = req.body || {}; const now = new Date().toISOString(); x.rev = (x.rev || 1) + 1;
+  x.no = d.no || x.no; x.companyId = d.companyId || x.companyId; x.client = d.client || x.client; x.subject = d.subject || x.subject;
+  x.total = +d.total || x.total; x.status = d.status || x.status; x.updatedAt = now;
+  x.revisions.push({ rev: x.rev, at: now, note: d.note || '', data: d });
+  qWrite(QUOTES_F, list); res.json({ ok: true, quote: x });
+});
+app.post('/quotation/api/quotes/:id/status', express.json(), (req, res) => {
+  const list = qRead(QUOTES_F, []); const x = list.find((q) => q.id === req.params.id); if (!x) return res.status(404).json({ error: 'not found' });
+  x.status = req.body.status || x.status; x.updatedAt = new Date().toISOString(); qWrite(QUOTES_F, list); res.json({ ok: true, quote: x });
+});
+app.delete('/quotation/api/quotes/:id', (req, res) => { let list = qRead(QUOTES_F, []); list = list.filter((q) => q.id !== req.params.id); qWrite(QUOTES_F, list); res.json({ ok: true }); });
+
 app.use('/quotation', express.static(path.join(__dirname, 'quotation'), {
   setHeaders: (res) => res.set(NO_CACHE),
 }));
