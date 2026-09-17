@@ -316,6 +316,10 @@ app.use('/pdftools', express.static(path.join(__dirname, 'pdftools'), {
   setHeaders: (res) => res.set(NO_CACHE),
 }));
 
+app.use('/pdfeditor', express.static(path.join(__dirname, 'pdfeditor'), {
+  setHeaders: (res) => res.set(NO_CACHE),
+}));
+
 app.use('/debtor-creditor', express.static(path.join(__dirname, 'debtor-creditor'), {
   setHeaders: (res) => res.set(NO_CACHE),
 }));

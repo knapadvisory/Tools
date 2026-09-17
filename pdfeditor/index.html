@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF Editor · KNAP</title>
+<style>
+  :root{ --green:#1b6a3a; --head:#173f28; --ink:#1f2937; --mut:#6b7280; --rule:#e5e7eb; --card:#fff; --bg:#eef1ee; }
+  *{box-sizing:border-box} body{margin:0;font:14px/1.5 system-ui,Segoe UI,Roboto,sans-serif;color:var(--ink);background:var(--bg)}
+  .band{background:var(--head);color:#fff;padding:10px 20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  .band a.back{color:#bfe6cd;text-decoration:none;font-size:13px} .band h1{margin:0;font-size:18px}
+  .band .sp{margin-left:auto}
+  .btn{border:1px solid var(--green);background:var(--green);color:#fff;padding:8px 15px;border-radius:7px;font:inherit;font-weight:600;cursor:pointer}
+  .btn.ghost{background:#fff;color:var(--green)} .btn.sm{padding:6px 10px;font-weight:500;font-size:13px} .btn:disabled{opacity:.5;cursor:default}
+  /* toolbar */
+  .toolbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;background:#fff;border-bottom:1px solid var(--rule);padding:8px 14px;position:sticky;top:0;z-index:20}
+  .tool{display:flex;flex-direction:column;align-items:center;gap:2px;border:1px solid transparent;background:transparent;border-radius:8px;padding:5px 9px;cursor:pointer;color:#374151;min-width:56px}
+  .tool:hover{background:#f3f5f3} .tool.on{background:var(--green);color:#fff}
+  .tool .ic{font-size:17px;line-height:1} .tool .lb{font-size:11px}
+  .sep{width:1px;align-self:stretch;background:var(--rule);margin:2px 4px}
+  .props{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .props label{font-size:12px;color:var(--mut)} .props input[type=number]{width:64px;padding:6px;border:1px solid var(--rule);border-radius:6px;font:inherit}
+  .props input[type=color]{width:34px;height:30px;padding:0;border:1px solid var(--rule);border-radius:6px;background:#fff;cursor:pointer}
+  .nav{display:flex;align-items:center;gap:8px;margin-left:auto}
+  .nav .pn{font-size:13px;color:var(--mut);min-width:64px;text-align:center}
+  /* stage */
+  .wrap{display:flex;gap:14px;padding:16px;align-items:flex-start}
+  .rail{width:120px;flex:0 0 120px;display:flex;flex-direction:column;gap:8px;max-height:calc(100vh - 160px);overflow:auto}
+  .rail .th{border:2px solid var(--rule);border-radius:6px;overflow:hidden;cursor:pointer;background:#fff;position:relative}
+  .rail .th.on{border-color:var(--green)} .rail .th canvas{display:block;width:100%} .rail .th .n{position:absolute;bottom:2px;right:4px;font-size:10px;color:var(--mut);background:rgba(255,255,255,.8);border-radius:3px;padding:0 3px}
+  .stagewrap{flex:1;overflow:auto;max-height:calc(100vh - 160px);background:#dfe4df;border:1px solid var(--rule);border-radius:10px;padding:20px;display:flex;justify-content:center}
+  .stage{position:relative;box-shadow:0 6px 22px rgba(0,0,0,.18);background:#fff}
+  .stage canvas{display:block}
+  .overlay{position:absolute;left:0;top:0}
+  .overlay.cross{cursor:crosshair}
+  /* annotations */
+  .anno{position:absolute;box-sizing:border-box}
+  .anno.sel{outline:1.5px dashed var(--green);outline-offset:1px}
+  .anno .rz{position:absolute;right:-6px;bottom:-6px;width:13px;height:13px;background:#fff;border:2px solid var(--green);border-radius:3px;cursor:nwse-resize}
+  .anno .del{position:absolute;right:-9px;top:-11px;width:18px;height:18px;line-height:15px;text-align:center;background:#fff;border:1px solid #d1d5db;border-radius:50%;color:#b42318;font-size:11px;cursor:pointer;display:none;z-index:3}
+  .anno:hover .del{display:block}
+  .anno.image img,.anno.sign img{width:100%;height:100%;display:block;pointer-events:none}
+  .anno.text{min-width:26px} .anno.text .ed{outline:none;white-space:pre-wrap;cursor:text;padding:1px 2px;min-width:24px}
+  .anno.text .grip{position:absolute;left:-16px;top:0;width:14px;height:100%;display:flex;align-items:center;justify-content:center;color:var(--mut);cursor:move;font-size:11px;opacity:0;transition:opacity .1s}
+  .anno.text:hover .grip{opacity:1}
+  /* preload */
+  .drop{max-width:640px;margin:40px auto;border:2px dashed #c9d3cb;border-radius:14px;padding:48px 20px;text-align:center;color:var(--mut);cursor:pointer;background:#fafbfa}
+  .drop.hot{border-color:var(--green);background:#f0f7f2}
+  .hint{color:var(--mut);font-size:12px;margin:6px 14px}
+  /* signature modal */
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:center;justify-content:center;z-index:50}
+  .modal.show{display:flex} .sheet{background:#fff;border-radius:12px;padding:18px;width:min(520px,94vw)}
+  .sheet h3{margin:0 0 10px;font-size:16px;color:var(--green)}
+  #sigpad{border:1px dashed #c9d3cb;border-radius:8px;background:#fff;touch-action:none;width:100%;height:180px}
+  .hide{display:none}
+</style>
+</head>
+<body>
+<div class="band">
+  <a class="back" href="/">← All tools</a>
+  <h1>PDF Editor</h1>
+  <div class="sp"></div>
+  <button class="btn ghost sm" id="openBtn" type="button">Open another PDF</button>
+  <button class="btn" id="saveBtn" type="button" disabled>⬇ Save PDF</button>
+  <input type="file" id="file" accept="application/pdf" hidden>
+  <input type="file" id="imgfile" accept="image/*" hidden>
+</div>
+
+<div class="toolbar hide" id="toolbar">
+  <button class="tool on" data-tool="select" type="button"><span class="ic">🖱️</span><span class="lb">Select</span></button>
+  <button class="tool" data-tool="text" type="button"><span class="ic">🅣</span><span class="lb">Add text</span></button>
+  <button class="tool" data-tool="highlight" type="button"><span class="ic">🖍️</span><span class="lb">Highlight</span></button>
+  <button class="tool" data-tool="whiteout" type="button"><span class="ic">▭</span><span class="lb">Whiteout</span></button>
+  <button class="tool" data-tool="rect" type="button"><span class="ic">⬚</span><span class="lb">Box</span></button>
+  <button class="tool" data-tool="draw" type="button"><span class="ic">✏️</span><span class="lb">Draw</span></button>
+  <button class="tool" data-tool="image" type="button"><span class="ic">🖼️</span><span class="lb">Image</span></button>
+  <button class="tool" data-tool="sign" type="button"><span class="ic">✒️</span><span class="lb">Signature</span></button>
+  <div class="sep"></div>
+  <div class="props">
+    <label>Colour <input type="color" id="color" value="#111111"></label>
+    <label id="sizeWrap">Size <input type="number" id="size" min="6" max="200" value="18"></label>
+  </div>
+  <div class="sep"></div>
+  <button class="btn ghost sm" id="undo" type="button">↶ Undo</button>
+  <button class="btn ghost sm" id="clearp" type="button">Clear page</button>
+  <div class="nav">
+    <button class="btn ghost sm" id="prev" type="button">◀</button>
+    <span class="pn" id="pnum">–</span>
+    <button class="btn ghost sm" id="next" type="button">▶</button>
+  </div>
+</div>
+
+<div id="pre">
+  <div class="drop" id="drop">
+    <div style="font-size:34px">✎</div>
+    <div style="font-size:16px;color:#374151;margin-top:6px">Drop a PDF here, or click to choose</div>
+    <div class="hint">Add text, highlights, shapes, signatures &amp; images — flattened into a new PDF. Everything runs in your browser.</div>
+  </div>
+</div>
+
+<div class="wrap hide" id="editor">
+  <div class="rail" id="rail"></div>
+  <div class="stagewrap">
+    <div class="stage" id="stage">
+      <canvas id="page"></canvas>
+      <div class="overlay" id="overlay"></div>
+    </div>
+  </div>
+</div>
+
+<div class="hint hide" id="tip" style="text-align:center"></div>
+
+<!-- signature modal -->
+<div class="modal" id="sigModal">
+  <div class="sheet">
+    <h3>Draw your signature</h3>
+    <canvas id="sigpad"></canvas>
+    <div class="row" style="display:flex;gap:10px;margin-top:12px;justify-content:flex-end">
+      <button class="btn ghost sm" id="sigclear" type="button">Clear</button>
+      <button class="btn ghost sm" id="sigcancel" type="button">Cancel</button>
+      <button class="btn sm" id="siguse" type="button">Use signature</button>
+    </div>
+  </div>
+</div>
+
+<script src="/pdftools/pdf-lib.min.js"></script>
+<script src="/pdftools/pdf.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
