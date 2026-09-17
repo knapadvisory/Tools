@@ -5,9 +5,9 @@
 # "stirling-pdf" and registers a pdf.<domain> route with the shared Caddy —
 # the SAME pattern deploy/tools-setup.sh uses for apps.<domain>.
 #
-# Because a public PDF service on the open internet is a bad idea for a CA firm,
-# the route is protected with HTTP basic-auth at the Caddy layer (one shared
-# username/password for the whole firm). Files are processed on YOUR server and
+# Access is protected by Stirling-PDF's OWN session login (a single, clean
+# login — no stacked Caddy basic-auth popup). The initial admin is seeded from
+# STIRLING_USER / STIRLING_PASS below. Files are processed on YOUR server and
 # never leave it.
 #
 # Usage, on the VPS:
@@ -53,11 +53,25 @@ docker network create teamhub-net 2>/dev/null || true
 echo "==> Pulling $STIRLING_IMAGE (this can take a while for the -fat image)..."
 docker pull "$STIRLING_IMAGE"
 
+# Stirling-PDF has its OWN session-based login. We use ONLY that (not Caddy
+# basic-auth) so users get a single, clean login — no stacked browser popups.
+# The initial admin account is seeded from the credentials below, but that only
+# takes effect when the user database is empty. If a previous run already
+# created the default admin/stirling account, wipe it once with:
+#     RESET_STIRLING_USERS=1 bash deploy/stirling-setup.sh
+if [ "${RESET_STIRLING_USERS:-}" = "1" ]; then
+  echo "==> RESET_STIRLING_USERS=1 -> wiping the stirling-configs volume so the seeded login applies..."
+  docker rm -f stirling-pdf 2>/dev/null || true
+  docker volume rm stirling-configs 2>/dev/null || true
+fi
+
 echo "==> (Re)starting the stirling-pdf container..."
 docker rm -f stirling-pdf 2>/dev/null || true
 docker run -d --name stirling-pdf --restart unless-stopped \
   --network teamhub-net \
-  -e DISABLE_ADDITIONAL_FEATURES=true \
+  -e SECURITY_ENABLELOGIN=true \
+  -e SECURITY_INITIALLOGIN_USERNAME="$STIRLING_USER" \
+  -e SECURITY_INITIALLOGIN_PASSWORD="$STIRLING_PASS" \
   -e SYSTEM_DEFAULTLOCALE=en-GB \
   -e LANGS=en_GB \
   -v stirling-configs:/configs \
@@ -65,54 +79,34 @@ docker run -d --name stirling-pdf --restart unless-stopped \
   -v stirling-tessdata:/usr/share/tessdata \
   "$STIRLING_IMAGE"
 
-echo "==> Generating the Caddy basic-auth hash..."
-HASH="$(docker exec caddy caddy hash-password --plaintext "$STIRLING_PASS" 2>/dev/null || true)"
-if [ -z "$HASH" ]; then
-  echo "  ⚠ Could not generate a hash via the caddy container. Is the container named 'caddy'?"; exit 1
-fi
-
-echo "==> Registering the $STIRLING_DOMAIN route with Caddy (basic-auth protected)..."
+echo "==> Registering the $STIRLING_DOMAIN route with Caddy (plain reverse-proxy; Stirling handles login)..."
 mkdir -p /etc/teamhub/conf.d
 ROUTE_FILE=/etc/teamhub/conf.d/stirling.caddy
+NEW_ROUTE="$(printf '%s {\n    reverse_proxy stirling-pdf:8080\n}' "$STIRLING_DOMAIN")"
 
-write_route () {  # $1 = auth directive name (basic_auth | basicauth)
-  cat > "$ROUTE_FILE" <<EOF
-$STIRLING_DOMAIN {
-    $1 {
-        $STIRLING_USER $HASH
-    }
-    reverse_proxy stirling-pdf:8080
-}
-EOF
-}
-
-reload_caddy () { docker exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile 2>/dev/null; }
-
-# Caddy v2.8+ uses "basic_auth"; older builds use "basicauth". Try the new name,
-# fall back to the old one if the reload rejects it. Never restart Caddy — that
-# would drop every live connection (TeamHub, HR, the web console).
-write_route "basic_auth"
-if reload_caddy; then
-  echo "    Caddy reloaded gracefully (basic_auth)."
+if [ -f "$ROUTE_FILE" ] && [ "$(cat "$ROUTE_FILE" 2>/dev/null)" = "$NEW_ROUTE" ]; then
+  echo "    Route already registered and unchanged — leaving Caddy alone."
 else
-  echo "    basic_auth rejected — trying legacy 'basicauth'..."
-  write_route "basicauth"
-  if reload_caddy; then
-    echo "    Caddy reloaded gracefully (basicauth)."
+  printf '%s\n' "$NEW_ROUTE" > "$ROUTE_FILE"
+  # Never restart Caddy (that drops every live connection) — reload gracefully.
+  if docker exec caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile 2>/dev/null; then
+    echo "    Caddy reloaded gracefully (zero downtime)."
   else
-    echo "    ⚠ Caddy reload failed. Check the route by hand:"
-    echo "        cat $ROUTE_FILE"
-    echo "        docker exec caddy caddy reload --config /etc/caddy/Caddyfile"
+    echo "    ⚠ Caddy reload failed. Reload by hand: docker exec caddy caddy reload --config /etc/caddy/Caddyfile"
   fi
 fi
 
 cat <<EOF
 
 ============================================================
-Stirling-PDF is deployed.
+Stirling-PDF is deployed (single login — Stirling's own).
 
   URL:   https://$STIRLING_DOMAIN
   Login: $STIRLING_USER  /  (the password you just set)
+
+If you still see the default admin / stirling login (from an
+earlier run), reseed your credentials once:
+  RESET_STIRLING_USERS=1 bash deploy/stirling-setup.sh
 
 1) Point an A record for $STIRLING_DOMAIN at this server's IP.
    Caddy fetches the HTTPS certificate on first load (~30s).
@@ -131,7 +125,7 @@ Handy:
   docker restart stirling-pdf      # restart just this app
 Update to the latest Stirling release:
   git pull && bash deploy/stirling-setup.sh
-Change the password later:
-  STIRLING_PASS='newpass' bash deploy/stirling-setup.sh
+Change the password later: in the Stirling UI -> Account settings
+(or reseed a fresh admin with RESET_STIRLING_USERS=1 as above).
 ============================================================
 EOF
