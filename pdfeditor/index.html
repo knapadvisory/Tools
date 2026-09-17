@@ -41,6 +41,18 @@
   .anno:hover .del{display:block}
   .anno.image img,.anno.sign img{width:100%;height:100%;display:block;pointer-events:none}
   .anno.text{min-width:26px} .anno.text .ed{outline:none;white-space:pre-wrap;cursor:text;padding:1px 2px;min-width:24px}
+  .anno.stamp{display:inline-flex;align-items:center;justify-content:center;border:3px solid;border-radius:8px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;background:rgba(255,255,255,.4);padding:4px 12px;white-space:nowrap}
+  .anno.underline .ln,.anno.strikeout .ln{position:absolute;left:0;right:0;height:0;border-top-width:2px;border-top-style:solid}
+  /* text layer for Edit text */
+  .tlayer{position:absolute;left:0;top:0;pointer-events:none;display:none}
+  .tlayer.on{display:block}
+  .tlayer .ti{position:absolute;pointer-events:auto;cursor:text;border:1px solid rgba(27,106,58,.35);background:rgba(27,106,58,.07);border-radius:2px}
+  .tlayer .ti:hover{background:rgba(27,106,58,.22);border-color:var(--green)}
+  /* stamp bar */
+  .stampbar{display:none;gap:6px;flex-wrap:wrap;align-items:center;padding:8px 14px;background:#f7faf7;border-bottom:1px solid var(--rule)}
+  .stampbar.on{display:flex}
+  .stampbar .chip{border:1px solid var(--rule);background:#fff;border-radius:16px;padding:5px 12px;cursor:pointer;font-size:12px;font-weight:600;color:#374151}
+  .stampbar .chip:hover{border-color:var(--green);color:var(--green)}
   .anno.text .grip{position:absolute;left:-16px;top:0;width:14px;height:100%;display:flex;align-items:center;justify-content:center;color:var(--mut);cursor:move;font-size:11px;opacity:0;transition:opacity .1s}
   .anno.text:hover .grip{opacity:1}
   /* preload */
@@ -68,13 +80,20 @@
 
 <div class="toolbar hide" id="toolbar">
   <button class="tool on" data-tool="select" type="button"><span class="ic">🖱️</span><span class="lb">Select</span></button>
+  <button class="tool" data-tool="edittext" type="button"><span class="ic">✍️</span><span class="lb">Edit text</span></button>
   <button class="tool" data-tool="text" type="button"><span class="ic">🅣</span><span class="lb">Add text</span></button>
   <button class="tool" data-tool="highlight" type="button"><span class="ic">🖍️</span><span class="lb">Highlight</span></button>
+  <button class="tool" data-tool="underline" type="button"><span class="ic">U̲</span><span class="lb">Underline</span></button>
+  <button class="tool" data-tool="strikeout" type="button"><span class="ic">S̶</span><span class="lb">Strikeout</span></button>
   <button class="tool" data-tool="whiteout" type="button"><span class="ic">▭</span><span class="lb">Whiteout</span></button>
+  <button class="tool" data-tool="redact" type="button"><span class="ic">⬛</span><span class="lb">Black-out</span></button>
   <button class="tool" data-tool="rect" type="button"><span class="ic">⬚</span><span class="lb">Box</span></button>
+  <button class="tool" data-tool="arrow" type="button"><span class="ic">➔</span><span class="lb">Arrow</span></button>
+  <button class="tool" data-tool="line" type="button"><span class="ic">╱</span><span class="lb">Line</span></button>
   <button class="tool" data-tool="draw" type="button"><span class="ic">✏️</span><span class="lb">Draw</span></button>
   <button class="tool" data-tool="image" type="button"><span class="ic">🖼️</span><span class="lb">Image</span></button>
   <button class="tool" data-tool="sign" type="button"><span class="ic">✒️</span><span class="lb">Signature</span></button>
+  <button class="tool" data-tool="stamp" type="button"><span class="ic">✔️</span><span class="lb">Stamp</span></button>
   <div class="sep"></div>
   <div class="props">
     <label>Colour <input type="color" id="color" value="#111111"></label>
@@ -88,6 +107,20 @@
     <span class="pn" id="pnum">–</span>
     <button class="btn ghost sm" id="next" type="button">▶</button>
   </div>
+</div>
+
+<div class="stampbar" id="stampbar">
+  <span class="chip" data-kind="stamp" data-text="APPROVED" data-color="#1b6a3a">APPROVED</span>
+  <span class="chip" data-kind="stamp" data-text="DRAFT" data-color="#6b7280">DRAFT</span>
+  <span class="chip" data-kind="stamp" data-text="PAID" data-color="#2563eb">PAID</span>
+  <span class="chip" data-kind="stamp" data-text="RECEIVED" data-color="#0e7490">RECEIVED</span>
+  <span class="chip" data-kind="stamp" data-text="ORIGINAL" data-color="#7c3aed">ORIGINAL</span>
+  <span class="chip" data-kind="stamp" data-text="CONFIDENTIAL" data-color="#b42318">CONFIDENTIAL</span>
+  <span class="chip" data-kind="stamp" data-text="CERTIFIED TRUE COPY" data-color="#1b6a3a">CERTIFIED TRUE COPY</span>
+  <span style="width:1px;background:#d1d5db"></span>
+  <span class="chip" data-kind="text" data-text="{date}" data-color="#111111">📅 Today's date</span>
+  <span class="chip" data-kind="text" data-text="Page {p}" data-color="#111111"># Page number</span>
+  <span class="chip" data-kind="text" data-text="Page {p} of {n}" data-color="#111111"># Page x of N</span>
 </div>
 
 <div id="pre">
@@ -104,6 +137,7 @@
     <div class="stage" id="stage">
       <canvas id="page"></canvas>
       <div class="overlay" id="overlay"></div>
+      <div class="tlayer" id="tlayer"></div>
     </div>
   </div>
 </div>
