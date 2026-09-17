@@ -25,6 +25,7 @@ COPY pdf-unlock/ ./pdf-unlock/
 COPY tds26q/ ./tds26q/
 COPY bank2tally/ ./bank2tally/
 COPY quotation/ ./quotation/
+COPY pdftools/ ./pdftools/
 COPY debtor-creditor/ ./debtor-creditor/
 COPY itc-reco/ ./itc-reco/
 COPY gstr1/ ./gstr1/

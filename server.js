@@ -312,6 +312,10 @@ app.use('/quotation', express.static(path.join(__dirname, 'quotation'), {
   setHeaders: (res) => res.set(NO_CACHE),
 }));
 
+app.use('/pdftools', express.static(path.join(__dirname, 'pdftools'), {
+  setHeaders: (res) => res.set(NO_CACHE),
+}));
+
 app.use('/debtor-creditor', express.static(path.join(__dirname, 'debtor-creditor'), {
   setHeaders: (res) => res.set(NO_CACHE),
 }));
