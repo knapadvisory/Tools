@@ -45,15 +45,26 @@ function fileCard(name,i,arr,onChange){
 }
 function setPrev(card,url){ var p=card.querySelector('.prev'); p.innerHTML='<img src="'+url+'">'; }
 
-/* drag-to-reorder: attach to any element that represents arr[pos] */
-var _dragSrc=null;
+/* drag-to-reorder: attach to any element that represents arr[pos].
+   Shows a thick insertion bar on the side the item will land, so the drop target is unmistakable. */
+var _dragSrc=null, _dropSide='before';
+function clearDropMarks(){ document.querySelectorAll('.drop-before,.drop-after').forEach(function(x){x.classList.remove('drop-before','drop-after');}); }
 function makeDraggable(el,pos,arr,onChange){
   el.draggable=true;
-  el.addEventListener('dragstart',function(e){ _dragSrc=pos; try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',String(pos));}catch(_){} el.classList.add('dragging'); });
-  el.addEventListener('dragend',function(){ el.classList.remove('dragging'); _dragSrc=null; });
-  el.addEventListener('dragover',function(e){ if(_dragSrc==null)return; e.preventDefault(); e.dataTransfer.dropEffect='move'; el.classList.add('dragover'); });
-  el.addEventListener('dragleave',function(){ el.classList.remove('dragover'); });
-  el.addEventListener('drop',function(e){ e.preventDefault(); el.classList.remove('dragover'); if(_dragSrc==null||_dragSrc===pos)return; var it=arr.splice(_dragSrc,1)[0]; arr.splice(pos,0,it); _dragSrc=null; onChange(); });
+  el.addEventListener('dragstart',function(e){ _dragSrc=pos; try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',String(pos));}catch(_){} setTimeout(function(){el.classList.add('dragging');},0); });
+  el.addEventListener('dragend',function(){ el.classList.remove('dragging'); clearDropMarks(); _dragSrc=null; });
+  el.addEventListener('dragover',function(e){ if(_dragSrc==null)return; e.preventDefault(); e.dataTransfer.dropEffect='move';
+    clearDropMarks();
+    if(pos===_dragSrc) return;
+    var r=el.getBoundingClientRect(); var after=(e.clientX-r.left) > r.width/2; _dropSide=after?'after':'before';
+    el.classList.add(after?'drop-after':'drop-before');
+  });
+  el.addEventListener('dragleave',function(){ el.classList.remove('drop-before','drop-after'); });
+  el.addEventListener('drop',function(e){ e.preventDefault(); clearDropMarks(); if(_dragSrc==null)return;
+    var from=_dragSrc; var insert=pos+(_dropSide==='after'?1:0); if(from<insert) insert--;
+    _dragSrc=null; if(insert===from||insert<0){ return; }
+    var it=arr.splice(from,1)[0]; arr.splice(insert,0,it); onChange();
+  });
 }
 
 var mFiles=[];

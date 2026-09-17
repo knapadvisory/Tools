@@ -55,8 +55,14 @@
   .thumb .badge{position:absolute;top:5px;left:5px;font-size:10px;font-weight:800;color:#fff;border-radius:5px;padding:1px 6px;letter-spacing:.3px}
   .thumb.dim{opacity:.35} .thumb.sel-on{box-shadow:0 0 0 2px var(--green) inset}
   /* drag-to-reorder */
-  .fcard[draggable],.thumb[draggable]{cursor:grab} .fcard.dragging,.thumb.dragging{opacity:.4;cursor:grabbing}
-  .fcard.dragover,.thumb.dragover{outline:2px dashed var(--green);outline-offset:2px}
+  .fcard[draggable],.thumb[draggable]{cursor:grab;transition:transform .1s,box-shadow .1s,opacity .1s}
+  .fcard.dragging,.thumb.dragging{opacity:.35;transform:scale(.9);cursor:grabbing;box-shadow:none}
+  /* the card the page will drop next to lifts + tints */
+  .fcard.drop-before,.fcard.drop-after,.thumb.drop-before,.thumb.drop-after{transform:scale(1.04);background:#eafaf0;box-shadow:0 6px 18px rgba(27,106,58,.28)}
+  /* thick green insertion bar in the gap, on the side the page will land */
+  .fcard.drop-before::before,.fcard.drop-after::after,.thumb.drop-before::before,.thumb.drop-after::after{content:'';position:absolute;top:6%;bottom:6%;width:7px;border-radius:4px;background:var(--green);box-shadow:0 0 10px 1px rgba(27,106,58,.75);z-index:6}
+  .fcard.drop-before::before,.thumb.drop-before::before{left:-12px}
+  .fcard.drop-after::after,.thumb.drop-after::after{right:-12px}
   .bar{height:8px;background:#e5e7eb;border-radius:5px;overflow:hidden;margin-top:12px;display:none} .bar>div{height:100%;width:0;background:var(--green);transition:width .2s}
   .hide{display:none}
 </style>
