@@ -24,11 +24,25 @@
   label{display:block;font-size:12px;color:var(--mut);margin:0 0 3px} input,select{padding:7px 9px;border:1px solid var(--rule);border-radius:6px;font:inherit}
   ul.files{list-style:none;margin:14px 0 0;padding:0} ul.files li{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--rule);border-radius:8px;margin-bottom:8px;background:#fff}
   ul.files li .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap} ul.files li .mv{border:0;background:none;cursor:pointer;color:var(--mut);font-size:15px} ul.files li .x{border:0;background:none;cursor:pointer;color:#b42318;font-size:15px}
+  /* preview cards (merge / images) */
+  .filecards{display:flex;flex-wrap:wrap;gap:18px;margin-top:16px;padding:20px;background:#f6f7fb;border:1px solid var(--rule);border-radius:14px;min-height:60px}
+  .fcard{width:176px;background:#fff;border:1px solid var(--rule);border-radius:10px;box-shadow:0 4px 14px rgba(20,25,45,.10);padding:12px;text-align:center;position:relative}
+  .fcard .prev{height:210px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  .fcard .prev img{max-width:100%;max-height:210px;border:1px solid #eee;box-shadow:0 1px 5px rgba(0,0,0,.14)}
+  .fcard .prev .ld{color:var(--mut);font-size:12px}
+  .fcard .fn{margin-top:10px;font-size:13px;color:#3f6f52;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fcard .fctl{position:absolute;top:8px;right:8px;opacity:0;transition:opacity .12s}
+  .fcard:hover .fctl{opacity:1} .fcard .fctl button{border:1px solid var(--rule);background:#fff;border-radius:6px;cursor:pointer;font-size:12px;padding:2px 7px;color:#b42318}
+  .fcard .mvbar{position:absolute;top:50%;left:0;right:0;transform:translateY(-60px);display:flex;justify-content:space-between;padding:0 4px;opacity:0;transition:opacity .12s;pointer-events:none}
+  .fcard:hover .mvbar{opacity:1} .fcard .mvbar button{pointer-events:auto;border:1px solid var(--rule);background:rgba(255,255,255,.92);border-radius:6px;cursor:pointer;padding:3px 8px;font-size:13px}
   .thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:12px;margin-top:14px}
   .thumb{border:1px solid var(--rule);border-radius:8px;padding:6px;background:#fff;text-align:center;position:relative}
   .thumb.del{opacity:.35} .thumb canvas,.thumb img{max-width:100%;height:auto;border:1px solid #eee;border-radius:4px}
   .thumb .pg{font-size:11px;color:var(--mut);margin-top:4px} .thumb .tb{display:flex;justify-content:center;gap:2px;margin-top:4px;flex-wrap:wrap}
   .thumb .tb button{border:1px solid var(--rule);background:#fff;border-radius:5px;cursor:pointer;font-size:12px;padding:2px 5px}
+  /* drag-to-reorder */
+  .fcard[draggable],.thumb[draggable]{cursor:grab} .fcard.dragging,.thumb.dragging{opacity:.4;cursor:grabbing}
+  .fcard.dragover,.thumb.dragover{outline:2px dashed var(--green);outline-offset:2px}
   .bar{height:8px;background:#e5e7eb;border-radius:5px;overflow:hidden;margin-top:12px;display:none} .bar>div{height:100%;width:0;background:var(--green);transition:width .2s}
   .hide{display:none}
 </style>
@@ -52,7 +66,7 @@
     <div class="card">
       <h2>Merge PDFs</h2><p class="sub">Combine several PDFs into one. Drag to add, reorder, then merge. Everything runs in your browser.</p>
       <div class="drop" id="mDrop">Drop PDFs here, or click to choose <input type="file" id="mFile" accept="application/pdf" multiple hidden></div>
-      <ul class="files" id="mList"></ul>
+      <div class="filecards" id="mList"></div>
       <div class="bar" id="mBar"><div></div></div>
       <div class="row"><button class="btn" id="mGo" type="button" disabled>⬇ Merge & download</button><span class="muted" id="mStat"></span></div>
     </div>
@@ -76,7 +90,7 @@
   <!-- ORGANISE -->
   <div id="v_org" class="view hide">
     <div class="card">
-      <h2>Organise pages</h2><p class="sub">Reorder, rotate or delete pages, then save the new PDF.</p>
+      <h2>Organise pages</h2><p class="sub">Drag pages to reorder — or use ◀ ▶ — rotate, delete, then save the new PDF.</p>
       <div class="drop" id="oDrop">Drop a PDF here, or click to choose <input type="file" id="oFile" accept="application/pdf" hidden></div>
       <div class="thumbs" id="oThumbs"></div>
       <div class="bar" id="oBar"><div></div></div>
@@ -101,9 +115,9 @@
   <!-- JPG → PDF -->
   <div id="v_frompng" class="view hide">
     <div class="card">
-      <h2>JPG → PDF</h2><p class="sub">Turn images (JPG / PNG) into a single PDF — one image per page.</p>
+      <h2>JPG → PDF</h2><p class="sub">Turn images (JPG / PNG) into a single PDF — one image per page. Drag cards to reorder.</p>
       <div class="drop" id="iDrop">Drop images here, or click to choose <input type="file" id="iFile" accept="image/jpeg,image/png" multiple hidden></div>
-      <ul class="files" id="iList"></ul>
+      <div class="filecards" id="iList"></div>
       <div class="row">
         <div><label>Page size</label><select id="iSize"><option value="fit">Fit to each image</option><option value="a4">A4 (portrait)</option></select></div>
         <div><label>Margin (A4)</label><select id="iMargin"><option value="0">None</option><option value="24" selected>Small</option><option value="48">Medium</option></select></div>
