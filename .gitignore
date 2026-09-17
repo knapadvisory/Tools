@@ -1,3 +1,6 @@
 node_modules/
 connector/gstr2b-tally-data.json
 gstr1-data/
+
+# local quotation store (server test)
+/data/
