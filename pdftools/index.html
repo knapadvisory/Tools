@@ -32,14 +32,23 @@
   .fcard .prev .ld{color:var(--mut);font-size:12px}
   .fcard .fn{margin-top:10px;font-size:13px;color:#3f6f52;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .fcard .fctl{position:absolute;top:8px;right:8px;opacity:0;transition:opacity .12s}
-  .fcard:hover .fctl{opacity:1} .fcard .fctl button{border:1px solid var(--rule);background:#fff;border-radius:6px;cursor:pointer;font-size:12px;padding:2px 7px;color:#b42318}
+  .fcard:hover .fctl{opacity:1} .fcard .fctl button{border:1px solid var(--rule);background:#fff;border-radius:7px;cursor:pointer;padding:3px;display:flex;align-items:center;justify-content:center}
+  .fcard .fctl button img{width:18px;height:18px;display:block}
+  img{-webkit-user-drag:none;user-drag:none}
   .fcard .mvbar{position:absolute;top:50%;left:0;right:0;transform:translateY(-60px);display:flex;justify-content:space-between;padding:0 4px;opacity:0;transition:opacity .12s;pointer-events:none}
-  .fcard:hover .mvbar{opacity:1} .fcard .mvbar button{pointer-events:auto;border:1px solid var(--rule);background:rgba(255,255,255,.92);border-radius:6px;cursor:pointer;padding:3px 8px;font-size:13px}
-  .thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:12px;margin-top:14px}
-  .thumb{border:1px solid var(--rule);border-radius:8px;padding:6px;background:#fff;text-align:center;position:relative}
-  .thumb.del{opacity:.35} .thumb canvas,.thumb img{max-width:100%;height:auto;border:1px solid #eee;border-radius:4px}
-  .thumb .pg{font-size:11px;color:var(--mut);margin-top:4px} .thumb .tb{display:flex;justify-content:center;gap:2px;margin-top:4px;flex-wrap:wrap}
-  .thumb .tb button{border:1px solid var(--rule);background:#fff;border-radius:5px;cursor:pointer;font-size:12px;padding:2px 5px}
+  .fcard:hover .mvbar{opacity:1} .fcard .mvbar button{pointer-events:auto;border:1px solid var(--rule);background:rgba(255,255,255,.92);border-radius:7px;cursor:pointer;padding:3px;display:flex;align-items:center;justify-content:center}
+  .fcard .mvbar button img{width:20px;height:20px;display:block}
+  .thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px;margin-top:14px}
+  .thumb{border:1px solid var(--rule);border-radius:8px;padding:6px;background:#fff;text-align:center;position:relative;display:flex;flex-direction:column}
+  .thumb.del{opacity:.4}
+  /* fixed-height media box keeps every card the same height, so the toolbar never floats up when a page is rotated */
+  .thumb .tw{height:160px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+  .thumb .tw canvas,.thumb .tw img{max-width:100%;max-height:160px;height:auto;border:1px solid #eee;border-radius:4px}
+  .thumb .pg{font-size:11px;color:var(--mut);margin-top:6px}
+  .thumb .tb{display:flex;justify-content:center;gap:3px;margin-top:auto;padding-top:6px}
+  .thumb .tb button{border:1px solid var(--rule);background:#fff;border-radius:6px;cursor:pointer;padding:3px;display:flex;align-items:center;justify-content:center}
+  .thumb .tb button img{width:19px;height:19px;display:block}
+  .thumb.pick{cursor:pointer} .thumb.pick:hover{box-shadow:0 0 0 2px var(--green) inset}
   /* segmented controls + split panes */
   .seg{display:inline-flex;border:1px solid var(--rule);border-radius:9px;overflow:hidden;background:#f3f5f3}
   .seg button{border:0;background:transparent;padding:9px 15px;cursor:pointer;font:inherit;color:var(--mut)}
@@ -128,7 +137,7 @@
             <button data-k="select" type="button">Select pages</button>
           </div>
           <div id="sSelectWrap" class="hide" style="margin-top:12px">
-            <label>Pages to extract (e.g. 1,5-8)</label><input id="sPagesList" placeholder="1,5-8">
+            <label>Pages to extract — type <b>1,5-8</b> or click pages in the preview below</label><input id="sPagesList" placeholder="1,5-8">
           </div>
           <label class="chk"><input type="checkbox" id="sMergePages"> Merge extracted pages into one PDF file</label>
         </div>

@@ -36,8 +36,8 @@ function renderFirstPage(f){
 function fileCard(name,i,arr,onChange){
   var card=document.createElement('div'); card.className='fcard';
   card.innerHTML='<div class="prev"><span class="ld">rendering…</span></div><div class="fn" title="'+name.replace(/"/g,'&quot;')+'">'+name+'</div>'
-    +'<div class="fctl"><button class="x" title="Remove">✕</button></div>'
-    +'<div class="mvbar"><button class="l" title="Move left">◀</button><button class="r" title="Move right">▶</button></div>';
+    +'<div class="fctl"><button class="x" title="Remove"><img src="ic-trash.png" draggable="false"></button></div>'
+    +'<div class="mvbar"><button class="l" title="Move left"><img src="ic-left.png" draggable="false"></button><button class="r" title="Move right"><img src="ic-right.png" draggable="false"></button></div>';
   card.querySelector('.x').onclick=function(){ arr.splice(i,1); onChange(); };
   card.querySelector('.l').onclick=function(){ if(i>0){var t=arr[i-1];arr[i-1]=arr[i];arr[i]=t;onChange();} };
   card.querySelector('.r').onclick=function(){ if(i<arr.length-1){var t=arr[i+1];arr[i+1]=arr[i];arr[i]=t;onChange();} };
@@ -145,12 +145,25 @@ function renderSThumbs(){
   loadPdfjs(sBytes).then(function(pdf){
     for(var i=0;i<sCount;i++){ (function(i){
       var div=document.createElement('div'); div.className='thumb';
-      div.innerHTML='<canvas></canvas><div class="pg">page '+(i+1)+'</div><span class="badge" style="display:none"></span>';
+      div.innerHTML='<div class="tw"><canvas></canvas></div><div class="pg">page '+(i+1)+'</div><span class="badge" style="display:none"></span>';
+      div.addEventListener('click',function(){ if(sSplitMode==='pages' && sPagesKind==='select') togglePageSelect(i+1); });
       host.appendChild(div); sThumbEls[i]=div;
       pdf.getPage(i+1).then(function(page){ var base=page.rotate||0; var vp=page.getViewport({scale:0.32,rotation:base}); var cv=div.querySelector('canvas'); cv.width=vp.width; cv.height=vp.height; page.render({canvasContext:cv.getContext('2d'),viewport:vp}); });
     })(i); }
     paintSplit();
   }).catch(function(e){ host.innerHTML='<span class="muted">Preview unavailable: '+e.message+'</span>'; });
+}
+function serializePages(nums){
+  var out=[], i=0;
+  while(i<nums.length){ var s=nums[i], e=s; while(i+1<nums.length && nums[i+1]===e+1){ e=nums[++i]; } out.push(s===e?String(s):(s+'-'+e)); i++; }
+  return out.join(',');
+}
+function togglePageSelect(pageNo){
+  var set={}; parseRange($('#sPagesList').value,sCount).forEach(function(pi){ set[pi+1]=1; });
+  if(set[pageNo]) delete set[pageNo]; else set[pageNo]=1;
+  var nums=Object.keys(set).map(Number).sort(function(a,b){return a-b;});
+  $('#sPagesList').value=serializePages(nums);
+  refreshSplit();
 }
 
 function computeSplitPlan(){
@@ -178,14 +191,15 @@ function computeSplitPlan(){
 }
 function paintSplit(){
   var plan=computeSplitPlan();
-  sThumbEls.forEach(function(d){ if(!d)return; d.classList.remove('dim','sel-on'); d.style.boxShadow=''; var b=d.querySelector('.badge'); if(b){b.style.display='none';} });
+  sThumbEls.forEach(function(d){ if(!d)return; d.classList.remove('dim','sel-on','pick'); d.style.boxShadow=''; var b=d.querySelector('.badge'); if(b){b.style.display='none';} });
+  var pickable = (sSplitMode==='pages' && sPagesKind==='select');
   if(sSplitMode==='range'){
     var owner=[]; for(var k=0;k<sCount;k++) owner[k]=-1;
     plan.groups.forEach(function(g,gi){ g.idxs.forEach(function(pi){ if(pi>=0&&pi<sCount&&owner[pi]<0) owner[pi]=gi; }); });
     sThumbEls.forEach(function(d,pi){ if(!d)return; var gi=owner[pi]; var b=d.querySelector('.badge'); if(gi>=0){ var g=plan.groups[gi]; if(b){ b.textContent=g.label.replace('Range','R').replace('Part','P'); b.style.background=g.color; b.style.display=''; } d.style.boxShadow='0 0 0 2px '+g.color+' inset'; } else { d.classList.add('dim'); } });
   } else {
     var s={}; (plan._selected||[]).forEach(function(pi){ s[pi]=1; });
-    sThumbEls.forEach(function(d,pi){ if(!d)return; if(s[pi]) d.classList.add('sel-on'); else d.classList.add('dim'); });
+    sThumbEls.forEach(function(d,pi){ if(!d)return; if(pickable) d.classList.add('pick'); if(s[pi]) d.classList.add('sel-on'); });
   }
 }
 function refreshSplit(){
@@ -226,7 +240,14 @@ function renderOrg(pdf){
   var host=$('#oThumbs'); host.innerHTML='';
   oPages.forEach(function(p,pos){
     var div=document.createElement('div'); div.className='thumb'+(p.del?' del':'');
-    div.innerHTML='<canvas></canvas><div class="pg">page '+(p.idx+1)+'</div><div class="tb"><button class="l">◀</button><button class="rl">⟲</button><button class="rr">⟳</button><button class="d">'+(p.del?'↺':'🗑')+'</button><button class="r">▶</button></div>';
+    div.innerHTML='<div class="tw"><canvas></canvas></div><div class="pg">page '+(p.idx+1)+'</div>'
+      +'<div class="tb">'
+      +'<button class="l" title="Move left"><img src="ic-left.png" draggable="false"></button>'
+      +'<button class="rl" title="Rotate left"><img src="ic-rot-l.png" draggable="false"></button>'
+      +'<button class="rr" title="Rotate right"><img src="ic-rot-r.png" draggable="false"></button>'
+      +'<button class="d" title="'+(p.del?'Restore':'Delete')+'"><img src="ic-trash.png" draggable="false"></button>'
+      +'<button class="r" title="Move right"><img src="ic-right.png" draggable="false"></button>'
+      +'</div>';
     makeDraggable(div,pos,oPages,function(){renderOrg(pdf);});
     host.appendChild(div);
     // render thumb
