@@ -83,28 +83,128 @@ $('#mGo').addEventListener('click',function(){
 });
 
 /* ---------------- SPLIT ---------------- */
-var sBytes=null, sCount=0;
-setupDrop('#sDrop','#sFile',function(fs){ var f=fs[0]; ab(f).then(function(a){ sBytes=a; return PDFDocument.load(a,{ignoreEncryption:true}); }).then(function(doc){ sCount=doc.getPageCount(); $('#sInfo').textContent=f.name+' — '+sCount+' pages'; $('#sGo').disabled=false; }).catch(function(e){$('#sInfo').textContent='Could not read: '+e.message;}); });
-$('#sMode').addEventListener('change',function(){ $('#sRangeWrap').classList.toggle('hide',$('#sMode').value!=='range'); });
+var sBytes=null, sCount=0, sThumbEls=[];
+var sSplitMode='range', sRangeKind='custom', sPagesKind='all';
+var sRanges=[]; // [{from,to}]
+var RCOL=['#1b6a3a','#2563eb','#b45309','#7c3aed','#be185d','#0e7490','#4d7c0f','#9d174d'];
+
 function parseRange(str,max){
   var out=[], seen={};
   (str||'').split(',').forEach(function(part){ part=part.trim(); if(!part)return; var m=part.match(/^(\d+)\s*-\s*(\d+)$/); if(m){ var a=+m[1],b=+m[2]; for(var i=Math.min(a,b);i<=Math.max(a,b);i++) if(i>=1&&i<=max&&!seen[i]){seen[i]=1;out.push(i-1);} } else if(/^\d+$/.test(part)){ var n=+part; if(n>=1&&n<=max&&!seen[n]){seen[n]=1;out.push(n-1);} } });
   return out;
 }
+function clampPg(v){ var n=parseInt(v,10); if(isNaN(n))return 1; return Math.max(1,Math.min(sCount,n)); }
+function segOn(sel,btn){ $(sel).querySelectorAll('button').forEach(function(x){x.classList.toggle('on',x===btn);}); }
+
+setupDrop('#sDrop','#sFile',function(fs){
+  var f=fs[0];
+  ab(f).then(function(a){ sBytes=a; return PDFDocument.load(a,{ignoreEncryption:true}); }).then(function(doc){
+    sCount=doc.getPageCount(); $('#sInfo').textContent=f.name+' — '+sCount+' pages';
+    sRanges=[{from:1,to:sCount}];
+    $('#sPanel').classList.remove('hide');
+    renderRanges(); renderSThumbs(); refreshSplit();
+  }).catch(function(e){ $('#sInfo').textContent='Could not read: '+e.message; $('#sPanel').classList.add('hide'); $('#sGo').disabled=true; });
+});
+
+$('#sMode2').addEventListener('click',function(e){ var b=e.target.closest('button'); if(!b)return; sSplitMode=b.dataset.m; segOn('#sMode2',b); $('#sRangePane').classList.toggle('hide',sSplitMode!=='range'); $('#sPagesPane').classList.toggle('hide',sSplitMode!=='pages'); refreshSplit(); });
+$('#sRangeKind').addEventListener('click',function(e){ var b=e.target.closest('button'); if(!b)return; sRangeKind=b.dataset.k; segOn('#sRangeKind',b); $('#sCustomWrap').classList.toggle('hide',sRangeKind!=='custom'); $('#sFixedWrap').classList.toggle('hide',sRangeKind!=='fixed'); refreshSplit(); });
+$('#sPagesKind').addEventListener('click',function(e){ var b=e.target.closest('button'); if(!b)return; sPagesKind=b.dataset.k; segOn('#sPagesKind',b); $('#sSelectWrap').classList.toggle('hide',sPagesKind!=='select'); refreshSplit(); });
+$('#sAddRange').addEventListener('click',function(){ sRanges.push({from:1,to:sCount}); renderRanges(); refreshSplit(); });
+$('#sFixedN').addEventListener('input',refreshSplit);
+$('#sPagesList').addEventListener('input',refreshSplit);
+$('#sMergeRanges').addEventListener('change',refreshSplit);
+$('#sMergePages').addEventListener('change',refreshSplit);
+
+function renderRanges(){
+  var host=$('#sRanges'); host.innerHTML='';
+  sRanges.forEach(function(r,i){
+    var row=document.createElement('div'); row.className='rrow';
+    row.innerHTML='<span class="rn" style="color:'+RCOL[i%RCOL.length]+'">Range '+(i+1)+'</span>'
+      +'<label>from</label><input type="number" class="rf" min="1" max="'+sCount+'" value="'+r.from+'">'
+      +'<label>to</label><input type="number" class="rt" min="1" max="'+sCount+'" value="'+r.to+'">'
+      +(sRanges.length>1?'<button class="del" title="Remove">✕</button>':'');
+    row.querySelector('.rf').addEventListener('input',function(){ r.from=clampPg(this.value); refreshSplit(); });
+    row.querySelector('.rt').addEventListener('input',function(){ r.to=clampPg(this.value); refreshSplit(); });
+    var del=row.querySelector('.del'); if(del) del.onclick=function(){ sRanges.splice(i,1); renderRanges(); refreshSplit(); };
+    host.appendChild(row);
+  });
+}
+function renderSThumbs(){
+  var host=$('#sThumbs'); host.innerHTML=''; sThumbEls=[];
+  loadPdfjs(sBytes).then(function(pdf){
+    for(var i=0;i<sCount;i++){ (function(i){
+      var div=document.createElement('div'); div.className='thumb';
+      div.innerHTML='<canvas></canvas><div class="pg">page '+(i+1)+'</div><span class="badge" style="display:none"></span>';
+      host.appendChild(div); sThumbEls[i]=div;
+      pdf.getPage(i+1).then(function(page){ var base=page.rotate||0; var vp=page.getViewport({scale:0.32,rotation:base}); var cv=div.querySelector('canvas'); cv.width=vp.width; cv.height=vp.height; page.render({canvasContext:cv.getContext('2d'),viewport:vp}); });
+    })(i); }
+    paintSplit();
+  }).catch(function(e){ host.innerHTML='<span class="muted">Preview unavailable: '+e.message+'</span>'; });
+}
+
+function computeSplitPlan(){
+  var plan={groups:[], merge:false, valid:false, count:0, _selected:null};
+  if(!sCount) return plan;
+  if(sSplitMode==='range'){
+    if(sRangeKind==='custom'){
+      plan.merge=$('#sMergeRanges').checked;
+      sRanges.forEach(function(r,i){ var a=Math.min(r.from,r.to),b=Math.max(r.from,r.to); var idxs=[]; for(var p=a;p<=b;p++) idxs.push(p-1); plan.groups.push({idxs:idxs,color:RCOL[i%RCOL.length],label:'Range '+(i+1)}); });
+      plan.valid=plan.groups.length>0 && plan.groups.every(function(g){return g.idxs.length>0;});
+    } else {
+      var n=parseInt($('#sFixedN').value,10)||0;
+      if(n>=1){ for(var s=0;s<sCount;s+=n){ var idxs2=[]; for(var p2=s;p2<Math.min(s+n,sCount);p2++) idxs2.push(p2); plan.groups.push({idxs:idxs2,color:RCOL[plan.groups.length%RCOL.length],label:'Part '+(plan.groups.length+1)}); } plan.valid=plan.groups.length>0; }
+      plan.merge=false;
+    }
+  } else {
+    plan.merge=$('#sMergePages').checked;
+    var sel = sPagesKind==='all' ? (function(){var a=[];for(var p=0;p<sCount;p++)a.push(p);return a;})() : parseRange($('#sPagesList').value,sCount);
+    plan._selected=sel;
+    if(plan.merge){ if(sel.length){ plan.groups.push({idxs:sel,color:RCOL[0],label:'Extracted'}); plan.valid=true; } }
+    else { sel.forEach(function(pi){ plan.groups.push({idxs:[pi],color:RCOL[0],label:'Page '+(pi+1)}); }); plan.valid=sel.length>0; }
+  }
+  plan.count = plan.merge ? 1 : plan.groups.length;
+  return plan;
+}
+function paintSplit(){
+  var plan=computeSplitPlan();
+  sThumbEls.forEach(function(d){ if(!d)return; d.classList.remove('dim','sel-on'); d.style.boxShadow=''; var b=d.querySelector('.badge'); if(b){b.style.display='none';} });
+  if(sSplitMode==='range'){
+    var owner=[]; for(var k=0;k<sCount;k++) owner[k]=-1;
+    plan.groups.forEach(function(g,gi){ g.idxs.forEach(function(pi){ if(pi>=0&&pi<sCount&&owner[pi]<0) owner[pi]=gi; }); });
+    sThumbEls.forEach(function(d,pi){ if(!d)return; var gi=owner[pi]; var b=d.querySelector('.badge'); if(gi>=0){ var g=plan.groups[gi]; if(b){ b.textContent=g.label.replace('Range','R').replace('Part','P'); b.style.background=g.color; b.style.display=''; } d.style.boxShadow='0 0 0 2px '+g.color+' inset'; } else { d.classList.add('dim'); } });
+  } else {
+    var s={}; (plan._selected||[]).forEach(function(pi){ s[pi]=1; });
+    sThumbEls.forEach(function(d,pi){ if(!d)return; if(s[pi]) d.classList.add('sel-on'); else d.classList.add('dim'); });
+  }
+}
+function refreshSplit(){
+  if(!sCount)return; paintSplit();
+  var plan=computeSplitPlan(), h=$('#sHint');
+  if(!plan.valid){ h.textContent='Set a valid range / page selection to continue.'; $('#sGo').disabled=true; return; }
+  var n=plan.count;
+  h.innerHTML = n===1 ? '<b>1 PDF</b> will be created.' : '<b>'+n+' PDFs</b> will be created (delivered as a ZIP).';
+  $('#sGo').disabled=false;
+}
 $('#sGo').addEventListener('click',function(){
-  if(!sBytes)return; $('#sStat').textContent='Splitting…'; bar('sBar',0);
+  var plan=computeSplitPlan();
+  if(!plan.valid){ $('#sStat').textContent='Nothing to split.'; return; }
+  $('#sStat').textContent='Splitting…'; bar('sBar',0);
   (async function(){
     var src=await PDFDocument.load(sBytes,{ignoreEncryption:true});
-    if($('#sMode').value==='range'){
-      var idx=parseRange($('#sRange').value,sCount);
-      if(!idx.length){ $('#sStat').textContent='Enter valid pages (1-'+sCount+').'; hideBar('sBar'); return; }
-      var out=await PDFDocument.create(); var ps=await out.copyPages(src,idx); ps.forEach(function(p){out.addPage(p);});
-      dl(new Blob([await out.save()],{type:'application/pdf'}),'extract.pdf'); hideBar('sBar'); $('#sStat').textContent=idx.length+' pages extracted.';
-    } else {
-      var zip=new JSZip();
-      for(var i=0;i<sCount;i++){ var d=await PDFDocument.create(); var pp=await d.copyPages(src,[i]); d.addPage(pp[0]); zip.file('page-'+String(i+1).padStart(3,'0')+'.pdf', await d.save()); bar('sBar',Math.round((i+1)/sCount*100)); }
-      var blob=await zip.generateAsync({type:'blob'}); dl(blob,'split-pages.zip'); hideBar('sBar'); $('#sStat').textContent=sCount+' pages → ZIP.';
+    async function build(idxs){ var d=await PDFDocument.create(); var ps=await d.copyPages(src,idxs); ps.forEach(function(p){d.addPage(p);}); return d.save(); }
+    if(plan.merge){
+      var all=[]; plan.groups.forEach(function(g){ all=all.concat(g.idxs); });
+      dl(new Blob([await build(all)],{type:'application/pdf'}),'split.pdf'); hideBar('sBar'); $('#sStat').textContent=all.length+' pages → 1 PDF.'; return;
     }
+    if(plan.groups.length===1){
+      dl(new Blob([await build(plan.groups[0].idxs)],{type:'application/pdf'}),'split.pdf'); hideBar('sBar'); $('#sStat').textContent=plan.groups[0].idxs.length+' page(s) extracted.'; return;
+    }
+    var zip=new JSZip(), used={};
+    for(var i=0;i<plan.groups.length;i++){
+      var g=plan.groups[i]; var nm=g.label.toLowerCase().replace(/[^a-z0-9]+/g,'-'); if(used[nm]) nm+='-'+(i+1); used[nm]=1;
+      zip.file(nm+'.pdf', await build(g.idxs)); bar('sBar',Math.round((i+1)/plan.groups.length*100));
+    }
+    dl(await zip.generateAsync({type:'blob'}),'split.zip'); hideBar('sBar'); $('#sStat').textContent=plan.groups.length+' PDFs → ZIP.';
   })().catch(function(e){ hideBar('sBar'); $('#sStat').textContent='Error: '+e.message; });
 });
 
