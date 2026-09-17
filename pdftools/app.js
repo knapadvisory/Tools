@@ -243,8 +243,8 @@ function renderOrg(pdf){
     div.innerHTML='<div class="tw"><canvas></canvas></div><div class="pg">page '+(p.idx+1)+'</div>'
       +'<div class="tb">'
       +'<button class="l" title="Move left"><img src="ic-left.png" draggable="false"></button>'
-      +'<button class="rl" title="Rotate left"><img src="ic-rot-l.png" draggable="false"></button>'
-      +'<button class="rr" title="Rotate right"><img src="ic-rot-r.png" draggable="false"></button>'
+      +'<button class="rl" title="Rotate left"><img src="ic-rot-l.svg" draggable="false"></button>'
+      +'<button class="rr" title="Rotate right"><img src="ic-rot-r.svg" draggable="false"></button>'
       +'<button class="d" title="'+(p.del?'Restore':'Delete')+'"><img src="ic-trash.png" draggable="false"></button>'
       +'<button class="r" title="Move right"><img src="ic-right.png" draggable="false"></button>'
       +'</div>';
