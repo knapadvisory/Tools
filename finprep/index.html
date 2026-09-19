@@ -615,6 +615,9 @@ function has(s,arr){ s=(s||'').toLowerCase(); return arr.some(function(k){return
    "booked under" chain (every ancestor group name), so a ledger parked under
    "Sales Accounts" is Revenue even when the resolved primary is noisy. */
 var GSTIN_RX=/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/;
+/* user-taught keyword rules (from the in-tool Assistant) — persisted globally so
+   they upgrade the tool's grouping knowledge for this and future companies */
+var __learnRules=[]; try{ __learnRules=JSON.parse(localStorage.getItem('knap-learn')||'[]')||[]; if(!Array.isArray(__learnRules))__learnRules=[]; }catch(e){ __learnRules=[]; }
 function classifyFull(led){
   var chain=(led.groupPath&&led.groupPath.length)?led.groupPath.slice():[];
   if(!chain.length){ if(led.group)chain.push(led.group); if(led.primary&&led.primary!==led.group)chain.push(led.primary); }
@@ -624,6 +627,10 @@ function classifyFull(led){
   var n=(led.name||'').toLowerCase();
   var gn=path+' '+n;                            // groups + ledger name
   var top=(chain[chain.length-1]||'').toLowerCase(); // nearest-to-primary group
+  // user-taught keyword rules take priority over the built-in heuristics
+  for(var _li=0; _li<__learnRules.length; _li++){ var _lr=__learnRules[_li];
+    if(_lr && _lr.kw && gn.indexOf(String(_lr.kw).toLowerCase())>=0 && NOTES[_lr.note])
+      return {note:Number(_lr.note),conf:'high',reason:'learned rule: “'+_lr.kw+'” → '+NOTES[_lr.note].head}; }
   var gstOK=!!(led.gstin && GSTIN_RX.test(String(led.gstin).toUpperCase()));
   var cr=(led.current||0)<0;                    // credit balance?
   function R(note,conf,reason){ return {note:note,conf:conf,reason:reason}; }
@@ -669,6 +676,12 @@ function classifyFull(led){
   return R(99,'low','No Schedule III head fits — assign manually');
 }
 function classify(led){ return classifyFull(led).note; }
+/* one-call refresh used by the in-tool Assistant after it changes state */
+function knapRefreshAll(){ try{ if(!TB) return; prepare();
+  try{ renderReview(); }catch(e){} try{ renderReviewStep2(); }catch(e){}
+  try{ renderBS(); }catch(e){} try{ renderPL(); }catch(e){} try{ renderNotes(); }catch(e){}
+  try{ if(document.getElementById('exportStats')) renderExport(); }catch(e){}
+}catch(e){} }
 
 /* ================= STEP 1 : read ================= */
 document.getElementById('readBtn').onclick=doRead;
@@ -1512,5 +1525,6 @@ function buildWorkbook(){
   });
 }
 </script>
+<script src="assistant.js"></script>
 </body>
 </html>
