@@ -978,7 +978,11 @@ function applyPrior(d){
 }
 /* --- prior-year details parser (from a signed financials Excel) --- */
 function sCellText(cell){ if(!cell)return null; var v=cell.value; if(v&&typeof v==='object'){ if(v.formula!==undefined)return (v.result!=null&&typeof v.result!=='number')?String(v.result).trim():null; if(v.result!=null)v=v.result; else if(v.text!=null)v=v.text; else if(v.richText)v=v.richText.map(function(t){return t.text;}).join(''); else return null; } if(typeof v==='number')return null; if(v==null)return null; var s=String(v).trim(); return s||null; }
-function sCellNum(cell){ if(!cell)return null; var v=cell.value; if(v&&typeof v==='object'){ if(typeof v.result==='number')return v.result; return null; } return typeof v==='number'?v:null; }
+function sCellNum(cell){ if(!cell)return null; var v=cell.value;
+  if(v&&typeof v==='object'){ if(typeof v.result==='number')return v.result; if(v.result!=null&&typeof v.result!=='object')v=v.result; else if(v.text!=null)v=v.text; else return null; }
+  if(typeof v==='number')return v;
+  if(typeof v==='string'){ var t=v.trim(); var neg=/^\(.*\)$/.test(t)||/-\s*$/.test(t); var s=t.replace(/(?:₹|₹|\bRs\.?\b|\bINR\b)/gi,'').replace(/[(),\s]/g,'').replace(/-\s*$/,''); if(s===''||s==='-')return null; var n=parseFloat(s); if(isNaN(n))return null; return neg?-Math.abs(n):n; }
+  return null; }
 function importPriorDetails(wb){
   var cells=[]; wb.worksheets.forEach(function(ws){ ws.eachRow(function(row,rn){ row.eachCell(function(c,cn){ var v=sCellText(c); if(v) cells.push({sheet:ws.name,r:rn,c:cn,v:v}); }); }); });
   var join=cells.map(function(x){return x.v;}).join('\n'); var out={};
@@ -994,9 +998,43 @@ function importPriorDetails(wb){
   out.shareholders=[]; var shHdr=cells.find(function(x){return /shareholders?\s+holding/i.test(x.v);});
   if(shHdr){ var ws=wb.getWorksheet(shHdr.sheet); for(var rr=shHdr.r+1;rr<shHdr.r+16;rr++){ var row=ws.getRow(rr); var name=sCellText(row.getCell(1)); if(!name)continue; if(/name of|number of|% holding|particulars/i.test(name))continue; if(/^note\s|promoter/i.test(name))break; out.shareholders.push({name:name,shares:sCellNum(row.getCell(2)),pct:sCellNum(row.getCell(3))}); if(out.shareholders.length>=12)break; } }
   // prior-year figures, note-wise, from last year's Balance Sheet & P&L (their current column = our comparative)
-  out.priBS=parseFacePrior(wb.getWorksheet('Balance Sheet'));
-  var plw=wb.getWorksheet('Profit & loss')||wb.getWorksheet('Profit & Loss')||wb.getWorksheet('Statement of Profit and Loss');
+  var bsw2=wb.getWorksheet('Balance Sheet')||findWs(wb,[/balance\s*sheet/i]);
+  var plw=wb.getWorksheet('Profit & loss')||wb.getWorksheet('Profit & Loss')||wb.getWorksheet('Statement of Profit and Loss')
+        ||findWs(wb,[/statement\s+of\s+profit/i,/profit\s*&?\s*(and)?\s*loss/i,/\bp\s*&\s*l\b/i,/income\s+statement/i]);
+  out.priBS=parseFacePrior(bsw2);
   out.priPL=parseFacePrior(plw); out.priDep=parseDepPrior(plw);
+  // Many firm templates leave the Balance-Sheet / P&L faces blank and keep the
+  // figures only on the note-detail sheets ("Note : 23 …" blocks with a Total row).
+  // Read those totals and fill any note that the faces didn't populate — this is
+  // what makes the P&L comparatives come through even when the faces aren't linked.
+  var noteTot=parseNoteSheets(wb);
+  Object.keys(noteTot).forEach(function(k){ var no=+k, cy=noteTot[k];
+    if(no>=23&&no<=29){ if(out.priPL[no]==null) out.priPL[no]=cy; }
+    else if(no>=1&&no<=22&&no!==12){ if(out.priBS[no]==null) out.priBS[no]=cy; }
+  });
+  // Note 12 is PPE on the Balance Sheet but Depreciation on the P&L — never let the
+  // P&L depreciation figure overwrite the Balance-Sheet PPE net block.
+  if(out.priDep==null && out.priPL[12]!=null) out.priDep=out.priPL[12];
+  delete out.priPL[12];
+  return out;
+}
+function findWs(wb,res){ return wb.worksheets.find(function(ws){ var n=String(ws.name||''); return res.some(function(re){return re.test(n);}); })||null; }
+// Parse the note-detail sheets: each note is a "Note : <n> <title>" block ending in a
+// Total row; returns { <noteNo>: currentYearTotal } (last year's current = our comparative).
+function parseNoteSheets(wb){
+  var out={};
+  wb.worksheets.forEach(function(ws){
+    var cur=null, vc=null;
+    for(var r=1;r<=(ws.rowCount||0);r++){ var row=ws.getRow(r);
+      var htxt=sCellText(row.getCell(1))||sCellText(row.getCell(2))||sCellText(row.getCell(3));
+      if(htxt){ var m=htxt.match(/note\s*[:\-]?\s*(\d{1,2})\b/i); if(m){ cur=+m[1]; vc=null; continue; } }
+      if(cur==null) continue;
+      if(vc==null){ row.eachCell({includeEmpty:false},function(c,cn){ if(vc!=null)return; var t=sCellText(c); if(t&&/(as at|year ended|31\s*march|st\s*march)/i.test(t)) vc=cn; }); }
+      var t1=sCellText(row.getCell(1))||sCellText(row.getCell(2))||sCellText(row.getCell(3));
+      if(t1 && /^total\b/i.test(t1)){ var col=vc||4; var val=sCellNum(row.getCell(col)); if(val==null && col!==4) val=sCellNum(row.getCell(4));
+        if(val!=null && cur>=1 && cur<=29 && out[cur]==null) out[cur]=val; cur=null; vc=null; }
+    }
+  });
   return out;
 }
 function findHeader(ws){ if(!ws)return null; for(var rr=1;rr<=Math.min(ws.rowCount||40,40);rr++){ var row=ws.getRow(rr); var note=null,cy=null,py=null,part=false; row.eachCell({includeEmpty:false},function(c,cn){ var t=sCellText(c); if(!t)return; if(/particular/i.test(t))part=true; if(/^notes?$/i.test(t))note=cn; if(/as at|year ended/i.test(t)){ if(cy==null)cy=cn; else if(py==null)py=cn; } }); if(part&&cy!=null) return {r:rr,note:note,cy:cy,py:py}; } return null; }
