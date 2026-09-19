@@ -690,7 +690,7 @@ function doRead(){
       // connector hasn't already set — company-specific, remembered across years.
       var learnCount=0; subMap={};
       try{ var lm=grpLoad(depCompanyName()); if(lm&&lm.map){ j.ledgers.forEach(function(l){ var hit=lm.map[grpNorm(l.name)]; if(hit&&hit.sub) subMap[l.name]=hit.sub; if(overrides[l.name]==null && hit && hit.note!=null){ overrides[l.name]=Number(hit.note); learnCount++; } }); } }catch(e){}
-      loadPlExtra(); loadSubOv();
+      loadPlExtra(); loadSubOv(); loadPriImport();
       document.getElementById('msgTally').innerHTML='<span class="msg ok">✅ Read '+j.ledgers.length+' ledgers'+(j.voucherCount!=null?(' from '+j.voucherCount.toLocaleString('en-IN')+' vouchers'):'')+(learnCount?(' · applied '+learnCount+' groupings learned from last year'):'')+'.</span>';
       if(!document.getElementById('entity').value) document.getElementById('entity').value=cleanCoName(company&&company.name)||'';
       prepare();            /* classify + aggregate */
@@ -730,6 +730,20 @@ function prepare(){
   var eqLiabPri=byNote[1].pri+resPri+faceTotal('NCL','pri')+faceTotal('CL','pri');
   var assetsCur=faceTotal('NCA','cur')+faceTotal('CA','cur');
   var assetsPri=faceTotal('NCA','pri')+faceTotal('CA','pri');
+  // prior-year figures fetched from last year's audited BS/P&L override the
+  // Tally-derived comparatives (note-wise), so the comparative column ties to
+  // last year's signed statements. (Last year's closing = this year's opening,
+  // so the cash-flow movement stays consistent.)
+  if(priImport){ var PI=priImport;
+    NOTE_ORDER.forEach(function(no){ if(PI.byNote && PI.byNote[no]!=null) byNote[no].pri=+PI.byNote[no]; });
+    if(PI.dep!=null) depPri=+PI.dep;
+    incPri=byNote[23].pri+byNote[24].pri;
+    expPri=byNote[25].pri+byNote[26].pri+byNote[27].pri+byNote[28].pri+byNote[29].pri+depPri;
+    pbtPri=incPri-expPri;
+    resPri=(PI.byNote && PI.byNote[2]!=null)?(+PI.byNote[2]):(byNote[2].pri+pbtPri);
+    eqLiabPri=byNote[1].pri+resPri+faceTotal('NCL','pri')+faceTotal('CL','pri');
+    assetsPri=faceTotal('NCA','pri')+faceTotal('CA','pri');
+  }
   // cash flow (indirect, ties to net cash change): financing & investing from
   // balance movements, operating as the balancing figure.
   function d(no){ return byNote[no].cur-byNote[no].pri; }
@@ -943,7 +957,8 @@ function renderSh(){ var host=document.getElementById('shList'); if(!host)return
       if(!window.ExcelJS){ msg.textContent='Excel library still loading — try again.'; return; }
       msg.textContent='Reading last year’s file…'; msg.style.color='';
       f.arrayBuffer().then(function(buf){ var wb=new ExcelJS.Workbook(); return wb.xlsx.load(buf).then(function(){ var d=importPriorDetails(wb); applyPrior(d);
-        msg.textContent='Imported firm, CIN, directors'+((d.shareholders&&d.shareholders.length)?(' & '+d.shareholders.length+' shareholders'):'')+' — review & edit.'; msg.style.color='#14461f'; }); })
+        var np=(d.priBS?Object.keys(d.priBS).length:0)+(d.priPL?Object.keys(d.priPL).length:0);
+        msg.textContent='Imported details'+((d.shareholders&&d.shareholders.length)?(', '+d.shareholders.length+' shareholders'):'')+(np?(' and prior-year figures for '+np+' notes'):'')+' — review & edit.'; msg.style.color='#14461f'; }); })
       .catch(function(e){ msg.textContent='Could not read: '+e.message; msg.style.color='#b42318'; });
     });
   }
@@ -952,6 +967,14 @@ function applyPrior(d){
   ['legalname','cin','firm','frn','partner','mno','dir1','din1','dir2','din2'].forEach(function(k){ var el=sigEl(k); if(el && d[k]) el.value=d[k]; });
   if(d.shareholders && d.shareholders.length){ shareholders=d.shareholders.map(function(s){ return {name:s.name||'',shares:s.shares==null?'':s.shares,pct:s.pct==null?'':s.pct}; }); renderSh(); }
   saveSig();
+  var pb=d.priBS||{}, pp=d.priPL||{};
+  if(Object.keys(pb).length || Object.keys(pp).length || d.priDep!=null){
+    priImport={byNote:{}, dep:(d.priDep!=null?d.priDep:null)};
+    Object.keys(pb).forEach(function(no){ priImport.byNote[no]=pb[no]; });
+    Object.keys(pp).forEach(function(no){ priImport.byNote[no]=pp[no]; });
+    savePriImport();
+    if(prepared){ prepare(); renderBS(); renderPL(); renderNotes(); if(document.getElementById('exportStats')) renderExport(); }
+  }
 }
 /* --- prior-year details parser (from a signed financials Excel) --- */
 function sCellText(cell){ if(!cell)return null; var v=cell.value; if(v&&typeof v==='object'){ if(v.formula!==undefined)return (v.result!=null&&typeof v.result!=='number')?String(v.result).trim():null; if(v.result!=null)v=v.result; else if(v.text!=null)v=v.text; else if(v.richText)v=v.richText.map(function(t){return t.text;}).join(''); else return null; } if(typeof v==='number')return null; if(v==null)return null; var s=String(v).trim(); return s||null; }
@@ -970,8 +993,20 @@ function importPriorDetails(wb){
   var bsw=wb.getWorksheet('Balance Sheet')||wb.worksheets[0]; var t1=bsw?sCellText(bsw.getCell('A1')):null; if(t1)out.legalname=t1.trim();
   out.shareholders=[]; var shHdr=cells.find(function(x){return /shareholders?\s+holding/i.test(x.v);});
   if(shHdr){ var ws=wb.getWorksheet(shHdr.sheet); for(var rr=shHdr.r+1;rr<shHdr.r+16;rr++){ var row=ws.getRow(rr); var name=sCellText(row.getCell(1)); if(!name)continue; if(/name of|number of|% holding|particulars/i.test(name))continue; if(/^note\s|promoter/i.test(name))break; out.shareholders.push({name:name,shares:sCellNum(row.getCell(2)),pct:sCellNum(row.getCell(3))}); if(out.shareholders.length>=12)break; } }
+  // prior-year figures, note-wise, from last year's Balance Sheet & P&L (their current column = our comparative)
+  out.priBS=parseFacePrior(wb.getWorksheet('Balance Sheet'));
+  var plw=wb.getWorksheet('Profit & loss')||wb.getWorksheet('Profit & Loss')||wb.getWorksheet('Statement of Profit and Loss');
+  out.priPL=parseFacePrior(plw); out.priDep=parseDepPrior(plw);
   return out;
 }
+function findHeader(ws){ if(!ws)return null; for(var rr=1;rr<=Math.min(ws.rowCount||40,40);rr++){ var row=ws.getRow(rr); var note=null,cy=null,py=null,part=false; row.eachCell({includeEmpty:false},function(c,cn){ var t=sCellText(c); if(!t)return; if(/particular/i.test(t))part=true; if(/^notes?$/i.test(t))note=cn; if(/as at|year ended/i.test(t)){ if(cy==null)cy=cn; else if(py==null)py=cn; } }); if(part&&cy!=null) return {r:rr,note:note,cy:cy,py:py}; } return null; }
+function parseFacePrior(ws){ var out={}; if(!ws)return out; var H=findHeader(ws); if(!H||H.note==null)return out; for(var rr=H.r+1;rr<=(ws.rowCount||0);rr++){ var row=ws.getRow(rr); var no=sCellNum(row.getCell(H.note)); var val=sCellNum(row.getCell(H.cy)); if(no!=null&&Number.isInteger(no)&&no>=1&&no<=29&&val!=null) out[no]=val; } return out; }
+function parseDepPrior(ws){ if(!ws)return null; var H=findHeader(ws); if(!H)return null; for(var rr=H.r+1;rr<=(ws.rowCount||0);rr++){ var row=ws.getRow(rr); var lbl=sCellText(row.getCell(1))||sCellText(row.getCell(2)); if(lbl&&/depreciation/i.test(lbl)){ var v=sCellNum(row.getCell(H.cy)); if(v!=null)return v; } } return null; }
+/* prior-year figures fetched from last year's Balance Sheet & P&L (note-wise) */
+var priImport=null;
+function priImportKey(){ return 'knap-priimp:'+grpNorm(depCompanyName()); }
+function loadPriImport(){ try{ var raw=localStorage.getItem(priImportKey()); priImport=raw?JSON.parse(raw):null; }catch(e){ priImport=null; } }
+function savePriImport(){ try{ if(priImport) localStorage.setItem(priImportKey(), JSON.stringify(priImport)); else localStorage.removeItem(priImportKey()); }catch(e){} }
 function subOvKey(){ return 'knap-subov:'+grpNorm(depCompanyName())+':'+(TB?TB.asOn:''); }
 function loadSubOv(){ try{ var raw=localStorage.getItem(subOvKey()); if(raw){ var o=JSON.parse(raw); Object.keys(o).forEach(function(k){ if(o[k]) subMap[k]=o[k]; }); } }catch(e){} }
 function saveSubOv(){ try{ localStorage.setItem(subOvKey(), JSON.stringify(subMap)); }catch(e){} }
@@ -1220,7 +1255,8 @@ function buildWorkbook(){
 
   var ns=wb.addWorksheet('Notes');
   ns.columns=[{width:52},{width:15},{width:15}];
-  var nr=ns.addRow(['Notes to the financial statements','Current','Prior']); nr.eachCell(function(c){c.fill=head.fill;c.font=head.font;c.alignment=head.alignment;});
+  var nr=ns.addRow(['Notes to the financial statements','As at '+curLabel,'As at '+priLabel]); nr.eachCell(function(c){c.fill=head.fill;c.font=head.font;c.alignment=head.alignment;});
+  if(priImport){ ns.addRow(['Prior-year figures are as per last year’s audited financial statements.']).getCell(1).font={italic:true,size:9,color:{argb:'FF6B7280'}}; }
   var noteRow={};
   NOTE_ORDER.forEach(function(no){
     if(no===99 && !p.byNote[99].lines.length) return;
@@ -1249,7 +1285,8 @@ function buildWorkbook(){
     var curTot=(no===2)?p.resCur:bn.cur, priTot=(no===2)?p.resPri:bn.pri;
     var bT=leafRows.map(function(n){return 'B'+n;}), cT=leafRows.map(function(n){return 'C'+n;});
     if(profitRowNum){ bT.push('B'+profitRowNum); cT.push('C'+profitRowNum); }
-    var tot=ns.addRow(['Total — Note '+no, bT.length?{formula:bT.join('+'),result:curTot}:curTot, cT.length?{formula:cT.join('+'),result:priTot}:priTot]);
+    var priCell=(priImport && priImport.byNote && priImport.byNote[no]!=null) ? (+priImport.byNote[no]) : (cT.length?{formula:cT.join('+'),result:priTot}:priTot);
+    var tot=ns.addRow(['Total — Note '+no, bT.length?{formula:bT.join('+'),result:curTot}:curTot, priCell]);
     tot.font={bold:true,size:9}; tot.getCell(2).numFmt=money; tot.getCell(3).numFmt=money;
     tot.getCell(1).border={top:{style:'thin'}}; tot.getCell(2).border={top:{style:'thin'}}; tot.getCell(3).border={top:{style:'thin'}};
     noteRow[no]=tot.number; ns.addRow([]);
