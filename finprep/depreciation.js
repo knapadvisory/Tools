@@ -64,6 +64,8 @@ function computeAsset(a, fy){
 
 /* ---------------- state ---------------- */
 var rows=[]; // asset input objects
+var itOpen={}; // Income-tax block -> opening WDV (as per last IT return)
+var dt={rate:'25.168', open:'', others:[]}; // deferred tax inputs
 function fy(){ return {start:$('#fyStart').value, end:$('#fyEnd').value}; }
 function classLife(label){ var c=CLASSES.find(function(x){return x.label===label;}); return c?c.life:0; }
 function blankRow(){ return {desc:'',cls:'Computers — end-user (laptop/desktop)',life:3,method:$('#defMethod').value,resPct:$('#defRes').value,dateInUse:'',cost:'',openAccum:'',disposalDate:'',proceeds:''}; }
@@ -74,6 +76,120 @@ function syncFyStart(){ var e=$('#fyEnd').value; if(!e){return;} var d=new Date(
 $('#fyEnd').addEventListener('change',function(){ syncFyStart(); load(); render(); });
 
 /* ---------------- render ---------------- */
+/* ---------------- Income-tax depreciation (Section 32, block of assets) ---------------- */
+var IT_BLOCKS=[
+  {name:'Building', rate:10}, {name:'Building — temporary structures', rate:40},
+  {name:'Furniture & Fittings', rate:10}, {name:'Plant & Machinery', rate:15},
+  {name:'Motor Vehicles', rate:15}, {name:'Motor Vehicles — commercial (hire)', rate:30},
+  {name:'Computers & software', rate:40}, {name:'Intangible assets', rate:25}
+];
+function itBlockOf(rate){ return IT_BLOCKS.find(function(b){return b.rate===rate;}); }
+function classToBlock(cls){
+  var map={
+    'Building — RCC frame':'Building','Building — other than RCC':'Building','Building — temporary structures':'Building — temporary structures',
+    'Plant & Machinery — general':'Plant & Machinery','Plant & Machinery — continuous process':'Plant & Machinery',
+    'Furniture & Fittings — general':'Furniture & Fittings','Furniture & Fittings — hotels/restaurants':'Furniture & Fittings',
+    'Office Equipment':'Plant & Machinery','Computers — end-user (laptop/desktop)':'Computers & software','Computers — servers & networks':'Computers & software',
+    'Electrical Installations & Equipment':'Plant & Machinery','Motor Vehicle — car (non-commercial)':'Motor Vehicles',
+    'Motor Vehicle — commercial (bus/lorry/taxi)':'Motor Vehicles — commercial (hire)','Motor Cycle / Scooter':'Motor Vehicles',
+    'Laboratory Equipment — general':'Plant & Machinery','Intangible / Software (AS 26)':'Intangible assets','Custom':'Plant & Machinery'
+  };
+  var nm=map[cls]||'Plant & Machinery'; return IT_BLOCKS.find(function(b){return b.name===nm;});
+}
+function daysBetween(a,b){ return Math.round((Date.parse(b)-Date.parse(a))/86400000); }
+function itBlockDep(openWDV,add180,addLess,sale,rate){
+  var r=rate/100, poolFull=openWDV+add180, saleOnFull=Math.min(sale,poolFull), fullBase=poolFull-saleOnFull;
+  var remSale=sale-saleOnFull, halfBase=Math.max(0,addLess-remSale), totalBlock=openWDV+add180+addLess-sale;
+  var dep=r*Math.max(0,fullBase)+(r/2)*halfBase; if(totalBlock<=0) dep=0; var closing=Math.max(0,totalBlock-dep);
+  return {dep:r2(dep),closing:r2(closing),block:r2(totalBlock)};
+}
+function itAdditions(){
+  var F=fy(), out={};
+  IT_BLOCKS.forEach(function(b){ out[b.name]={add180:0,addLess:0,sale:0,rate:b.rate}; });
+  rows.forEach(function(a){ var b=classToBlock(a.cls); if(!b) return; var o=out[b.name];
+    var D=a.dateInUse||F.start;
+    if(Date.parse(D)>=Date.parse(F.start) && Date.parse(D)<=Date.parse(F.end)){
+      var held=daysBetween(D,F.end)+1; if(held<180) o.addLess+=(+a.cost||0); else o.add180+=(+a.cost||0);
+    }
+    if(a.disposalDate && Date.parse(a.disposalDate)>=Date.parse(F.start) && Date.parse(a.disposalDate)<=Date.parse(F.end)) o.sale+=(+a.proceeds||0);
+  });
+  return out;
+}
+function itSchedule(){
+  var add=itAdditions(); var blocks=[]; var tot={open:0,add:0,sale:0,dep:0,close:0};
+  IT_BLOCKS.forEach(function(b){ var o=add[b.name]; var open=+(itOpen[b.name]||0);
+    if(!open && !o.add180 && !o.addLess && !o.sale) return; // skip empty blocks
+    var c=itBlockDep(open,o.add180,o.addLess,o.sale,b.rate);
+    blocks.push({name:b.name,rate:b.rate,open:open,add180:o.add180,addLess:o.addLess,sale:o.sale,dep:c.dep,close:c.closing});
+    tot.open+=open; tot.add+=o.add180+o.addLess; tot.sale+=o.sale; tot.dep+=c.dep; tot.close+=c.closing;
+  });
+  return {blocks:blocks, tot:{open:r2(tot.open),add:r2(tot.add),sale:r2(tot.sale),dep:r2(tot.dep),close:r2(tot.close)}};
+}
+function bookWDVClosing(){ var F=fy(); return r2(rows.reduce(function(s,a){return s+computeAsset(a,F).closeWDV;},0)); }
+function renderIT(){
+  var sch=itSchedule();
+  var body=sch.blocks.map(function(b){
+    return '<tr><td class="l">'+b.name+'</td><td>'+b.rate+'%</td>'+
+      '<td><input type="number" data-itopen="'+esc(b.name)+'" value="'+esc(itOpen[b.name]==null?'':itOpen[b.name])+'" style="width:110px;text-align:right"></td>'+
+      '<td class="calc num">'+money(b.add180)+'</td><td class="calc num">'+money(b.addLess)+'</td>'+
+      '<td class="calc num">'+money(b.sale)+'</td><td class="calc num">'+money(b.dep)+'</td><td class="calc num">'+money(b.close)+'</td></tr>';
+  }).join('');
+  // blocks with only opening (no register asset) still editable — show all standard blocks as a picker note
+  var head='<table><thead><tr><th class="l">Block of assets</th><th>Rate</th><th>Opening WDV</th><th class="calc">Additions ≥180d</th><th class="calc">Additions &lt;180d</th><th class="calc">Sale proceeds</th><th class="calc">Depreciation</th><th class="calc">Closing WDV</th></tr></thead><tbody>'+
+    (body||'<tr><td class="l muted" colspan="8">Enter opening WDV for a block, or add assets above.</td></tr>')+
+    '<tr><td class="l" colspan="2"><b>Total</b></td><td class="num"><b>'+money(sch.tot.open)+'</b></td><td class="calc num">'+money(sch.tot.add)+'</td><td class="calc"></td><td class="calc num">'+money(sch.tot.sale)+'</td><td class="calc num"><b>'+money(sch.tot.dep)+'</b></td><td class="calc num"><b>'+money(sch.tot.close)+'</b></td></tr></tbody></table>'+
+    '<div class="muted" style="margin-top:6px">Blocks not linked to a register asset: set their opening WDV here — add a row below.</div>'+
+    '<div style="margin-top:6px"><select id="itBlockPick" style="padding:6px">'+IT_BLOCKS.filter(function(b){return itOpen[b.name]==null && !sch.blocks.find(function(x){return x.name===b.name;});}).map(function(b){return '<option value="'+esc(b.name)+'">'+b.name+' ('+b.rate+'%)</option>';}).join('')+'</select> <button class="btn ghost sm" id="itBlockAdd" type="button">+ Add this block</button></div>';
+  $('#itNote').innerHTML=head;
+  $('#itKpi').innerHTML=
+    '<div class="k"><div class="v num">'+money(sch.tot.dep)+'</div><div class="t">Depreciation as per Income-tax</div></div>'+
+    '<div class="k"><div class="v num">'+money(sch.tot.close)+'</div><div class="t">WDV as per IT (closing)</div></div>'+
+    '<div class="k"><div class="v num">'+money(bookWDVClosing())+'</div><div class="t">WDV as per books (closing)</div></div>';
+  var ib=$('#itBlockAdd'); if(ib) ib.onclick=function(){ var v=$('#itBlockPick').value; if(v){ itOpen[v]=0; render(); } };
+  $('#itNote').querySelectorAll('input[data-itopen]').forEach(function(inp){
+    inp.addEventListener('input',function(){ itOpen[this.getAttribute('data-itopen')]=this.value; scheduleSave(); updITKpi(); renderDT(); });
+    inp.addEventListener('change',function(){ renderIT(); });
+  });
+}
+function updITKpi(){ var sch=itSchedule(); $('#itKpi').innerHTML=
+  '<div class="k"><div class="v num">'+money(sch.tot.dep)+'</div><div class="t">Depreciation as per Income-tax</div></div>'+
+  '<div class="k"><div class="v num">'+money(sch.tot.close)+'</div><div class="t">WDV as per IT (closing)</div></div>'+
+  '<div class="k"><div class="v num">'+money(bookWDVClosing())+'</div><div class="t">WDV as per books (closing)</div></div>'; }
+var _saveT=null; function scheduleSave(){ clearTimeout(_saveT); _saveT=setTimeout(save,400); }
+
+/* ---------------- Deferred tax (AS 22) ---------------- */
+function renderDT(){
+  var rate=(+dt.rate||0)/100; var sch=itSchedule();
+  var bookWDV=bookWDVClosing(), taxWDV=sch.tot.close;
+  var depDiff=r2(bookWDV-taxWDV); // book > tax → DTL
+  var rowsHtml='<tr><td class="l">Depreciation — WDV (book) vs WDV (tax)</td><td class="calc num">'+money(bookWDV)+'</td><td class="calc num">'+money(taxWDV)+'</td>'+
+    '<td class="calc num'+(depDiff<0?' neg':'')+'">'+money(depDiff)+'</td><td class="l">'+(depDiff>=0?'Deferred tax liability':'Deferred tax asset')+'</td><td></td></tr>';
+  var otherDT=0;
+  dt.others.forEach(function(o,i){
+    var amt=+o.amount||0; var signed=(o.nature==='DTA')?-amt:amt; otherDT+=signed;
+    rowsHtml+='<tr><td class="l"><input data-dt="'+i+'" data-k="desc" value="'+esc(o.desc||'')+'" placeholder="Description (e.g. 43B / provision)" style="width:220px"></td>'+
+      '<td colspan="2" class="l muted">timing difference</td>'+
+      '<td><input data-dt="'+i+'" data-k="amount" type="number" value="'+esc(o.amount==null?'':o.amount)+'" style="width:120px;text-align:right"></td>'+
+      '<td><select data-dt="'+i+'" data-k="nature"><option value="DTL"'+(o.nature!=='DTA'?' selected':'')+'>Liability (DTL)</option><option value="DTA"'+(o.nature==='DTA'?' selected':'')+'>Asset (DTA)</option></select></td>'+
+      '<td><button class="del" data-dtdel="'+i+'">✕</button></td></tr>';
+  });
+  var netTiming=r2(depDiff+otherDT);
+  var closeDT=r2(netTiming*rate);        // + = DTL, − = DTA
+  var openDT=+dt.open||0;
+  var charge=r2(closeDT-openDT);         // + = deferred tax expense
+  $('#dtTable').innerHTML='<table><thead><tr><th class="l">Timing difference</th><th class="calc">Book</th><th class="calc">Tax</th><th>Amount</th><th>Nature</th><th></th></tr></thead><tbody>'+rowsHtml+
+    '<tr><td class="l"><b>Net timing difference</b></td><td colspan="2"></td><td class="calc num'+(netTiming<0?' neg':'')+'"><b>'+money(netTiming)+'</b></td><td colspan="2"></td></tr></tbody></table>';
+  $('#dtKpi').innerHTML=
+    '<div class="k"><div class="v num'+(closeDT<0?' neg':'')+'">'+money(Math.abs(closeDT))+'</div><div class="t">Closing deferred tax '+(closeDT>=0?'liability':'asset')+' @ '+(dt.rate||0)+'%</div></div>'+
+    '<div class="k"><div class="v num'+(charge<0?' neg':'')+'">'+money(charge)+'</div><div class="t">Deferred tax charge / (credit) for the year → P&amp;L</div></div>'+
+    '<div class="k"><div class="v num">'+money(openDT)+'</div><div class="t">Opening deferred tax (entered)</div></div>';
+  $('#dtTable').querySelectorAll('[data-dt]').forEach(function(el){
+    el.addEventListener('input',function(){ var i=+this.getAttribute('data-dt'),k=this.getAttribute('data-k'); dt.others[i][k]=this.value; scheduleSave(); });
+    el.addEventListener('change',function(){ renderDT(); });
+  });
+  $('#dtTable').querySelectorAll('[data-dtdel]').forEach(function(el){ el.addEventListener('click',function(){ dt.others.splice(+this.getAttribute('data-dtdel'),1); scheduleSave(); renderDT(); }); });
+}
+
 function render(){
   var tb=$('#rows'); tb.innerHTML='';
   var F=fy();
@@ -112,7 +228,7 @@ function render(){
     '<td class="calc num">'+money(r2(tot.depOnDeletion))+'</td>'+
     '<td class="calc num">'+money(r2(tot.closeWDV))+'</td>'+
     '<td class="calc num'+(tot.profitLoss<0?' neg':'')+'">'+money(r2(tot.profitLoss))+'</td><td></td>';
-  renderNote(F); renderFlags(F); save();
+  renderNote(F); renderIT(); renderDT(); renderFlags(F); save();
 }
 function esc(v){ return String(v==null?'':v).replace(/"/g,'&quot;'); }
 function clsSelect(val,i){ return '<select data-k="cls" data-i="'+i+'">'+CLASSES.map(function(c){return '<option'+(c.label===val?' selected':'')+'>'+c.label+'</option>';}).join('')+'</select>'; }
@@ -184,8 +300,9 @@ function renderFlags(F){
 
 /* ---------------- persistence (per company + FY, in this browser) ---------------- */
 function keyOf(){ return 'knap-dep:'+($('#company').value||'_')+':'+$('#fyEnd').value; }
-function save(){ try{ localStorage.setItem(keyOf(), JSON.stringify({company:$('#company').value,fyEnd:$('#fyEnd').value,rows:rows})); $('#saveState').textContent='saved '+new Date().toLocaleTimeString(); }catch(e){} }
-function load(){ try{ var raw=localStorage.getItem(keyOf()); if(raw){ var d=JSON.parse(raw); rows=d.rows||[]; } else { rows=[]; } }catch(e){ rows=[]; } }
+function save(){ try{ localStorage.setItem(keyOf(), JSON.stringify({company:$('#company').value,fyEnd:$('#fyEnd').value,rows:rows,itOpen:itOpen,dt:dt})); $('#saveState').textContent='saved '+new Date().toLocaleTimeString(); }catch(e){} }
+function load(){ try{ var raw=localStorage.getItem(keyOf()); if(raw){ var d=JSON.parse(raw); rows=d.rows||[]; itOpen=d.itOpen||{}; dt=d.dt||{rate:'25.168',open:'',others:[]}; if(!dt.others)dt.others=[]; } else { rows=[]; itOpen={}; dt={rate:'25.168',open:'',others:[]}; } }catch(e){ rows=[]; itOpen={}; dt={rate:'25.168',open:'',others:[]}; }
+  var dr=$('#dtRate'), doo=$('#dtOpen'); if(dr)dr.value=dt.rate||''; if(doo)doo.value=dt.open||''; }
 $('#company').addEventListener('change',function(){ load(); render(); });
 
 /* ---------------- toolbar ---------------- */
@@ -242,6 +359,29 @@ function exportXlsx(){
   var blocks={}; rows.forEach(function(a){ var c=computeAsset(a,F); var b=blocks[a.cls]||(blocks[a.cls]={og:0,ad:0,dl:0,cg:0,oa:0,dy:0,dd:0,ca:0}); b.og+=c.openGross;b.ad+=c.additions;b.dl+=c.deletionsGross;b.cg+=c.closeGross;b.oa+=c.openAccum;b.dy+=c.depForYear;b.dd+=c.depOnDeletion;b.ca+=c.closeAccum; });
   Object.keys(blocks).forEach(function(k){ var b=blocks[k]; ns.addRow([k,r2(b.og),r2(b.ad),r2(b.dl),r2(b.cg),r2(b.oa),r2(b.dy),r2(b.dd),r2(b.ca),r2(b.cg-b.ca),r2(b.og-b.oa)]); });
   ns.columns.forEach(function(col){ col.width=16; }); ns.getColumn(1).width=34;
+  // Income-tax depreciation
+  var sch=itSchedule();
+  var it=wb.addWorksheet('Income Tax Dep');
+  it.addRow(['Depreciation as per Income-tax Act (Section 32) — block of assets']).getCell(1).font={bold:true,size:12};
+  it.addRow(['Block of assets','Rate %','Opening WDV','Additions ≥180d','Additions <180d','Sale proceeds','Depreciation','Closing WDV']).font={bold:true};
+  sch.blocks.forEach(function(b){ it.addRow([b.name,b.rate,r2(b.open),r2(b.add180),r2(b.addLess),r2(b.sale),r2(b.dep),r2(b.close)]); });
+  it.addRow(['Total','',r2(sch.tot.open),r2(sch.tot.add),'',r2(sch.tot.sale),r2(sch.tot.dep),r2(sch.tot.close)]).font={bold:true};
+  it.columns.forEach(function(c){c.width=16;}); it.getColumn(1).width=34;
+  // Deferred tax
+  var dtws=wb.addWorksheet('Deferred Tax');
+  dtws.addRow(['Deferred tax computation (AS 22)']).getCell(1).font={bold:true,size:12};
+  var rate=(+dt.rate||0)/100, bookWDV=bookWDVClosing(), taxWDV=sch.tot.close, depDiff=r2(bookWDV-taxWDV);
+  dtws.addRow(['Effective tax rate',(dt.rate||0)+'%']);
+  dtws.addRow(['Timing difference','Book','Tax','Amount','Nature']).font={bold:true};
+  dtws.addRow(['Depreciation — WDV (book vs tax)',r2(bookWDV),r2(taxWDV),depDiff,depDiff>=0?'DTL':'DTA']);
+  var otherDT=0; dt.others.forEach(function(o){ var amt=+o.amount||0; var signed=(o.nature==='DTA')?-amt:amt; otherDT+=signed; dtws.addRow([o.desc||'(timing difference)','','',amt,o.nature||'DTL']); });
+  var netTiming=r2(depDiff+otherDT), closeDT=r2(netTiming*rate), openDT=+dt.open||0, charge=r2(closeDT-openDT);
+  dtws.addRow(['Net timing difference','','',netTiming,'']).font={bold:true};
+  dtws.addRow([]);
+  dtws.addRow(['Closing deferred tax '+(closeDT>=0?'liability':'asset'),'','',Math.abs(closeDT),'']).font={bold:true};
+  dtws.addRow(['Opening deferred tax (entered)','','',openDT,'']);
+  dtws.addRow(['Deferred tax charge / (credit) for the year → P&L','','',charge,'']).font={bold:true};
+  dtws.columns.forEach(function(c){c.width=20;}); dtws.getColumn(1).width=44;
   wb.xlsx.writeBuffer().then(function(buf){ dl(new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}), 'Depreciation-'+(($('#company').value||'company').replace(/[^\w]+/g,'-'))+'-'+$('#fyEnd').value+'.xlsx'); });
 }
 function importXlsx(file){
@@ -321,5 +461,8 @@ $('#pull').addEventListener('click',pullFromTally);
 $('#conn-upd').addEventListener('click',updateConnector);
 
 /* ---------------- boot ---------------- */
+$('#dtRate').addEventListener('input',function(){ dt.rate=this.value; scheduleSave(); renderDT(); });
+$('#dtOpen').addEventListener('input',function(){ dt.open=this.value; scheduleSave(); renderDT(); });
+$('#dtAdd').addEventListener('click',function(){ dt.others.push({desc:'',amount:'',nature:'DTL'}); scheduleSave(); renderDT(); });
 syncFyStart(); refTable(); load(); render(); checkConn();
 })();
