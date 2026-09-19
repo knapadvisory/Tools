@@ -52,6 +52,12 @@
     <p class="sub" style="margin-top:10px">Upload last year's <b>grouped trial balance / working paper</b> (Excel) that lists each ledger and the Schedule III head (and sub-group) it went into. The tool learns the mapping and, next time you build financials in Tally, applies it automatically to the matching ledgers. Signed statements without ledger names can't be learned — use a grouped TB.</p>
     <div class="drop" id="drop">Drop last year's Excel here, or click to choose <input type="file" id="file" accept=".xlsx" hidden></div>
     <div id="mapWrap" class="hide" style="margin-top:12px">
+      <div id="smartWrap" class="hide" style="margin:6px 0 12px;padding:12px 14px;border:1px solid #cfe6d7;background:#f0f7f2;border-radius:10px">
+        <button class="btn" id="smartLearn" type="button">✨ Auto-learn from the financials' formulas</button>
+        <span class="muted" id="smartHint" style="margin-left:8px"></span>
+        <div class="muted" style="margin-top:6px">Reads the whole workbook, follows the formulas that link each note line to the trial balance, and works out which ledger belongs to which Schedule III head — no column mapping needed.</div>
+      </div>
+      <div id="manualIntro" class="muted" style="margin:4px 0 8px">Or map the columns of a grouped trial balance manually:</div>
       <div class="row">
         <div><label>Sheet</label><select id="sheet"></select></div>
         <div><label>Ledger / particulars column</label><select id="colLedger"></select></div>
@@ -68,7 +74,7 @@
     <p class="sub" style="margin-top:8px">Confirm each ledger's Schedule III head (auto-translated from your head text) and sub-group. Edit anything, then save.</p>
     <div class="row"><button class="btn" id="save" type="button">💾 Save &amp; apply</button><span class="muted" id="savedMsg" style="align-self:center"></span></div>
     <div class="tbl-wrap">
-      <table id="tbl"><thead><tr><th>Ledger</th><th>Your head text</th><th>Schedule III head</th><th>Sub-group</th></tr></thead><tbody id="rows"></tbody></table>
+      <table id="tbl"><thead><tr><th>Ledger</th><th>Head text / formula source</th><th>Schedule III head</th><th>Sub-group</th></tr></thead><tbody id="rows"></tbody></table>
     </div>
   </div>
 </main>

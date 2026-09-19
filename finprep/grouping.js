@@ -48,6 +48,7 @@ function headToNote(text){
 
 /* ---------------- upload ---------------- */
 var sheetsData={}; // sheetName -> {headers:[], rows:[[...]]}
+var wbRef=null;    // the loaded ExcelJS workbook (kept for formula tracing)
 (function(){ var d=$('#drop'), f=$('#file');
   d.addEventListener('click',function(){f.click();});
   f.addEventListener('change',function(){ if(f.files.length) readWorkbook(f.files[0]); f.value=''; });
@@ -58,13 +59,18 @@ var sheetsData={}; // sheetName -> {headers:[], rows:[[...]]}
 function readWorkbook(file){
   if(!window.ExcelJS){ alert('Excel library still loading — try again.'); return; }
   file.arrayBuffer().then(function(buf){ var wb=new ExcelJS.Workbook(); return wb.xlsx.load(buf).then(function(){
-    sheetsData={}; wb.worksheets.forEach(function(ws){
+    wbRef=wb; sheetsData={};
+    wb.worksheets.forEach(function(ws){
       var rows=[]; ws.eachRow(function(row){ var arr=[]; row.eachCell({includeEmpty:true},function(cell){ var v=cell.value; if(v&&v.result!=null)v=v.result; if(v&&v.text!=null)v=v.text; arr.push(v==null?'':v); }); rows.push(arr); });
       if(rows.length){ sheetsData[ws.name]={ rows:rows }; }
     });
     var names=Object.keys(sheetsData); if(!names.length){ alert('No data found in the workbook.'); return; }
     var sel=$('#sheet'); sel.innerHTML=names.map(function(n){return '<option>'+esc(n)+'</option>';}).join('');
     $('#mapWrap').classList.remove('hide'); onSheet();
+    // detect cross-sheet formulas → offer auto-learn
+    var xref=0; wb.worksheets.forEach(function(ws){ ws.eachRow(function(row){ row.eachCell(function(c){ var f=cellFormula2(c); if(f && /!\$?[A-Za-z]/.test(f)) xref++; }); }); });
+    if(xref>=3){ $('#smartWrap').classList.remove('hide'); $('#smartHint').textContent='Detected '+xref.toLocaleString('en-IN')+' formulas linking sheets — auto-learn is available.'; }
+    else { $('#smartWrap').classList.add('hide'); }
   }); }).catch(function(e){ alert('Could not read the file: '+e.message); });
 }
 $('#sheet').addEventListener('change',onSheet);
@@ -106,7 +112,7 @@ function renderLearned(){
   var matched=0;
   learned.forEach(function(x,i){ if(x.note!=null) matched++;
     var tr=document.createElement('tr');
-    tr.innerHTML='<td>'+esc(x.ledger)+'</td><td class="muted">'+esc(x.head||'')+'</td><td>'+noteSelect(x.note,i)+'</td><td><input data-i="'+i+'" data-k="sub" value="'+esc(x.sub||'')+'"></td>';
+    tr.innerHTML='<td>'+esc(x.ledger)+'</td><td class="muted">'+esc(x.head||x.src||'')+'</td><td>'+noteSelect(x.note,i)+'</td><td><input data-i="'+i+'" data-k="sub" value="'+esc(x.sub||'')+'"></td>';
     tb.appendChild(tr);
   });
   $('#kpi').innerHTML=
@@ -115,6 +121,62 @@ function renderLearned(){
     '<div class="k"><div class="v">'+(learned.length-matched)+'</div><div class="t">need your pick</div></div>';
 }
 $('#rows').addEventListener('input',function(e){ var t=e.target; var i=t.getAttribute('data-i'), k=t.getAttribute('data-k'); if(i==null)return; i=+i; if(k==='note') learned[i].note=t.value===''?null:+t.value; else learned[i][k]=t.value; });
+
+/* ---------------- smart learn: trace formulas linking notes → trial balance ---------------- */
+function cellText2(cell){ if(!cell)return null; var v=cell.value; if(v&&typeof v==='object'){ if(v.formula!==undefined)return null; if(v.result!=null)v=v.result; else if(v.text!=null)v=v.text; else if(v.richText)v=v.richText.map(function(t){return t.text;}).join(''); else return null; } if(typeof v==='number')return null; if(v==null)return null; var s=String(v).trim(); return s||null; }
+function cellNum2(cell){ if(!cell)return null; var v=cell.value; if(v&&typeof v==='object'){ if(typeof v.result==='number')return v.result; return null; } return typeof v==='number'?v:null; }
+function cellFormula2(cell){ if(!cell)return null; if(cell.formula)return cell.formula; var v=cell.value; if(v&&typeof v==='object'&&v.formula)return v.formula; return null; }
+function a1ref(ref){ var m=/\$?([A-Za-z]{1,3})\$?(\d+)/.exec(ref); if(!m)return null; var s=m[1].toUpperCase(),col=0; for(var i=0;i<s.length;i++)col=col*26+(s.charCodeAt(i)-64); return {col:col,row:+m[2]}; }
+function extractRefs(f){ var out=[]; if(!f)return out; var re=/(?:'([^']+)'|([A-Za-z0-9_.]+))!(\$?[A-Za-z]{1,3}\$?\d+)(?::(\$?[A-Za-z]{1,3}\$?\d+))?/g,m; while((m=re.exec(f))){ out.push({sheet:(m[1]||m[2]),a:m[3],b:m[4]||null}); } return out; }
+function extractCriteria(f){ var out=[],re=/"([^"]{2,})"/g,m; while((m=re.exec(f))){ out.push(m[1]); } return out; }
+function detectTbSheet(wb){
+  var list=wb.worksheets;
+  var named=list.filter(function(ws){return /trial\s*balance|^tb\b|ledger balance|grouping tb/i.test(ws.name);});
+  if(named.length) return named[0];
+  var refCount={}; list.forEach(function(ws){ ws.eachRow(function(row){ row.eachCell(function(c){ var f=cellFormula2(c); if(f) extractRefs(f).forEach(function(r){ var k=norm(r.sheet); refCount[k]=(refCount[k]||0)+1; }); }); }); });
+  var byName={}; list.forEach(function(ws){ byName[norm(ws.name)]=ws; });
+  var top=Object.keys(refCount).sort(function(a,b){return refCount[b]-refCount[a];})[0];
+  if(top&&byName[top]) return byName[top];
+  var best=null,bs=-1; list.forEach(function(ws){ var s=0; ws.eachRow(function(row){ var t=false,n=false; row.eachCell(function(c){ if(cellText2(c))t=true; if(cellNum2(c)!=null)n=true; }); if(t&&n)s++; }); if(s>bs){bs=s;best=ws;} }); return best;
+}
+function buildTbIndex(ws){
+  var byRow={}, byName={};
+  ws.eachRow(function(row,rn){ var label=null,hasNum=false; row.eachCell({includeEmpty:false},function(c){ if(label==null){ var t=cellText2(c); if(t)label=t; } if(cellNum2(c)!=null)hasNum=true; });
+    if(label&&hasNum&&!/^(total|grand total|sub ?total)/i.test(label)){ byRow[rn]=label; byName[norm(label)]=label; } });
+  return {byRow:byRow, byName:byName};
+}
+$('#smartLearn').addEventListener('click',function(){
+  if(!wbRef){ alert('Upload a workbook first.'); return; }
+  var tb=detectTbSheet(wbRef); if(!tb){ alert('Could not identify a trial-balance sheet in this workbook.'); return; }
+  var idx=buildTbIndex(tb), tbNorm=norm(tb.name); var map={};
+  wbRef.worksheets.forEach(function(ws){ if(ws.name===tb.name) return;
+    var curHead=null, curSub=null;
+    ws.eachRow(function(row,rn){
+      var label=null,hasNum=false,formulas=[];
+      row.eachCell({includeEmpty:false},function(c){ if(label==null){ var t=cellText2(c); if(t)label=t; } if(cellNum2(c)!=null)hasNum=true; var f=cellFormula2(c); if(f)formulas.push(f); });
+      if(label && !hasNum && !formulas.length){ var hn=headToNote(label);
+        if(hn!=null || /^note\s*\d+/i.test(label) || /^\s*\d+\s*[\.:)-]/.test(label)){ curHead=label; curSub=null; } else { curSub=label; } }
+      if(!formulas.length) return;
+      var refsLedgers={};
+      formulas.forEach(function(f){
+        extractRefs(f).forEach(function(r){ if(norm(r.sheet)!==tbNorm) return; var a=a1ref(r.a); if(!a)return; var r1=a.row,r2=r1; if(r.b){ var bb=a1ref(r.b); if(bb)r2=bb.row; } var lo=Math.min(r1,r2),hi=Math.max(r1,r2); if(hi-lo>2000)return; for(var rr=lo;rr<=hi;rr++){ if(idx.byRow[rr]) refsLedgers[idx.byRow[rr]]=1; } });
+        extractCriteria(f).forEach(function(nm){ var led=idx.byName[norm(nm)]; if(led) refsLedgers[led]=1; });
+      });
+      var keys=Object.keys(refsLedgers); if(!keys.length) return;
+      var note=(headToNote(curHead)!=null)?headToNote(curHead):headToNote(label);
+      keys.forEach(function(led){ if(map[led]&&map[led].note!=null) return;
+        var sub=''; if(label && norm(label)!==norm(led) && (curHead==null||norm(label)!==norm(curHead))) sub=label; else if(curSub) sub=curSub;
+        map[led]={note:note, sub:sub, src:ws.name+(label?(' · '+label):'')};
+      });
+    });
+  });
+  learned=[]; var mappedN=0;
+  Object.keys(map).forEach(function(led){ var m=map[led]; if(m.note!=null)mappedN++; learned.push({ledger:led, head:'', note:m.note, sub:m.sub, src:m.src}); });
+  // include any TB ledger not linked in a note, so coverage is visible
+  Object.keys(idx.byName).forEach(function(nk){ var led=idx.byName[nk]; if(!map[led]) learned.push({ledger:led, head:'', note:null, sub:'', src:'(not linked in any note)'}); });
+  renderLearned();
+  $('#smartHint').textContent='Traced '+mappedN+' of '+Object.keys(idx.byName).length+' trial-balance ledgers from the formulas in “'+tb.name+'”.';
+});
 
 /* ---------------- save / load ---------------- */
 function keyOf(){ return 'knap-grp:'+norm($('#company').value); }
