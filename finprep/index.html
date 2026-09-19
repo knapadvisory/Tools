@@ -185,6 +185,7 @@
   .notes-acc summary::-webkit-details-marker{display:none}
   .notes-acc summary .amt{font-family:var(--mono)}
   .notes-acc .nbody{padding:2px 14px 12px}
+  .notes-acc .subh td{font-weight:600;background:var(--surface-2);border-top:1px solid var(--border)}
   .hidden{display:none}
   footer{border-top:1px solid var(--border);margin-top:32px;padding:18px 22px;text-align:center;font-size:12.5px;color:var(--faint)}
 </style>
@@ -338,7 +339,7 @@
 <script>
 var API = (function(){ try { return localStorage.getItem('knap_connector_url'); } catch(e){ return null; } })() || 'http://127.0.0.1:8797';
 var connVer = '', company=null;
-var TB=null, overrides={}, prepared=null, entity='', maxStep=1;
+var TB=null, overrides={}, subMap={}, prepared=null, entity='', maxStep=1;
 var UNIT={div:1,label:'₹ in full'};
 
 /* ================= step navigation ================= */
@@ -601,8 +602,8 @@ function doRead(){
       if(j.savedMap){ Object.keys(j.savedMap).forEach(function(k){ overrides[k]=Number(j.savedMap[k]); }); }
       // prior-year learned grouping (from grouping.html) fills any head the user/
       // connector hasn't already set — company-specific, remembered across years.
-      var learnCount=0;
-      try{ var lm=grpLoad(depCompanyName()); if(lm&&lm.map){ j.ledgers.forEach(function(l){ if(overrides[l.name]==null){ var hit=lm.map[grpNorm(l.name)]; if(hit&&hit.note!=null){ overrides[l.name]=Number(hit.note); learnCount++; } } }); } }catch(e){}
+      var learnCount=0; subMap={};
+      try{ var lm=grpLoad(depCompanyName()); if(lm&&lm.map){ j.ledgers.forEach(function(l){ var hit=lm.map[grpNorm(l.name)]; if(hit&&hit.sub) subMap[l.name]=hit.sub; if(overrides[l.name]==null && hit && hit.note!=null){ overrides[l.name]=Number(hit.note); learnCount++; } }); } }catch(e){}
       document.getElementById('msgTally').innerHTML='<span class="msg ok">✅ Read '+j.ledgers.length+' ledgers'+(j.voucherCount!=null?(' from '+j.voucherCount.toLocaleString('en-IN')+' vouchers'):'')+(learnCount?(' · applied '+learnCount+' groupings learned from last year'):'')+'.</span>';
       if(!document.getElementById('entity').value) document.getElementById('entity').value=cleanCoName(company&&company.name)||'';
       prepare();            /* classify + aggregate */
@@ -881,7 +882,18 @@ function renderNotes(){
     if(no===99 && !bn.lines.length) return;
     var tot=(no===2)?p.resCur:bn.cur;
     h+='<details><summary>Note '+no+' · '+NOTES[no].head+' <span class="amt">'+acct(tot)+'</span></summary><div class="nbody"><table class="fin"><tbody>';
-    bn.lines.slice().sort(function(a,b){return Math.abs(b.cur)-Math.abs(a.cur);}).forEach(function(x){ h+='<tr><td>'+esc(x.name)+'</td><td class="r">'+acct(x.cur)+'</td></tr>'; });
+    var lines=bn.lines.slice().sort(function(a,b){return Math.abs(b.cur)-Math.abs(a.cur);});
+    var subs={}, order=[]; lines.forEach(function(x){ var s=subMap[x.name]||''; if(!(s in subs)){subs[s]=[];order.push(s);} subs[s].push(x); });
+    var hasSub=order.filter(function(s){return s!=='';}).length>0 && order.length>1;
+    if(hasSub){
+      order.sort(function(a,b){ if(a==='')return 1; if(b==='')return -1; return a.localeCompare(b); });
+      order.forEach(function(s){ var grp=subs[s]; var stot=grp.reduce(function(t,x){return t+x.cur;},0);
+        h+='<tr class="subh"><td>'+esc(s||'Others')+'</td><td class="r">'+acct(stot)+'</td></tr>';
+        grp.forEach(function(x){ h+='<tr><td style="padding-left:22px">'+esc(x.name)+'</td><td class="r">'+acct(x.cur)+'</td></tr>'; });
+      });
+    } else {
+      lines.forEach(function(x){ h+='<tr><td>'+esc(x.name)+'</td><td class="r">'+acct(x.cur)+'</td></tr>'; });
+    }
     if(no===2) h+='<tr><td><i>Add: Profit for the year</i></td><td class="r">'+acct(p.pbtCur)+'</td></tr>';
     if(no===12){ h+=depRegisterRows(); }
     h+='<tr class="grp"><td>Total</td><td class="r">'+acct(tot)+'</td></tr></tbody></table></div></details>';
@@ -929,9 +941,18 @@ function buildWorkbook(){
     if(no===99 && !p.byNote[99].lines.length) return;
     var bn=p.byNote[no];
     var title=ns.addRow(['Note '+no+' : '+NOTES[no].head,'','']); title.getCell(1).font={bold:true,size:10,color:{argb:'FF173F28'}};
-    bn.lines.slice().sort(function(a,b){return Math.abs(b.cur)-Math.abs(a.cur);}).forEach(function(x){
-      var r=ns.addRow([x.name,x.cur,x.pri]); r.font={size:9}; r.getCell(2).numFmt=money; r.getCell(3).numFmt=money;
-    });
+    var nlines=bn.lines.slice().sort(function(a,b){return Math.abs(b.cur)-Math.abs(a.cur);});
+    var nsub={}, nord=[]; nlines.forEach(function(x){ var s=subMap[x.name]||''; if(!(s in nsub)){nsub[s]=[];nord.push(s);} nsub[s].push(x); });
+    var nHasSub=nord.filter(function(s){return s!=='';}).length>0 && nord.length>1;
+    if(nHasSub){
+      nord.sort(function(a,b){ if(a==='')return 1; if(b==='')return -1; return a.localeCompare(b); });
+      nord.forEach(function(s){ var grp=nsub[s]; var sc=grp.reduce(function(t,x){return t+x.cur;},0), sp=grp.reduce(function(t,x){return t+(x.pri||0);},0);
+        var sh=ns.addRow([(s||'Others'),sc,sp]); sh.font={size:9,bold:true}; sh.getCell(2).numFmt=money; sh.getCell(3).numFmt=money;
+        grp.forEach(function(x){ var r=ns.addRow(['   '+x.name,x.cur,x.pri]); r.font={size:9}; r.getCell(2).numFmt=money; r.getCell(3).numFmt=money; });
+      });
+    } else {
+      nlines.forEach(function(x){ var r=ns.addRow([x.name,x.cur,x.pri]); r.font={size:9}; r.getCell(2).numFmt=money; r.getCell(3).numFmt=money; });
+    }
     var curTot=(no===2)?p.resCur:bn.cur, priTot=(no===2)?p.resPri:bn.pri;
     if(no===2 && bn.lines.length){ var rr=ns.addRow(['Add: Profit for the year',p.pbtCur,p.pbtPri]); rr.font={size:9,italic:true}; rr.getCell(2).numFmt=money; rr.getCell(3).numFmt=money; }
     var tot=ns.addRow(['Total — Note '+no,curTot,priTot]);
