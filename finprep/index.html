@@ -333,8 +333,14 @@
     </div>
 
     <div class="card hidden" id="pReview">
-      <h2>Ledgers to confirm</h2>
-      <div class="sub">Placed by best guess or unplaced. Assign the right Schedule III head — blanks keep the guess.</div>
+      <h2>Review &amp; change grouping</h2>
+      <div class="sub">Every ledger read from Tally, the Schedule III head it landed in, and its sub-group. Change anything, then save — blanks keep the guess. This is your grouping second-check before the statements are built.</div>
+      <div class="period-row" style="margin:6px 0 4px;gap:10px">
+        <label style="font-size:12px;color:var(--muted)">Show</label>
+        <select id="reviewFilter"><option value="flag">Only needs review</option><option value="all">All ledgers</option></select>
+        <input id="reviewSearch" placeholder="search ledger…" style="padding:6px 8px;border:1px solid var(--border);border-radius:6px">
+        <span class="sub" id="reviewCount"></span>
+      </div>
       <div class="rev-wrap" id="reviewWrap"></div>
       <div class="period-row"><button class="btn primary" id="saveMapBtn">💾 Save &amp; re-prepare</button><span class="msg" id="msgMap" style="margin:0"></span></div>
     </div>
@@ -649,7 +655,7 @@ function doRead(){
       // connector hasn't already set — company-specific, remembered across years.
       var learnCount=0; subMap={};
       try{ var lm=grpLoad(depCompanyName()); if(lm&&lm.map){ j.ledgers.forEach(function(l){ var hit=lm.map[grpNorm(l.name)]; if(hit&&hit.sub) subMap[l.name]=hit.sub; if(overrides[l.name]==null && hit && hit.note!=null){ overrides[l.name]=Number(hit.note); learnCount++; } }); } }catch(e){}
-      loadPlExtra();
+      loadPlExtra(); loadSubOv();
       document.getElementById('msgTally').innerHTML='<span class="msg ok">✅ Read '+j.ledgers.length+' ledgers'+(j.voucherCount!=null?(' from '+j.voucherCount.toLocaleString('en-IN')+' vouchers'):'')+(learnCount?(' · applied '+learnCount+' groupings learned from last year'):'')+'.</span>';
       if(!document.getElementById('entity').value) document.getElementById('entity').value=cleanCoName(company&&company.name)||'';
       prepare();            /* classify + aggregate */
@@ -833,33 +839,46 @@ function bookedUnder(l){
   return p.filter(function(x){ return x && !/^primary$/i.test(x); }); // hide Tally's root
 }
 function renderReview(){
-  var rows=[];
-  TB.ledgers.forEach(function(l){ if(l._note===99||l._conf!=='high'||overrides[l.name]!=null) rows.push(l); });
-  rows.sort(function(a,b){return Math.abs(b.current)-Math.abs(a.current);});
   var wrap=document.getElementById('reviewWrap'), pR=document.getElementById('pReview');
-  if(!rows.length){ pR.classList.add('hidden'); return; }
+  if(!TB||!TB.ledgers.length){ pR.classList.add('hidden'); return; }
   pR.classList.remove('hidden');
+  var filt=(document.getElementById('reviewFilter')||{}).value||'flag';
+  var q=((document.getElementById('reviewSearch')||{}).value||'').toLowerCase().trim();
+  var flaggedN=TB.ledgers.filter(function(l){return l._note===99||l._conf!=='high'||overrides[l.name]!=null;}).length;
+  var rows=TB.ledgers.filter(function(l){
+    if(filt==='flag' && !(l._note===99||l._conf!=='high'||overrides[l.name]!=null)) return false;
+    if(q && l.name.toLowerCase().indexOf(q)<0) return false;
+    return true;
+  });
+  rows.sort(function(a,b){return Math.abs(b.current)-Math.abs(a.current);});
+  var rc=document.getElementById('reviewCount'); if(rc) rc.textContent=rows.length+' shown · '+flaggedN+' need review · '+TB.ledgers.length+' total';
   var opts=NOTE_ORDER.filter(function(n){return n!==99;}).map(function(n){return '<option value="'+n+'">'+n+' · '+NOTES[n].head+'</option>';}).join('');
-  var h='<table class="fin"><thead><tr><th>Ledger</th><th>Booked under (Tally)</th><th class="r">Amount (CY)</th><th>Remarks</th><th>Placed in</th></tr></thead><tbody>';
+  var h='<table class="fin"><thead><tr><th>Ledger</th><th>Booked under (Tally)</th><th class="r">Amount (CY)</th><th>Placed in (note)</th><th>Sub-group</th></tr></thead><tbody>';
   rows.forEach(function(l){
     var cur=overrides[l.name]!=null?overrides[l.name]:classify(l);
     var path=bookedUnder(l);
     var under=path.length?esc(path[0])+(path.length>1?('<span class="led"> › '+esc(path.slice(1).join(' › '))+'</span>'):''):'<span class="led">(no group)</span>';
     var gtag=l.gstin?' <span class="pill" style="background:var(--info-soft);color:var(--info)" title="'+esc(l.gstin)+'">GST</span>':'';
-    var flag=l._note===99?'<span class="pill">unplaced</span>':(overrides[l.name]!=null?'<span class="pill" style="background:var(--ok-soft);color:var(--ok)">assigned</span>':(l._conf!=='high'?'<span class="pill">low conf.</span>':''))+gtag;
-    var remark = l._note===99 ? 'No Schedule III head fits — pick one' :
-                 (overrides[l.name]!=null ? 'Your assignment' :
-                 (l._reason||'best guess')+' — confirm');
+    var flag=(l._note===99?'<span class="pill">unplaced</span>':(overrides[l.name]!=null?'<span class="pill" style="background:var(--ok-soft);color:var(--ok)">assigned</span>':(l._conf!=='high'?'<span class="pill">low conf.</span>':'')))+gtag;
     h+='<tr><td>'+esc(l.name)+' '+flag+'</td><td>'+under+'</td><td class="r">'+fmt(l.current)+'</td>'+
-       '<td class="led">'+remark+'</td>'+
-       '<td><select class="assign" data-n="'+esc(l.name)+'"><option value="">— keep guess ('+cur+' · '+esc(NOTES[cur].head)+') —</option>'+opts+'</select></td></tr>';
+       '<td><select class="assign" data-n="'+esc(l.name)+'"><option value="">— keep ('+cur+' · '+esc(NOTES[cur].head)+') —</option>'+opts+'</select></td>'+
+       '<td><input class="subedit" data-n="'+esc(l.name)+'" value="'+esc(subMap[l.name]||'')+'" placeholder="—" style="width:130px;padding:5px 6px;border:1px solid var(--border);border-radius:6px;font:inherit"></td></tr>';
   });
-  h+='</tbody></table>'; wrap.innerHTML=h;
+  h+='</tbody></table>';
+  wrap.innerHTML=rows.length?h:'<div class="sub">Nothing matches — switch to “All ledgers” or clear the search.</div>';
   wrap.querySelectorAll('select.assign').forEach(function(s){ var c=overrides[s.getAttribute('data-n')]; if(c!=null)s.value=String(c); });
 }
+(function(){ var f=document.getElementById('reviewFilter'), s=document.getElementById('reviewSearch');
+  if(f) f.addEventListener('change',renderReview); if(s) s.addEventListener('input',renderReview);
+})();
+function subOvKey(){ return 'knap-subov:'+grpNorm(depCompanyName())+':'+(TB?TB.asOn:''); }
+function loadSubOv(){ try{ var raw=localStorage.getItem(subOvKey()); if(raw){ var o=JSON.parse(raw); Object.keys(o).forEach(function(k){ if(o[k]) subMap[k]=o[k]; }); } }catch(e){} }
+function saveSubOv(){ try{ localStorage.setItem(subOvKey(), JSON.stringify(subMap)); }catch(e){} }
 document.getElementById('saveMapBtn').onclick=function(){
   var changed={};
   document.querySelectorAll('#reviewWrap select.assign').forEach(function(s){ var name=s.getAttribute('data-n'); if(s.value){ overrides[name]=Number(s.value); changed[name]=Number(s.value); } else { delete overrides[name]; changed[name]=''; } });
+  document.querySelectorAll('#reviewWrap input.subedit').forEach(function(inp){ var name=inp.getAttribute('data-n'); var v=inp.value.trim(); if(v) subMap[name]=v; else delete subMap[name]; });
+  saveSubOv();
   document.getElementById('msgMap').textContent='Saving to the connector…';
   // persist on this machine so the assignments stick next time
   fetch(API+'/api/fin/map',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({map:changed})})
@@ -1122,35 +1141,83 @@ function buildWorkbook(){
   ns.views=[{state:'frozen',ySplit:1}];
 
   var bs=wb.addWorksheet('Balance Sheet');
-  bs.columns=[{width:52},{width:8},{width:16},{width:16}];
-  bs.addRow([entity]).getCell(1).font={bold:true,size:13};
-  bs.addRow(['Balance Sheet as at '+curLabel]).getCell(1).font={bold:true,size:11};
-  bs.addRow(['(All amounts in Indian Rupees)']).getCell(1).font={italic:true,size:9,color:{argb:'FF6B7280'}};
-  var bh=bs.addRow(['Particulars','Note','As at '+curLabel,'As at '+priLabel]); bh.eachCell(function(c){c.fill=head.fill;c.font=head.font;c.alignment=head.alignment;});
-  function faceLine(label,no){
-    var r=bs.addRow([label,no,null,null]); r.font={size:10};
-    if(noteRow[no]){ r.getCell(3).value={formula:'Notes!B'+noteRow[no],result:(no===2?p.resCur:p.byNote[no].cur)}; r.getCell(4).value={formula:'Notes!C'+noteRow[no],result:(no===2?p.resPri:p.byNote[no].pri)}; }
+  bs.columns=[{width:58},{width:9},{width:18},{width:18}];
+  bs.mergeCells('A1:D1'); bs.getCell('A1').value=entity; bs.getCell('A1').font={bold:true,size:13}; bs.getCell('A1').alignment={horizontal:'center'};
+  bs.mergeCells('A2:D2'); bs.getCell('A2').value='CIN: '; bs.getCell('A2').font={size:9}; bs.getCell('A2').alignment={horizontal:'center'};
+  bs.mergeCells('A3:D3'); bs.getCell('A3').value='Balance Sheet as at '+curLabel; bs.getCell('A3').font={bold:true,size:11}; bs.getCell('A3').alignment={horizontal:'center'};
+  bs.addRow([]);
+  bs.addRow(['All amounts in Indian Rupees, unless otherwise stated']).getCell(1).font={italic:true,size:9,color:{argb:'FF6B7280'}};
+  var bh=bs.addRow(['Particulars','Notes','As at '+curLabel,'As at '+priLabel]); bh.eachCell(function(c){c.fill=head.fill;c.font=head.font;c.alignment=head.alignment;});
+  function faceLine(label,no,showZero){
+    var r=bs.addRow([label,(no||''),null,null]); r.font={size:10}; r.getCell(2).alignment={horizontal:'center'};
+    if(no && noteRow[no]){ r.getCell(3).value={formula:'Notes!B'+noteRow[no],result:(no===2?p.resCur:p.byNote[no].cur)}; r.getCell(4).value={formula:'Notes!C'+noteRow[no],result:(no===2?p.resPri:p.byNote[no].pri)}; }
+    else if(showZero){ r.getCell(3).value=0; r.getCell(4).value=0; }
     r.getCell(3).numFmt=money; r.getCell(4).numFmt=money; return r.number;
   }
-  bs.addRow(['EQUITY AND LIABILITIES']).getCell(1).font={bold:true,size:10};
-  var elRows=[]; elRows.push(faceLine('Share capital',1)); elRows.push(faceLine('Reserves and surplus',2));
-  [4,5,6,7,8,9,10,11].forEach(function(n){ elRows.push(faceLine(NOTES[n].head,n)); });
-  var elTot=bs.addRow(['Total equity and liabilities','',{formula:elRows.map(function(x){return 'C'+x;}).join('+'),result:p.eqLiabCur},{formula:elRows.map(function(x){return 'D'+x;}).join('+'),result:p.eqLiabPri}]);
+  function secHdr(t){ var r=bs.addRow([t]); r.getCell(1).font={bold:true,size:10}; return r; }
+  secHdr('I   Equity and liabilities');
+  secHdr("1  Shareholders' funds");
+  var el=[];
+  el.push(faceLine('        (a) Share capital',1));
+  el.push(faceLine('        (b) Reserves and surplus',2));
+  el.push(faceLine('        (c) Money received against share warrants',3,true));
+  secHdr('2  Share application money pending allotment');
+  secHdr('3  Non-current liabilities');
+  el.push(faceLine('        (a) Long-term borrowings',4));
+  el.push(faceLine('        (b) Deferred tax liabilities (Net)',5));
+  el.push(faceLine('        (c) Other long-term liabilities',6));
+  el.push(faceLine('        (d) Long-term provisions',7));
+  secHdr('4  Current liabilities');
+  el.push(faceLine('        (a) Short-term borrowings',8));
+  el.push(faceLine('        (b) Trade payables',9));
+  el.push(faceLine('        (c) Other current liabilities',10));
+  el.push(faceLine('        (d) Short-term provisions',11));
+  var elTot=bs.addRow(['Total equity and liabilities','',{formula:el.map(function(x){return 'C'+x;}).join('+'),result:p.eqLiabCur},{formula:el.map(function(x){return 'D'+x;}).join('+'),result:p.eqLiabPri}]);
   elTot.font={bold:true,size:10}; elTot.getCell(3).numFmt=money; elTot.getCell(4).numFmt=money; elTot.eachCell(function(c){c.border={top:{style:'thin'},bottom:{style:'double'}};});
-  bs.addRow([]); bs.addRow(['ASSETS']).getCell(1).font={bold:true,size:10};
-  var aRows=[]; [12,13,14,15,16,17,18,19,20,21,22].forEach(function(n){ aRows.push(faceLine(NOTES[n].head,n)); });
-  var aTot=bs.addRow(['Total assets','',{formula:aRows.map(function(x){return 'C'+x;}).join('+'),result:p.assetsCur},{formula:aRows.map(function(x){return 'D'+x;}).join('+'),result:p.assetsPri}]);
+  bs.addRow([]);
+  secHdr('II  Assets');
+  secHdr('1  Non-current assets');
+  var as=[];
+  as.push(faceLine('        (a) Property, Plant and Equipment and Intangible assets',12));
+  as.push(faceLine('        (b) Non-current investments',13));
+  as.push(faceLine('        (c) Deferred tax assets (Net)',14));
+  as.push(faceLine('        (d) Long-term loans and advances',15));
+  as.push(faceLine('        (e) Other non-current assets',16));
+  secHdr('2  Current assets');
+  as.push(faceLine('        (a) Current investments',17));
+  as.push(faceLine('        (b) Inventories',18));
+  as.push(faceLine('        (c) Trade receivables',19));
+  as.push(faceLine('        (d) Cash and cash equivalents',20));
+  as.push(faceLine('        (e) Short-term loans and advances',21));
+  as.push(faceLine('        (f) Other current assets',22));
+  var aTot=bs.addRow(['Total assets','',{formula:as.map(function(x){return 'C'+x;}).join('+'),result:p.assetsCur},{formula:as.map(function(x){return 'D'+x;}).join('+'),result:p.assetsPri}]);
   aTot.font={bold:true,size:10}; aTot.getCell(3).numFmt=money; aTot.getCell(4).numFmt=money; aTot.eachCell(function(c){c.border={top:{style:'thin'},bottom:{style:'double'}};});
   bs.addRow([]);
   var chk=bs.addRow(['Difference (Assets − Equity & Liabilities) — should be nil','',{formula:'C'+aTot.number+'-C'+elTot.number,result:p.diffCur},{formula:'D'+aTot.number+'-D'+elTot.number,result:p.diffPri}]);
   chk.font={italic:true,size:9,color:{argb:Math.abs(p.diffCur)<1?'FF16A34A':'FFDC2626'}}; chk.getCell(3).numFmt=money; chk.getCell(4).numFmt=money;
-  bs.views=[{state:'frozen',ySplit:4}];
+  bs.addRow([]);
+  var sap=bs.addRow(['Significant Accounting Policies','1']); sap.getCell(2).alignment={horizontal:'center'};
+  bs.addRow(['Other Notes To Accounts']);
+  bs.addRow([]);
+  bs.addRow(['The accompanying notes are an integral part of the financial statements']).getCell(1).font={italic:true,size:9};
+  bs.addRow([]);
+  bs.addRow(['As per our report of even date']).getCell(1).font={size:9};
+  bs.addRow(['For [Auditor firm name]','','For and on behalf of the Board of Directors of']);
+  bs.addRow(['Chartered Accountants','',entity]);
+  bs.addRow([]); bs.addRow([]);
+  bs.addRow(['[Partner name]','','[Director name]','[Director name]']);
+  bs.addRow(['Partner','','Director','Director']);
+  bs.addRow(['Membership No.: ________','','DIN: ________','DIN: ________']);
+  bs.addRow(['Firm Registration No.: ________']);
+  bs.addRow(['Place: ________   Date: ________']);
+  bs.views=[{state:'frozen',ySplit:6}];
 
   var pl=wb.addWorksheet('Profit & Loss');
-  pl.columns=[{width:52},{width:8},{width:16},{width:16}];
-  pl.addRow([entity]).getCell(1).font={bold:true,size:13};
-  pl.addRow(['Statement of Profit and Loss for the year ended '+curLabel]).getCell(1).font={bold:true,size:11};
-  var ph=pl.addRow(['Particulars','Note','Year ended '+curLabel,'Year ended '+priLabel]); ph.eachCell(function(c){c.fill=head.fill;c.font=head.font;c.alignment=head.alignment;});
+  pl.columns=[{width:58},{width:9},{width:18},{width:18}];
+  pl.mergeCells('A1:D1'); pl.getCell('A1').value=entity; pl.getCell('A1').font={bold:true,size:13}; pl.getCell('A1').alignment={horizontal:'center'};
+  pl.mergeCells('A2:D2'); pl.getCell('A2').value='Statement of Profit and Loss for the year ended '+curLabel; pl.getCell('A2').font={bold:true,size:11}; pl.getCell('A2').alignment={horizontal:'center'};
+  pl.addRow(['All amounts in Indian Rupees, unless otherwise stated']).getCell(1).font={italic:true,size:9,color:{argb:'FF6B7280'}};
+  var ph=pl.addRow(['Particulars','Notes','Year ended '+curLabel,'Year ended '+priLabel]); ph.eachCell(function(c){c.fill=head.fill;c.font=head.font;c.alignment=head.alignment;});
   function plLine(label,no,c,pr){ var r=pl.addRow([label,no||'',c,pr]); r.font={size:10}; r.getCell(3).numFmt=money; r.getCell(4).numFmt=money; return r.number; }
   var rIncA=plLine('Revenue from operations',23,p.byNote[23].cur,p.byNote[23].pri);
   var rIncB=plLine('Other income',24,p.byNote[24].cur,p.byNote[24].pri);
@@ -1177,6 +1244,18 @@ function buildWorkbook(){
   var shn=numx(xe.shares);
   var eps=pl.addRow(['Earnings per equity share — basic & diluted (₹)','', shn>0?{formula:'C'+lastProfitRow+'/'+shn,result:patC/shn}:'—', shn>0?{formula:'D'+lastProfitRow+'/'+shn,result:patP/shn}:'—']); eps.font={size:10}; eps.getCell(3).numFmt='#,##0.00'; eps.getCell(4).numFmt='#,##0.00';
   pl.addRow(['(No. of equity shares: '+(shn||'—')+' · face value ₹ '+(numx(xe.faceValue)||'—')+' · framework: '+(framework==='INDAS'?'Ind AS (Division II)':'AS (Division I)')+')']).getCell(1).font={italic:true,size:9,color:{argb:'FF5F6B62'}};
+  pl.addRow([]);
+  pl.addRow(['Significant Accounting Policies','1']).getCell(2).alignment={horizontal:'center'};
+  pl.addRow(['The accompanying notes are an integral part of the financial statements']).getCell(1).font={italic:true,size:9};
+  pl.addRow([]);
+  pl.addRow(['As per our report of even date']).getCell(1).font={size:9};
+  pl.addRow(['For [Auditor firm name]','','For and on behalf of the Board of Directors of']);
+  pl.addRow(['Chartered Accountants','',entity]);
+  pl.addRow([]); pl.addRow([]);
+  pl.addRow(['[Partner name]','','[Director name]','[Director name]']);
+  pl.addRow(['Partner','','Director','Director']);
+  pl.addRow(['Membership No.: ________','','DIN: ________','DIN: ________']);
+  pl.addRow(['Place: ________   Date: ________']);
   pl.views=[{state:'frozen',ySplit:3}];
 
   // Cash Flow (indirect, summary)
