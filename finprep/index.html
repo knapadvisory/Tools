@@ -373,12 +373,18 @@
       <div class="sub">One Excel workbook: Balance Sheet &amp; P&amp;L (faces linked to notes), Notes, Cash Flow, Trial Balance with “used-in” remarks, and a Review sheet. Figures in full rupees.</div>
       <details class="sig-card" open style="margin:10px 0 4px;border:1px solid var(--border);border-radius:10px;padding:10px 14px;background:var(--surface-2)">
         <summary style="cursor:pointer;font-weight:600;font-size:13px;color:var(--green)">Signatories &amp; entity details <span class="sub" style="font-weight:400">— pre-filled on the Balance Sheet &amp; P&amp;L signature block</span></summary>
-        <div class="sig-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin-top:10px">
+        <div class="period-row" style="margin:10px 0 4px;gap:8px">
+          <button class="btn" id="impPriorBtn" type="button">⬆ Import from last year's financials</button>
+          <input type="file" id="impPriorFile" accept=".xlsx" hidden>
+          <span class="sub" id="impPriorMsg"></span>
+        </div>
+        <div class="sig-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin-top:8px">
+          <div style="grid-column:1/-1"><label>Company legal name</label><input id="sig_legalname" placeholder="ABC Private Limited"></div>
           <div><label>CIN</label><input id="sig_cin" placeholder="U74999XX2017PTC000000"></div>
           <div><label>Auditor firm name</label><input id="sig_firm" placeholder="K N K &amp; COMPANY"></div>
-          <div><label>ICAI Firm Reg. No.</label><input id="sig_frn" placeholder="033312N"></div>
-          <div><label>Partner name</label><input id="sig_partner" placeholder="Neeraj Rohilla"></div>
-          <div><label>Membership No.</label><input id="sig_mno" placeholder="500000"></div>
+          <div><label>ICAI Firm Reg. No. (FRN)</label><input id="sig_frn" placeholder="033312N"></div>
+          <div><label>Auditor (partner) name</label><input id="sig_partner" placeholder="Neeraj Rohilla"></div>
+          <div><label>Membership No. (MRN)</label><input id="sig_mno" placeholder="500000"></div>
           <div><label>Director 1 name</label><input id="sig_dir1"></div>
           <div><label>Director 1 DIN</label><input id="sig_din1"></div>
           <div><label>Director 2 name</label><input id="sig_dir2"></div>
@@ -386,7 +392,12 @@
           <div><label>Place</label><input id="sig_place"></div>
           <div><label>Date</label><input id="sig_date" placeholder="30 September 2026"></div>
         </div>
-        <div class="sub" style="margin-top:6px">Firm details (auditor, FRN, partner, membership) are remembered globally; CIN &amp; directors per company. Blank fields fall back to placeholders.</div>
+        <div style="margin-top:12px">
+          <label style="font-size:12px;color:var(--muted)">Shareholders holding &gt; 5% (name · no. of shares · % holding)</label>
+          <div id="shList"></div>
+          <button class="btn ghost sm" id="shAdd" type="button" style="margin-top:6px">+ Add shareholder</button>
+        </div>
+        <div class="sub" style="margin-top:8px">Firm details (auditor, FRN, partner, membership) are remembered globally; entity details &amp; shareholders per company. Import pulls them from last year's signed financials — edit anything after.</div>
       </details>
       <div class="period-row">
         <button class="btn primary lg" id="exportBtn">📗 Download working paper (Excel)</button>
@@ -896,7 +907,8 @@ function renderReview(){
   if(f) f.addEventListener('change',renderReview); if(s) s.addEventListener('input',renderReview);
 })();
 /* signatory & entity details — firm-level remembered globally, entity-level per company */
-var SIG_FIRM=['firm','frn','partner','mno'], SIG_CO=['cin','dir1','din1','dir2','din2','place','date'];
+var SIG_FIRM=['firm','frn','partner','mno'], SIG_CO=['legalname','cin','dir1','din1','dir2','din2','place','date'];
+var shareholders=[];
 function sigEl(k){ return document.getElementById('sig_'+k); }
 function sigCoKey(){ return 'knap-sig:'+grpNorm(depCompanyName()); }
 function loadSig(){
@@ -906,16 +918,60 @@ function loadSig(){
   if(!localStorage.getItem('knap-firm')){ firm={firm:'K N K & COMPANY', frn:'033312N', partner:'', mno:''}; }
   SIG_FIRM.forEach(function(k){ var el=sigEl(k); if(el) el.value=firm[k]||''; });
   SIG_CO.forEach(function(k){ var el=sigEl(k); if(el) el.value=co[k]||''; });
+  shareholders=Array.isArray(co.shareholders)?co.shareholders:[]; renderSh();
 }
 function saveSig(){
   var firm={}, co={};
   SIG_FIRM.forEach(function(k){ var el=sigEl(k); firm[k]=el?el.value:''; });
   SIG_CO.forEach(function(k){ var el=sigEl(k); co[k]=el?el.value:''; });
+  co.shareholders=shareholders;
   try{ localStorage.setItem('knap-firm', JSON.stringify(firm)); }catch(e){}
   try{ localStorage.setItem(sigCoKey(), JSON.stringify(co)); }catch(e){}
 }
-function getSig(){ var o={}; SIG_FIRM.concat(SIG_CO).forEach(function(k){ var el=sigEl(k); o[k]=el?el.value.trim():''; }); return o; }
-(function(){ SIG_FIRM.concat(SIG_CO).forEach(function(k){ var el=document.getElementById('sig_'+k); if(el) el.addEventListener('input',saveSig); }); })();
+function getSig(){ var o={}; SIG_FIRM.concat(SIG_CO).forEach(function(k){ var el=sigEl(k); o[k]=el?el.value.trim():''; }); o.shareholders=shareholders; return o; }
+function renderSh(){ var host=document.getElementById('shList'); if(!host)return;
+  host.innerHTML=shareholders.map(function(s,i){ return '<div class="period-row" style="gap:6px;margin-top:4px"><input data-sh="'+i+'" data-k="name" value="'+esc(s.name||'')+'" placeholder="Name" style="flex:1;min-width:140px"><input data-sh="'+i+'" data-k="shares" value="'+esc(s.shares==null?'':s.shares)+'" placeholder="No. of shares" style="width:130px"><input data-sh="'+i+'" data-k="pct" value="'+esc(s.pct==null?'':s.pct)+'" placeholder="%" style="width:70px"><button class="btn ghost sm" data-shdel="'+i+'" type="button">✕</button></div>'; }).join('')||'<div class="sub">None added.</div>';
+}
+(function(){ SIG_FIRM.concat(SIG_CO).forEach(function(k){ var el=document.getElementById('sig_'+k); if(el) el.addEventListener('input',saveSig); });
+  var sl=document.getElementById('shList');
+  if(sl){ sl.addEventListener('input',function(e){ var i=e.target.getAttribute('data-sh'), k=e.target.getAttribute('data-k'); if(i==null)return; shareholders[+i][k]=e.target.value; saveSig(); });
+    sl.addEventListener('click',function(e){ var d=e.target.getAttribute('data-shdel'); if(d!=null){ shareholders.splice(+d,1); renderSh(); saveSig(); } }); }
+  var sa=document.getElementById('shAdd'); if(sa) sa.addEventListener('click',function(){ shareholders.push({name:'',shares:'',pct:''}); renderSh(); });
+  var ib=document.getElementById('impPriorBtn'), iff=document.getElementById('impPriorFile');
+  if(ib&&iff){ ib.onclick=function(){ iff.click(); };
+    iff.addEventListener('change',function(){ var f=this.files[0]; this.value=''; if(!f)return; var msg=document.getElementById('impPriorMsg');
+      if(!window.ExcelJS){ msg.textContent='Excel library still loading — try again.'; return; }
+      msg.textContent='Reading last year’s file…'; msg.style.color='';
+      f.arrayBuffer().then(function(buf){ var wb=new ExcelJS.Workbook(); return wb.xlsx.load(buf).then(function(){ var d=importPriorDetails(wb); applyPrior(d);
+        msg.textContent='Imported firm, CIN, directors'+((d.shareholders&&d.shareholders.length)?(' & '+d.shareholders.length+' shareholders'):'')+' — review & edit.'; msg.style.color='#14461f'; }); })
+      .catch(function(e){ msg.textContent='Could not read: '+e.message; msg.style.color='#b42318'; });
+    });
+  }
+})();
+function applyPrior(d){
+  ['legalname','cin','firm','frn','partner','mno','dir1','din1','dir2','din2'].forEach(function(k){ var el=sigEl(k); if(el && d[k]) el.value=d[k]; });
+  if(d.shareholders && d.shareholders.length){ shareholders=d.shareholders.map(function(s){ return {name:s.name||'',shares:s.shares==null?'':s.shares,pct:s.pct==null?'':s.pct}; }); renderSh(); }
+  saveSig();
+}
+/* --- prior-year details parser (from a signed financials Excel) --- */
+function sCellText(cell){ if(!cell)return null; var v=cell.value; if(v&&typeof v==='object'){ if(v.formula!==undefined)return (v.result!=null&&typeof v.result!=='number')?String(v.result).trim():null; if(v.result!=null)v=v.result; else if(v.text!=null)v=v.text; else if(v.richText)v=v.richText.map(function(t){return t.text;}).join(''); else return null; } if(typeof v==='number')return null; if(v==null)return null; var s=String(v).trim(); return s||null; }
+function sCellNum(cell){ if(!cell)return null; var v=cell.value; if(v&&typeof v==='object'){ if(typeof v.result==='number')return v.result; return null; } return typeof v==='number'?v:null; }
+function importPriorDetails(wb){
+  var cells=[]; wb.worksheets.forEach(function(ws){ ws.eachRow(function(row,rn){ row.eachCell(function(c,cn){ var v=sCellText(c); if(v) cells.push({sheet:ws.name,r:rn,c:cn,v:v}); }); }); });
+  var join=cells.map(function(x){return x.v;}).join('\n'); var out={};
+  var cin=join.match(/\b([LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6})\b/i); if(cin)out.cin=cin[1].toUpperCase();
+  var frn=join.match(/Registration\s*No\.?\s*:?\s*([0-9]{5,6}[A-Za-z]?)/i); if(frn)out.frn=frn[1].toUpperCase();
+  var mrn=join.match(/(?:Membership|M\.?\s*No|Mem\.?\s*No|MRN)\.?\s*:?\s*([0-9]{5,6})/i); if(mrn)out.mno=mrn[1];
+  var dins=[],dre=/DIN\s*:?\s*([0-9]{8})/gi,dm; while((dm=dre.exec(join))){dins.push(dm[1]);} if(dins[0])out.din1=dins[0]; if(dins[1])out.din2=dins[1];
+  var firmCell=cells.find(function(x){return /^For\s+.{2,}/i.test(x.v)&&x.v.length<60&&!/Board of Directors/i.test(x.v);}); if(firmCell)out.firm=firmCell.v.replace(/^For\s+/i,'').trim();
+  function nameAbove(lbl){ var L=cells.find(function(x){return x.v.trim().toLowerCase()===lbl;}); if(!L)return null; var a=cells.find(function(x){return x.sheet===L.sheet&&x.c===L.c&&x.r===L.r-1;}); return a?a.v.trim():null; }
+  var partner=nameAbove('partner'); if(partner)out.partner=partner;
+  var dirs=[]; cells.filter(function(x){return x.v.trim().toLowerCase()==='director';}).forEach(function(L){ var a=cells.find(function(x){return x.sheet===L.sheet&&x.c===L.c&&x.r===L.r-1;}); if(a&&a.v.trim())dirs.push(a.v.trim()); }); if(dirs[0])out.dir1=dirs[0]; if(dirs[1])out.dir2=dirs[1];
+  var bsw=wb.getWorksheet('Balance Sheet')||wb.worksheets[0]; var t1=bsw?sCellText(bsw.getCell('A1')):null; if(t1)out.legalname=t1.trim();
+  out.shareholders=[]; var shHdr=cells.find(function(x){return /shareholders?\s+holding/i.test(x.v);});
+  if(shHdr){ var ws=wb.getWorksheet(shHdr.sheet); for(var rr=shHdr.r+1;rr<shHdr.r+16;rr++){ var row=ws.getRow(rr); var name=sCellText(row.getCell(1)); if(!name)continue; if(/name of|number of|% holding|particulars/i.test(name))continue; if(/^note\s|promoter/i.test(name))break; out.shareholders.push({name:name,shares:sCellNum(row.getCell(2)),pct:sCellNum(row.getCell(3))}); if(out.shareholders.length>=12)break; } }
+  return out;
+}
 function subOvKey(){ return 'knap-subov:'+grpNorm(depCompanyName())+':'+(TB?TB.asOn:''); }
 function loadSubOv(){ try{ var raw=localStorage.getItem(subOvKey()); if(raw){ var o=JSON.parse(raw); Object.keys(o).forEach(function(k){ if(o[k]) subMap[k]=o[k]; }); } }catch(e){} }
 function saveSubOv(){ try{ localStorage.setItem(subOvKey(), JSON.stringify(subMap)); }catch(e){} }
@@ -1144,6 +1200,7 @@ document.getElementById('exportBtn').onclick=function(){
 };
 function buildWorkbook(){
   var p=prepared, wb=new ExcelJS.Workbook(); var sig=getSig();
+  if(sig.legalname) entity=sig.legalname;
   var head={fill:{type:'pattern',pattern:'solid',fgColor:{argb:'FF173F28'}},font:{color:{argb:'FFFFFFFF'},bold:true,size:10},alignment:{horizontal:'center'}};
   var money='#,##0.00';
   var curLabel=asAtCur(), priLabel=asAtPri();
@@ -1196,6 +1253,12 @@ function buildWorkbook(){
     tot.font={bold:true,size:9}; tot.getCell(2).numFmt=money; tot.getCell(3).numFmt=money;
     tot.getCell(1).border={top:{style:'thin'}}; tot.getCell(2).border={top:{style:'thin'}}; tot.getCell(3).border={top:{style:'thin'}};
     noteRow[no]=tot.number; ns.addRow([]);
+    if(no===1 && sig.shareholders && sig.shareholders.length){
+      var sht=ns.addRow(['Details of shareholders holding more than 5% shares','','']); sht.getCell(1).font={bold:true,size:9};
+      var shh=ns.addRow(['Name of shareholder','No. of shares','% holding']); shh.font={bold:true,size:9};
+      sig.shareholders.forEach(function(s){ var r=ns.addRow([s.name||'', numx(s.shares)||'', (s.pct===''||s.pct==null)?'':(numx(s.pct)+'%')]); r.font={size:9}; });
+      ns.addRow([]);
+    }
   });
   ns.views=[{state:'frozen',ySplit:1}];
 
