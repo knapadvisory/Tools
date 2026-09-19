@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fixed Assets & Depreciation (Schedule II) — KNAP Tools</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23173f28'/><text x='50' y='70' text-anchor='middle' font-size='54' font-weight='700' fill='%235fd68a'>%CE%94</text></svg>">
+<script src="/session.js" defer></script>
+<script src="/gstr2b/exceljs.js" defer></script>
+<style>
+  :root{ --green:#1b6a3a; --head:#173f28; --ink:#141a16; --mut:#5f6b62; --rule:#e2e5df; --card:#fff; --bg:#f4f5f2;
+    --soft:#e7f2ea; --warn:#a86617; --warn-soft:#fbf1dd; --bad:#b3261e; --bad-soft:#fbe9e7; --info:#1f5f8b; --info-soft:#e6eff5; }
+  *{box-sizing:border-box} body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:var(--ink);background:var(--bg)}
+  .band{background:var(--head);color:#fff;padding:11px 20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  .band a.back{color:#bfe6cd;text-decoration:none;font-size:13px} .band h1{margin:0;font-size:18px}
+  .band .sp{margin-left:auto}
+  main{max-width:1280px;margin:0 auto;padding:16px 14px 80px}
+  .btn{border:1px solid var(--green);background:var(--green);color:#fff;padding:8px 14px;border-radius:7px;font:inherit;font-weight:600;cursor:pointer}
+  .btn.ghost{background:#fff;color:var(--green)} .btn.sm{padding:6px 10px;font-size:13px;font-weight:500} .btn:disabled{opacity:.5;cursor:default}
+  .card{background:var(--card);border:1px solid var(--rule);border-radius:11px;padding:16px 18px;margin-top:14px}
+  .card h2{margin:0 0 4px;font-size:15px;color:var(--green)} .card p.sub{margin:0 0 12px;color:var(--mut);font-size:13px}
+  .row{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
+  label{display:block;font-size:12px;color:var(--mut);margin:0 0 3px}
+  input,select{padding:7px 8px;border:1px solid var(--rule);border-radius:6px;font:inherit;background:#fff}
+  input[type=date]{min-width:140px}
+  .tools{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+  .tbl-wrap{overflow:auto;border:1px solid var(--rule);border-radius:9px}
+  table{border-collapse:collapse;width:100%;font-size:13px;white-space:nowrap}
+  th,td{border-bottom:1px solid var(--rule);border-right:1px solid #eef0ec;padding:5px 7px;text-align:right}
+  th{background:#f0f4f0;color:#25402e;font-weight:600;position:sticky;top:0;text-align:right}
+  th.l,td.l{text-align:left}
+  td input,td select{padding:4px 5px;border:1px solid transparent;border-radius:5px;background:transparent;width:100%;min-width:70px}
+  td input:focus,td select:focus{border-color:var(--green);background:#fff}
+  td.desc input{min-width:150px} td.calc{background:#f8faf8;color:#2b3a30;font-variant-numeric:tabular-nums}
+  td.neg{color:var(--bad)} tr.disp td{background:#fbf6ee}
+  tfoot td{font-weight:700;background:#eef4ee;border-top:2px solid var(--green)}
+  .del{border:0;background:none;color:#b42318;cursor:pointer;font-size:15px}
+  .num{font-variant-numeric:tabular-nums}
+  .flags .f{border-radius:8px;padding:8px 11px;margin-top:8px;font-size:13px;border:1px solid}
+  .flags .warn{background:var(--warn-soft);border-color:#f0dcb4;color:#6f4410}
+  .flags .bad{background:var(--bad-soft);border-color:#f3cdc8;color:#7a1c16}
+  .flags .info{background:var(--info-soft);border-color:#cfe0ee;color:#194864}
+  .flags .ok{background:var(--soft);border-color:#cfe6d7;color:#14461f}
+  .note-tbl th,.note-tbl td{white-space:nowrap}
+  .kpi{display:flex;gap:22px;flex-wrap:wrap;margin-top:6px}
+  .kpi .k{background:#f6f8f6;border:1px solid var(--rule);border-radius:9px;padding:10px 14px;min-width:150px}
+  .kpi .k .v{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums} .kpi .k .t{font-size:12px;color:var(--mut)}
+  .muted{color:var(--mut);font-size:12px} .hide{display:none}
+  details.ref{margin-top:10px} details.ref summary{cursor:pointer;color:var(--green);font-weight:600;font-size:13px}
+  .ref table{white-space:normal} .ref td,.ref th{text-align:left;font-size:12px}
+</style>
+</head>
+<body>
+<div class="band">
+  <a class="back" href="/finprep/">← Financial statements</a>
+  <h1>Fixed Assets &amp; Depreciation · Schedule II</h1>
+  <span class="muted" style="color:#cfe6d7">Companies Act 2013 · useful-life method</span>
+  <div class="sp"></div>
+  <a class="back" href="/">All tools</a>
+</div>
+
+<main>
+  <div class="card">
+    <div class="row">
+      <div><label>Company</label><input id="company" placeholder="e.g. Saartha Developments Pvt Ltd" style="min-width:260px"></div>
+      <div><label>Financial year ended</label><input id="fyEnd" type="date" value="2026-03-31"></div>
+      <div><label>Year begins</label><input id="fyStart" type="date" value="2025-04-01" readonly></div>
+      <div><label>Default method</label><select id="defMethod"><option value="WDV">WDV (written-down value)</option><option value="SLM">SLM (straight-line)</option></select></div>
+      <div><label>Default residual %</label><input id="defRes" type="number" value="5" min="0" max="100" style="width:90px"></div>
+    </div>
+    <p class="sub" style="margin-top:10px">Maintain the fixed-asset register below. Depreciation is charged on a <b>pro-rata (day) basis</b> from the date each asset is put to use, capped at the residual value, per Schedule II. The Excel export is your working paper — re-import it next year and use <b>Roll forward</b> to carry closing balances as opening.</p>
+    <div class="tools">
+      <button class="btn sm" id="add" type="button">+ Add asset</button>
+      <button class="btn ghost sm" id="importBtn" type="button">⬆ Import Excel</button>
+      <input type="file" id="importFile" accept=".xlsx" hidden>
+      <button class="btn ghost sm" id="exportBtn" type="button">⬇ Export Excel</button>
+      <button class="btn ghost sm" id="roll" type="button">↻ Roll forward to next FY</button>
+      <button class="btn ghost sm" id="sample" type="button">Load sample</button>
+      <button class="btn ghost sm" id="clear" type="button">Clear</button>
+      <span class="muted" id="saveState" style="align-self:center"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Fixed-asset register</h2>
+    <div class="tbl-wrap">
+      <table id="tbl">
+        <thead><tr>
+          <th class="l">#</th><th class="l">Description</th><th class="l">Asset class</th>
+          <th>Life (yrs)</th><th>Method</th><th>Res %</th><th class="l">Date in use</th>
+          <th>Cost</th><th>Opening accum. dep</th><th class="l">Disposal date</th><th>Sale proceeds</th>
+          <th class="calc">Opening WDV</th><th class="calc">Additions</th><th class="calc">Dep for year</th>
+          <th class="calc">Deletions (WDV)</th><th class="calc">Closing WDV</th><th class="calc">P/(L) on sale</th><th></th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+        <tfoot><tr id="foot"></tr></tfoot>
+      </table>
+    </div>
+    <details class="ref"><summary>Schedule II — Part C useful lives (reference)</summary>
+      <div id="refTbl"></div>
+      <p class="muted">Lives shown are the Schedule II defaults; a different life needs technical justification and disclosure. Continuous-process plant and specialised industry assets carry their own lives — pick “Custom” and enter the life.</p>
+    </details>
+  </div>
+
+  <div class="card">
+    <h2>Property, Plant &amp; Equipment — note (Schedule III)</h2>
+    <p class="sub">Block-wise movement for the note to accounts. Prior-year net block comes from the opening figures you entered.</p>
+    <div class="kpi" id="kpi"></div>
+    <div class="tbl-wrap" style="margin-top:12px"><div id="note"></div></div>
+  </div>
+
+  <div class="card">
+    <h2>Points to review</h2>
+    <div class="flags" id="flags"></div>
+  </div>
+</main>
+
+<script src="depreciation.js"></script>
+</body>
+</html>
