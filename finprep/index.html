@@ -186,6 +186,7 @@
   .notes-acc summary .amt{font-family:var(--mono)}
   .notes-acc .nbody{padding:2px 14px 12px}
   .notes-acc .subh td{font-weight:600;background:var(--surface-2);border-top:1px solid var(--border)}
+  table.fin .subh2 td{font-weight:600;color:var(--muted);padding-left:6px;background:var(--surface-2)}
   .hidden{display:none}
   footer{border-top:1px solid var(--border);margin-top:32px;padding:18px 22px;text-align:center;font-size:12.5px;color:var(--faint)}
 </style>
@@ -208,6 +209,10 @@
     <a class="chip" href="grouping.html" style="text-decoration:none;background:#e7f2ea;border-color:#cfe6d7;color:#14461f;font-weight:600">≣ Grouping from last year →</a>
     <span class="chip" id="chipCo">— company —</span>
     <span class="chip" id="chipFy">FY —</span>
+    <select class="chip" id="chipFw" title="Reporting framework — switches the Balance Sheet presentation (Schedule III Division I vs II)">
+      <option value="AS">AS · Division I</option>
+      <option value="INDAS">Ind AS · Division II</option>
+    </select>
     <select class="chip mono" id="chipUnit" title="Display scale for the on-screen previews (the Excel is always in full rupees)">
       <option value="1">₹ in full</option>
       <option value="1000">₹ in ’000</option>
@@ -340,6 +345,7 @@
 var API = (function(){ try { return localStorage.getItem('knap_connector_url'); } catch(e){ return null; } })() || 'http://127.0.0.1:8797';
 var connVer = '', company=null;
 var TB=null, overrides={}, subMap={}, prepared=null, entity='', maxStep=1;
+var framework='AS', plExtra={};
 var UNIT={div:1,label:'₹ in full'};
 
 /* ================= step navigation ================= */
@@ -375,6 +381,12 @@ document.getElementById('chipUnit').onchange=function(){
   if(TB){ renderReviewStep2(); }             /* re-render previews in the new scale */
   if(prepared){ renderBS(); renderPL(); renderNotes(); }
 };
+try{ var _fw=localStorage.getItem('knap-fw'); if(_fw){ framework=_fw; var fe=document.getElementById('chipFw'); if(fe) fe.value=_fw; } }catch(e){}
+document.getElementById('chipFw').onchange=function(){ framework=this.value; try{localStorage.setItem('knap-fw',framework);}catch(e){} if(prepared){ renderBS(); renderPL(); } };
+(function(){ var pw=document.getElementById('plWrap'); if(!pw)return;
+  pw.addEventListener('input',function(e){ var k=e.target&&e.target.getAttribute&&e.target.getAttribute('data-pl'); if(k){ plExtra[k]=e.target.value; savePlExtra(); } });
+  pw.addEventListener('change',function(e){ if(e.target&&e.target.getAttribute&&e.target.getAttribute('data-pl')) renderPL(); });
+})();
 
 /* ================= connector ================= */
 function setPill(state,txt){
@@ -604,6 +616,7 @@ function doRead(){
       // connector hasn't already set — company-specific, remembered across years.
       var learnCount=0; subMap={};
       try{ var lm=grpLoad(depCompanyName()); if(lm&&lm.map){ j.ledgers.forEach(function(l){ var hit=lm.map[grpNorm(l.name)]; if(hit&&hit.sub) subMap[l.name]=hit.sub; if(overrides[l.name]==null && hit && hit.note!=null){ overrides[l.name]=Number(hit.note); learnCount++; } }); } }catch(e){}
+      loadPlExtra();
       document.getElementById('msgTally').innerHTML='<span class="msg ok">✅ Read '+j.ledgers.length+' ledgers'+(j.voucherCount!=null?(' from '+j.voucherCount.toLocaleString('en-IN')+' vouchers'):'')+(learnCount?(' · applied '+learnCount+' groupings learned from last year'):'')+'.</span>';
       if(!document.getElementById('entity').value) document.getElementById('entity').value=cleanCoName(company&&company.name)||'';
       prepare();            /* classify + aggregate */
@@ -822,8 +835,11 @@ document.getElementById('saveMapBtn').onclick=function(){
   prepare(); renderBS(); renderPL(); renderNotes(); renderReview(); renderReviewStep2();
 };
 function bsRow(label,note,cur,pri){ var c=(cur<0?'r neg':'r'), pc=(pri<0?'r neg py':'r py'); return '<tr><td>'+label+'</td><td class="note">'+(note||'')+'</td><td class="'+c+'">'+acct(cur)+'</td><td class="'+pc+'">'+acct(pri)+'</td></tr>'; }
-function renderBS(){
-  var p=prepared, h='<table class="fin"><thead><tr><th>Particulars</th><th>Note</th><th class="r">'+fyLabels(TB.asOn).cur+'</th><th class="r">'+fyLabels(TB.asOn).pri+'</th></tr></thead><tbody>';
+function bsHdr(){ return '<table class="fin"><thead><tr><th>Particulars</th><th>Note</th><th class="r">'+fyLabels(TB.asOn).cur+'</th><th class="r">'+fyLabels(TB.asOn).pri+'</th></tr></thead><tbody>'; }
+function subHdr(t){ return '<tr class="subh2"><td colspan="4"><i>'+t+'</i></td></tr>'; }
+function renderBS(){ document.getElementById('bsWrap').innerHTML = framework==='INDAS' ? bsIndAS() : bsAS(); }
+function bsAS(){
+  var p=prepared, h=bsHdr();
   h+='<tr class="grp"><td colspan="4">EQUITY AND LIABILITIES</td></tr>';
   h+=bsRow('Share capital',1,p.byNote[1].cur,p.byNote[1].pri);
   h+=bsRow('Reserves and surplus',2,p.resCur,p.resPri);
@@ -831,9 +847,49 @@ function renderBS(){
   h+='<tr class="grp"><td>Total equity and liabilities</td><td></td><td class="r">'+acct(p.eqLiabCur)+'</td><td class="r">'+acct(p.eqLiabPri)+'</td></tr>';
   h+='<tr class="grp"><td colspan="4">ASSETS</td></tr>';
   [12,13,14,15,16,17,18,19,20,21,22].forEach(function(n){ h+=bsRow(NOTES[n].head,n,p.byNote[n].cur,p.byNote[n].pri); });
+  h+='<tr class="grp"><td>Total assets</td><td></td><td class="r">'+acct(p.assetsCur)+'</td><td class="r">'+acct(p.assetsPri)+'</td></tr></tbody></table>';
+  return h;
+}
+function bsIndAS(){
+  var p=prepared, B=function(n){return p.byNote[n];}, h=bsHdr();
+  function row(l,n,c,pr){ return bsRow(l,n,c,pr); }
+  // ASSETS
+  h+='<tr class="grp"><td colspan="4">ASSETS</td></tr>';
+  h+=subHdr('Non-current assets');
+  h+=row('Property, Plant and Equipment',12,B(12).cur,B(12).pri);
+  h+=subHdr('Financial assets');
+  h+=row('Investments',13,B(13).cur,B(13).pri);
+  h+=row('Loans',15,B(15).cur,B(15).pri);
+  h+=row('Deferred tax assets (net)',14,B(14).cur,B(14).pri);
+  h+=row('Other non-current assets',16,B(16).cur,B(16).pri);
+  h+=subHdr('Current assets');
+  h+=row('Inventories',18,B(18).cur,B(18).pri);
+  h+=subHdr('Financial assets');
+  h+=row('Investments',17,B(17).cur,B(17).pri);
+  h+=row('Trade receivables',19,B(19).cur,B(19).pri);
+  h+=row('Cash and cash equivalents',20,B(20).cur,B(20).pri);
+  h+=row('Loans',21,B(21).cur,B(21).pri);
+  h+=row('Other current assets',22,B(22).cur,B(22).pri);
   h+='<tr class="grp"><td>Total assets</td><td></td><td class="r">'+acct(p.assetsCur)+'</td><td class="r">'+acct(p.assetsPri)+'</td></tr>';
-  h+='</tbody></table>';
-  document.getElementById('bsWrap').innerHTML=h;
+  // EQUITY & LIABILITIES
+  h+='<tr class="grp"><td colspan="4">EQUITY AND LIABILITIES</td></tr>';
+  h+=subHdr('Equity');
+  h+=row('Equity share capital',1,B(1).cur,B(1).pri);
+  h+=row('Other equity',2,p.resCur,p.resPri);
+  h+=subHdr('Non-current liabilities');
+  h+=subHdr('Financial liabilities');
+  h+=row('Borrowings',4,B(4).cur,B(4).pri);
+  h+=row('Other financial liabilities',6,B(6).cur,B(6).pri);
+  h+=row('Provisions',7,B(7).cur,B(7).pri);
+  h+=row('Deferred tax liabilities (net)',5,B(5).cur,B(5).pri);
+  h+=subHdr('Current liabilities');
+  h+=subHdr('Financial liabilities');
+  h+=row('Borrowings',8,B(8).cur,B(8).pri);
+  h+=row('Trade payables',9,B(9).cur,B(9).pri);
+  h+=row('Other current liabilities',10,B(10).cur,B(10).pri);
+  h+=row('Provisions',11,B(11).cur,B(11).pri);
+  h+='<tr class="grp"><td>Total equity and liabilities</td><td></td><td class="r">'+acct(p.eqLiabCur)+'</td><td class="r">'+acct(p.eqLiabPri)+'</td></tr></tbody></table>';
+  return h;
 }
 function renderPL(){
   var p=prepared, h='<table class="fin"><thead><tr><th>Particulars</th><th>Note</th><th class="r">'+fyLabels(TB.asOn).cur+'</th><th class="r">'+fyLabels(TB.asOn).pri+'</th></tr></thead><tbody>';
@@ -849,10 +905,28 @@ function renderPL(){
   h+=L('Other expenses',29,p.byNote[29].cur,p.byNote[29].pri);
   h+='<tr class="grp"><td>Total expenses</td><td></td><td class="r">'+acct(p.expCur)+'</td><td class="r">'+acct(p.expPri)+'</td></tr>';
   h+='<tr class="grp"><td>Profit / (loss) before tax</td><td></td><td class="r">'+acct(p.pbtCur)+'</td><td class="r">'+acct(p.pbtPri)+'</td></tr>';
+  var e=plExtra||{};
+  h+='<tr><td>Tax expense — current tax</td><td></td><td class="r">'+plInp('taxCur',e.taxCur)+'</td><td class="r py">'+plInp('taxCurP',e.taxCurP)+'</td></tr>';
+  h+='<tr><td>Tax expense — deferred tax</td><td></td><td class="r">'+plInp('taxDef',e.taxDef)+'</td><td class="r py">'+plInp('taxDefP',e.taxDefP)+'</td></tr>';
+  var patC=p.pbtCur-numx(e.taxCur)-numx(e.taxDef), patP=p.pbtPri-numx(e.taxCurP)-numx(e.taxDefP);
+  h+='<tr class="grp"><td>Profit / (loss) for the year</td><td></td><td class="r">'+acct(patC)+'</td><td class="r">'+acct(patP)+'</td></tr>';
+  if(framework==='INDAS'){
+    h+='<tr><td>Other comprehensive income (net of tax)</td><td></td><td class="r">'+plInp('oci',e.oci)+'</td><td class="r py">'+plInp('ociP',e.ociP)+'</td></tr>';
+    h+='<tr class="grp"><td>Total comprehensive income for the year</td><td></td><td class="r">'+acct(patC+numx(e.oci))+'</td><td class="r">'+acct(patP+numx(e.ociP))+'</td></tr>';
+  }
+  var sh=numx(e.shares);
+  h+='<tr><td>Earnings per equity share — basic &amp; diluted (₹)</td><td></td><td class="r">'+(sh>0?fmtRs(patC/sh):'—')+'</td><td class="r py">'+(sh>0?fmtRs(patP/sh):'—')+'</td></tr>';
+  h+='<tr><td colspan="4" class="sub" style="padding-top:6px">Completion inputs — no. of equity shares '+plInp('shares',e.shares)+' · face value ₹ '+plInp('faceValue',e.faceValue)+' <span style="color:var(--faint)">— tax &amp; OCI are entered from the tax computation / last year’s accounts; profit before tax is derived from Tally.</span></td></tr>';
   h+='</tbody></table>';
   document.getElementById('plWrap').innerHTML=h;
 }
 function depCompanyName(){ return pickedCompany || (company&&company.name) || ''; }
+function numx(v){ var n=parseFloat(String(v==null?'':v).replace(/[, ]/g,'')); return isNaN(n)?0:n; }
+function fmtRs(n){ return (Math.round((+n||0)*100)/100).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function plInp(k,v){ return '<input data-pl="'+k+'" value="'+String(v==null?'':v).replace(/"/g,'&quot;')+'" placeholder="0" style="width:118px;text-align:right;padding:4px 6px;border:1px solid var(--border);border-radius:5px;font:inherit">'; }
+function plKey(){ return 'knap-plx:'+grpNorm(depCompanyName())+':'+(TB?TB.asOn:''); }
+function savePlExtra(){ try{ localStorage.setItem(plKey(), JSON.stringify(plExtra)); }catch(e){} }
+function loadPlExtra(){ try{ var raw=localStorage.getItem(plKey()); plExtra=raw?JSON.parse(raw):{}; }catch(e){ plExtra={}; } }
 function grpNorm(s){ return String(s==null?'':s).toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(); }
 function grpLoad(co){
   try{
@@ -1004,6 +1078,20 @@ function buildWorkbook(){
   var e6=plLine('Other expenses',29,p.byNote[29].cur,p.byNote[29].pri);
   var eT=pl.addRow(['Total expenses','',{formula:['C'+e1,'C'+e2,'C'+e3,'C'+e4,'C'+e5,'C'+e6].join('+'),result:p.expCur},{formula:['D'+e1,'D'+e2,'D'+e3,'D'+e4,'D'+e5,'D'+e6].join('+'),result:p.expPri}]); eT.font={bold:true}; eT.getCell(3).numFmt=money; eT.getCell(4).numFmt=money;
   var pbt=pl.addRow(['Profit / (loss) before tax','',{formula:'C'+rIncT.number+'-C'+eT.number,result:p.pbtCur},{formula:'D'+rIncT.number+'-D'+eT.number,result:p.pbtPri}]); pbt.font={bold:true}; pbt.getCell(3).numFmt=money; pbt.getCell(4).numFmt=money; pbt.eachCell(function(c){c.border={top:{style:'thin'}};});
+  // completion: tax → PAT → (OCI/TCI for Ind AS) → EPS
+  var xe=plExtra||{};
+  var tc=plLine('Tax expense — current tax','',numx(xe.taxCur),numx(xe.taxCurP));
+  var td=plLine('Tax expense — deferred tax','',numx(xe.taxDef),numx(xe.taxDefP));
+  var patC=p.pbtCur-numx(xe.taxCur)-numx(xe.taxDef), patP=p.pbtPri-numx(xe.taxCurP)-numx(xe.taxDefP);
+  var pat=pl.addRow(['Profit / (loss) for the year','',{formula:'C'+pbt.number+'-C'+tc+'-C'+td,result:patC},{formula:'D'+pbt.number+'-D'+tc+'-D'+td,result:patP}]); pat.font={bold:true}; pat.getCell(3).numFmt=money; pat.getCell(4).numFmt=money; pat.eachCell(function(c){c.border={top:{style:'thin'}};});
+  var lastProfitRow=pat.number;
+  if(framework==='INDAS'){
+    var oc=plLine('Other comprehensive income (net of tax)','',numx(xe.oci),numx(xe.ociP));
+    var tci=pl.addRow(['Total comprehensive income for the year','',{formula:'C'+pat.number+'+C'+oc,result:patC+numx(xe.oci)},{formula:'D'+pat.number+'+D'+oc,result:patP+numx(xe.ociP)}]); tci.font={bold:true}; tci.getCell(3).numFmt=money; tci.getCell(4).numFmt=money;
+  }
+  var shn=numx(xe.shares);
+  var eps=pl.addRow(['Earnings per equity share — basic & diluted (₹)','', shn>0?{formula:'C'+lastProfitRow+'/'+shn,result:patC/shn}:'—', shn>0?{formula:'D'+lastProfitRow+'/'+shn,result:patP/shn}:'—']); eps.font={size:10}; eps.getCell(3).numFmt='#,##0.00'; eps.getCell(4).numFmt='#,##0.00';
+  pl.addRow(['(No. of equity shares: '+(shn||'—')+' · face value ₹ '+(numx(xe.faceValue)||'—')+' · framework: '+(framework==='INDAS'?'Ind AS (Division II)':'AS (Division I)')+')']).getCell(1).font={italic:true,size:9,color:{argb:'FF5F6B62'}};
   pl.views=[{state:'frozen',ySplit:3}];
 
   // Cash Flow (indirect, summary)
