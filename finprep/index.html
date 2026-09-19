@@ -7,6 +7,7 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23173f28'/><text x='50' y='68' text-anchor='middle' font-size='58' font-weight='700' fill='%235fd68a'>%E2%82%B9</text></svg>">
 <script src="/session.js" defer></script>
 <script src="/gstr2b/exceljs.js" defer></script>
+<script src="depshare.js" defer></script>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   :root{
@@ -722,6 +723,10 @@ function renderVerify(){
   TB.ledgers.filter(function(l){return l._note===20 && l.current<-0.5;}).forEach(function(l){
     items.push(['CHECK','Negative balance · '+esc(l.name)+' ₹'+acct(l.current),'Cash/bank shouldn’t run negative — likely an unrecorded receipt or a bank OD to reclassify.']);
   });
+  // depreciation register vs books
+  var ds=getDepSummary();
+  if(ds && ds.found){ var bookDep=p.depCur||0; var dd=Math.round((bookDep-ds.depForYear)*100)/100;
+    if(Math.abs(dd)>=1) items.push(['REVIEW','Depreciation: books ₹'+acct(bookDep)+' vs Schedule II register ₹'+acct(ds.depForYear)+' (diff ₹'+acct(dd)+')','The depreciation charged in the books differs from the Schedule II register — reconcile or pass an adjustment.']); }
   var wrap=document.getElementById('verify');
   if(!items.length){ wrap.innerHTML='<div class="allok">✓ Everything verified — every ledger placed with confidence and the balance sheet ties.</div>'; return; }
   var h='<div class="vh"><span class="ic">!</span><div><div class="vt">Items our tool could not verify</div><div class="vs">Resolve now, or continue — unresolved items carry into the working paper with a flag.</div></div><span class="cnt">'+items.length+' item'+(items.length>1?'s':'')+'</span></div>';
@@ -841,6 +846,20 @@ function renderPL(){
   h+='</tbody></table>';
   document.getElementById('plWrap').innerHTML=h;
 }
+function depCompanyName(){ return pickedCompany || (company&&company.name) || ''; }
+function getDepSummary(){ try{ if(!window.KnapDep||!TB) return {found:false}; return KnapDep.summarize(depCompanyName(), TB.asOn); }catch(e){ return {found:false}; } }
+function depRegisterRows(){
+  var s=getDepSummary();
+  if(!s||!s.found) return '<tr><td colspan="2" class="sub">No linked Schedule II depreciation register for this company &amp; year — <a href="depreciation.html">open the register →</a> to prepare it and it will fold in here.</td></tr>';
+  var h='<tr class="grp"><td colspan="2"><b>Per Schedule II depreciation register</b> · '+s.count+' assets'+(s.company?(' · '+esc(s.company)):'')+' <a href="depreciation.html" style="font-weight:400">open →</a></td></tr>';
+  s.blocks.forEach(function(b){ h+='<tr><td>'+esc(b.cls)+' — net block</td><td class="r">'+acct(b.netClose)+'</td></tr>'; });
+  h+='<tr><td><i>Net block per register (closing)</i></td><td class="r">'+acct(s.netClose)+'</td></tr>';
+  h+='<tr><td><i>Depreciation for the year (Schedule II)</i></td><td class="r">'+acct(s.depForYear)+'</td></tr>';
+  var bookDep=(prepared&&prepared.depCur)||0; var diff=Math.round((bookDep-s.depForYear)*100)/100;
+  h+='<tr><td><i>Depreciation charged in books (P&amp;L)</i></td><td class="r">'+acct(bookDep)+'</td></tr>';
+  h+='<tr'+(Math.abs(diff)>1?' style="color:#b3261e;font-weight:600"':'')+'><td><i>Difference (books − Schedule II)</i></td><td class="r">'+acct(diff)+'</td></tr>';
+  return h;
+}
 function renderNotes(){
   var p=prepared, h='';
   NOTE_ORDER.forEach(function(no){
@@ -850,6 +869,7 @@ function renderNotes(){
     h+='<details><summary>Note '+no+' · '+NOTES[no].head+' <span class="amt">'+acct(tot)+'</span></summary><div class="nbody"><table class="fin"><tbody>';
     bn.lines.slice().sort(function(a,b){return Math.abs(b.cur)-Math.abs(a.cur);}).forEach(function(x){ h+='<tr><td>'+esc(x.name)+'</td><td class="r">'+acct(x.cur)+'</td></tr>'; });
     if(no===2) h+='<tr><td><i>Add: Profit for the year</i></td><td class="r">'+acct(p.pbtCur)+'</td></tr>';
+    if(no===12){ h+=depRegisterRows(); }
     h+='<tr class="grp"><td>Total</td><td class="r">'+acct(tot)+'</td></tr></tbody></table></div></details>';
   });
   document.getElementById('notesAcc').innerHTML=h||'<div class="sub">Prepare to see the notes.</div>';
