@@ -187,6 +187,13 @@
   .notes-acc .nbody{padding:2px 14px 12px}
   .notes-acc .subh td{font-weight:600;background:var(--surface-2);border-top:1px solid var(--border)}
   table.fin .subh2 td{font-weight:600;color:var(--muted);padding-left:6px;background:var(--surface-2)}
+  #analytics .anh{margin:16px 0 6px;font-size:13.5px;color:var(--green)}
+  .anflag{border-radius:8px;padding:8px 11px;margin-top:7px;font-size:13px;border:1px solid}
+  .anflag.ok{background:var(--ok-soft);border-color:var(--green-line);color:var(--green-ink)}
+  .anflag.info{background:var(--info-soft);border-color:#cfe0ee;color:#194864}
+  .anflag.warn{background:var(--warn-soft);border-color:var(--warn-line);color:#6f4410}
+  .anflag.bad{background:var(--bad-soft);border-color:var(--bad-line);color:#7a1c16}
+  .anlist{margin:6px 0 0;padding-left:18px} .anlist li{font-size:13px;margin-top:3px}
   .hidden{display:none}
   footer{border-top:1px solid var(--border);margin-top:32px;padding:18px 22px;text-align:center;font-size:12.5px;color:var(--faint)}
 </style>
@@ -321,6 +328,12 @@
       <h2>Notes to accounts</h2>
       <div class="sub">Same-nature ledgers clubbed under one note; each note totals back to the faces.</div>
       <div class="notes-acc" id="notesAcc"></div>
+    </div>
+
+    <div class="card">
+      <h2>Analytics &amp; review</h2>
+      <div class="sub">Schedule III ratios, sign &amp; sanity checks, and a disclosure checklist — the auditor's second read of the file.</div>
+      <div id="analytics"></div>
     </div>
   </section>
 
@@ -973,6 +986,58 @@ function renderNotes(){
     h+='<tr class="grp"><td>Total</td><td class="r">'+acct(tot)+'</td></tr></tbody></table></div></details>';
   });
   document.getElementById('notesAcc').innerHTML=h||'<div class="sub">Prepare to see the notes.</div>';
+  renderAnalytics();
+}
+/* ================= analytics & review cockpit ================= */
+function anAvg(a,b){ return ((+a||0)+(+b||0))/2; }
+function anDiv(a,b){ return (b&&Math.abs(b)>0.005)?a/b:null; }
+function anDays(bal,flow){ return (flow&&Math.abs(flow)>0.005)?(bal/flow*365):null; }
+function fmtRatio(v,unit){ if(v==null||!isFinite(v)) return '—'; if(unit==='%') return (Math.round(v*10)/10).toFixed(1)+'%'; if(unit==='days') return Math.round(v)+' d'; return (Math.round(v*100)/100).toFixed(2)+'×'; }
+function analyticsData(){
+  var p=prepared; if(!p) return null;
+  var B=function(n,y){ return (y==='pri'?p.byNote[n].pri:p.byNote[n].cur)||0; };
+  function faceT(f,y){ var t=0; NOTE_ORDER.forEach(function(no){ if(NOTES[no].face===f) t+=B(no,y); }); return t; }
+  var e=plExtra||{};
+  function agg(y,tc,tdd){ return { ca:faceT('CA',y), cl:faceT('CL',y), inv:B(18,y), recv:B(19,y), pay:B(9,y), debt:B(4,y)+B(8,y), equity:B(1,y)+(y==='pri'?p.resPri:p.resCur), rev:B(23,y), cogs:B(25,y)+B(26,y), fin:B(28,y), pbt:(y==='pri'?p.pbtPri:p.pbtCur), pat:(y==='pri'?p.pbtPri:p.pbtCur)-numx(tc)-numx(tdd) }; }
+  var A=agg('cur',e.taxCur,e.taxDef), Pr=agg('pri',e.taxCurP,e.taxDefP);
+  function ebit(x){ return x.pbt+x.fin; } function capEmp(x){ return x.equity+x.debt; }
+  var R=[
+    ['Current ratio', anDiv(A.ca,A.cl), anDiv(Pr.ca,Pr.cl), 'x', 'CA / CL'],
+    ['Quick ratio', anDiv(A.ca-A.inv,A.cl), anDiv(Pr.ca-Pr.inv,Pr.cl), 'x', '(CA − inventory) / CL'],
+    ['Debt-equity ratio', anDiv(A.debt,A.equity), anDiv(Pr.debt,Pr.equity), 'x', 'Borrowings / equity'],
+    ['Return on equity', A.equity?anDiv(A.pat,A.equity)*100:null, Pr.equity?anDiv(Pr.pat,Pr.equity)*100:null, '%', 'PAT / equity'],
+    ['Net profit ratio', A.rev?anDiv(A.pat,A.rev)*100:null, Pr.rev?anDiv(Pr.pat,Pr.rev)*100:null, '%', 'PAT / revenue'],
+    ['Return on capital employed', capEmp(A)?anDiv(ebit(A),capEmp(A))*100:null, capEmp(Pr)?anDiv(ebit(Pr),capEmp(Pr))*100:null, '%', 'EBIT / (equity+debt)'],
+    ['Inventory turnover', anDiv(A.cogs,anAvg(A.inv,Pr.inv)), anDiv(Pr.cogs,Pr.inv), 'x', 'COGS / avg inventory'],
+    ['Trade receivable days', anDays(anAvg(A.recv,Pr.recv),A.rev), anDays(Pr.recv,Pr.rev), 'days', 'avg receivables ÷ revenue × 365'],
+    ['Trade payable days', anDays(anAvg(A.pay,Pr.pay),A.cogs), anDays(Pr.pay,Pr.cogs), 'days', 'avg payables ÷ purchases × 365'],
+    ['Net capital turnover', anDiv(A.rev,A.ca-A.cl), anDiv(Pr.rev,Pr.ca-Pr.cl), 'x', 'revenue / working capital']
+  ];
+  // checks
+  var checks=[];
+  if(A.equity<-0.5) checks.push(['bad','Negative net worth ₹'+acct(-A.equity)+' (accumulated losses) — going-concern assessment; present as negative Other equity with a note.']);
+  if(B(12,'cur')>0.5 && p.depCur<=0.5) checks.push(['warn','PPE of ₹'+acct(B(12,'cur'))+' but no depreciation charged — verify against the Schedule II register.']);
+  if(A.pbt>0.5 && numx(e.taxCur)<=0.5) checks.push(['warn','Profit before tax ₹'+acct(A.pbt)+' but no current tax entered — provide for income tax.']);
+  var cr=anDiv(A.ca,A.cl); if(cr!=null && cr<1) checks.push(['warn','Current ratio '+fmtRatio(cr,'x')+' (<1) — net current liabilities; assess liquidity / going concern.']);
+  if(B(20,'cur')<-0.5) checks.push(['bad','Negative cash & bank ₹'+acct(B(20,'cur'))+' — reclassify a bank OD to short-term borrowings, or trace an unrecorded receipt.']);
+  var de=anDiv(A.debt,A.equity); if(de!=null && de>2) checks.push(['info','Debt-equity '+fmtRatio(de,'x')+' — highly geared; confirm covenants and interest servicing.']);
+  var round=TB.ledgers.filter(function(l){ var a=Math.abs(l.current); return a>=50000 && a%10000===0; }).sort(function(a,b){return Math.abs(b.current)-Math.abs(a.current);}).slice(0,6);
+  if(round.length) checks.push(['info','Round-sum balances to vouch (likely provisions/estimates): '+round.map(function(l){return esc(l.name)+' ₹'+acct(Math.abs(l.current));}).join('; ')+'.']);
+  return {R:R, checks:checks};
+}
+var DISCLOSURE_CL=['Ageing of trade receivables & trade payables (Schedule III)','Related-party transactions (AS 18)','Contingent liabilities & capital commitments','Dues to Micro & Small Enterprises (MSMED Act)','Explanation for any ratio that moved > 25%','CSR obligation & spend (if Sec 135 applies)','Expenditure / earnings in foreign currency (if any)','Auditor remuneration','Value of imports on CIF basis (if any)','Deferred tax working (AS 22)'];
+function renderAnalytics(){
+  var host=document.getElementById('analytics'); if(!host) return;
+  var d=analyticsData(); if(!d){ host.innerHTML=''; return; }
+  var rows=d.R.map(function(r){ var cur=r[1],pri=r[2]; var chg=(cur!=null&&pri!=null&&Math.abs(pri)>0.0001)?((cur-pri)/Math.abs(pri)*100):null; var big=chg!=null&&Math.abs(chg)>25;
+    return '<tr><td>'+r[0]+' <span style="color:var(--faint);font-size:11px">'+r[4]+'</span></td><td class="r">'+fmtRatio(cur,r[3])+'</td><td class="r py">'+fmtRatio(pri,r[3])+'</td><td class="r'+(big?' neg':'')+'">'+(chg==null?'—':(chg>0?'+':'')+Math.round(chg)+'%')+'</td></tr>';
+  }).join('');
+  var ratTbl='<table class="fin"><thead><tr><th>Ratio</th><th class="r">'+fyLabels(TB.asOn).cur+'</th><th class="r">'+fyLabels(TB.asOn).pri+'</th><th class="r">Δ</th></tr></thead><tbody>'+rows+'</tbody></table><div class="sub" style="margin-top:4px">A Δ beyond ±25% must be explained in the notes (Schedule III).</div>';
+  var chkHtml=d.checks.length?d.checks.map(function(c){return '<div class="anflag '+c[0]+'">'+c[1]+'</div>';}).join(''):'<div class="anflag ok">No analytical exceptions flagged.</div>';
+  var clHtml='<ul class="anlist">'+DISCLOSURE_CL.map(function(x){return '<li>'+esc(x)+'</li>';}).join('')+'</ul>';
+  host.innerHTML='<h3 class="anh">Schedule III ratios</h3>'+ratTbl+
+    '<h3 class="anh">Sign &amp; sanity checks</h3>'+chkHtml+
+    '<h3 class="anh">Disclosure checklist</h3><div class="sub">These need a note in the financials — the tool can\'t read them from the trial balance.</div>'+clHtml;
 }
 
 /* ================= STEP 4 : export ================= */
@@ -1115,6 +1180,21 @@ function buildWorkbook(){
     var r=rev.addRow([l.name,l.primary,l.current,(overrides[l.name]!=null?'assigned':l._conf),'Note '+l._note+' · '+NOTES[l._note].head]); r.font={size:9}; r.getCell(3).numFmt=money;
   });
   if(rev.lastRow.number===1) rev.addRow(['(nothing needed review — every ledger placed with confidence)']);
+
+  // Analytics sheet — Schedule III ratios + sanity checks + disclosure checklist
+  var d=analyticsData();
+  if(d){
+    var an=wb.addWorksheet('Analytics');
+    an.columns=[{width:40},{width:16},{width:16},{width:10},{width:34}];
+    var ah=an.addRow(['Ratio',curLabel,priLabel,'Δ %','Basis']); ah.eachCell(function(c){c.fill=head.fill;c.font=head.font;c.alignment=head.alignment;});
+    d.R.forEach(function(r){ var cur=r[1],pri=r[2]; var chg=(cur!=null&&pri!=null&&Math.abs(pri)>0.0001)?Math.round((cur-pri)/Math.abs(pri)*100):null;
+      var fmt=function(v){ if(v==null)return '—'; return r[3]==='%'?(Math.round(v*10)/10)+'%':(r[3]==='days'?Math.round(v)+' d':(Math.round(v*100)/100)+'×'); };
+      var row=an.addRow([r[0],fmt(cur),fmt(pri),chg==null?'—':chg+'%',r[4]]); row.font={size:9}; });
+    an.addRow([]); an.addRow(['Sign & sanity checks']).getCell(1).font={bold:true,size:10,color:{argb:'FF173F28'}};
+    (d.checks.length?d.checks:[['ok','No analytical exceptions flagged.']]).forEach(function(c){ var row=an.addRow([c[1].replace(/<[^>]+>/g,'')]); row.font={size:9}; });
+    an.addRow([]); an.addRow(['Disclosure checklist (needs a note — not readable from the trial balance)']).getCell(1).font={bold:true,size:10,color:{argb:'FF173F28'}};
+    DISCLOSURE_CL.forEach(function(x){ an.addRow(['☐  '+x]).font={size:9}; });
+  }
 
   wb.xlsx.writeBuffer().then(function(buf){
     var a=document.createElement('a');
