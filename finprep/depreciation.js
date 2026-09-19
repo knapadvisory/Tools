@@ -268,6 +268,58 @@ function fmt(iso){ if(!iso)return ''; var d=new Date(iso); return d.toLocaleDate
 function dl(blob,name){ var u=URL.createObjectURL(blob),a=document.createElement('a'); a.href=u;a.download=name;document.body.appendChild(a);a.click();setTimeout(function(){a.remove();URL.revokeObjectURL(u);},1500); }
 function refTable(){ $('#refTbl').innerHTML='<table><thead><tr><th>Asset class</th><th>Useful life (yrs)</th></tr></thead><tbody>'+CLASSES.filter(function(c){return c.life>0;}).map(function(c){return '<tr><td>'+c.label+'</td><td>'+c.life+'</td></tr>';}).join('')+'</tbody></table>'; }
 
+/* ---------------- seed from Tally (via local connector) ---------------- */
+var API='http://127.0.0.1:8797';
+function checkConn(){ var e=$('#conn-ver'); if(!e)return;
+  fetch(API+'/health',{cache:'no-store'}).then(function(r){return r.json();}).then(function(h){ window.__cv=h.version||''; e.textContent='Connector v'+(h.version||'?')+' · running'; e.style.color='#1b6a3a'; }).catch(function(){ e.textContent='Connector not reachable — open this page on the Tally PC.'; e.style.color='#b42318'; }); }
+function updateConnector(){ var el=$('#conn-upd'); if(!el)return; var was=window.__cv||''; el.disabled=true; el.textContent='⏳ Updating…';
+  fetch(API+'/update',{method:'POST'}).then(function(resp){ if(!resp.ok){ el.disabled=false; el.textContent='⟳ Update connector'; return; }
+    var tries=0,t=setInterval(function(){ tries++; fetch(API+'/health',{cache:'no-store'}).then(function(r){return r.json();}).then(function(h){ if(h.version&&h.version!==was){ clearInterval(t); el.disabled=false; el.textContent='⟳ Update connector'; checkConn(); } }).catch(function(){}); if(tries>30){ clearInterval(t); el.disabled=false; el.textContent='⟳ Update connector'; checkConn(); } },1000);
+  }).catch(function(){ el.disabled=false; el.textContent='⟳ Update connector'; }); }
+function pullFromTally(){
+  var btn=$('#pull'); var was=btn.textContent; btn.disabled=true; btn.textContent='⏳ Reading Tally…'; $('#pullOut').textContent='';
+  fetch(API+'/api/fin/fixedassets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({from:$('#fyStart').value,to:$('#fyEnd').value,company:$('#tcompany').value||undefined})})
+    .then(function(r){return r.json();}).then(function(d){ btn.disabled=false; btn.textContent=was;
+      if(!d.ok){ $('#pullOut').textContent=d.error||'Failed to read Tally.'; $('#pullOut').style.color='#b42318'; return; }
+      seedFromTally(d);
+    }).catch(function(e){ btn.disabled=false; btn.textContent=was; $('#pullOut').textContent='Could not reach the connector — open this page ON the Tally computer, with the KNAP connector running. ('+e.message+')'; $('#pullOut').style.color='#b42318'; });
+}
+function guessClass(text){ text=(text||'').toLowerCase();
+  var rules=[[/comput|laptop|desktop|printer|scanner|monitor|keyboard/,'Computers — end-user (laptop/desktop)'],[/server|network|router|firewall|switch\b/,'Computers — servers & networks'],[/car|vehicle|dzire|innova|swift|scorpio|creta|nexon|xuv/,'Motor Vehicle — car (non-commercial)'],[/truck|lorry|\bbus\b|tempo|commercial vehicle/,'Motor Vehicle — commercial (bus/lorry/taxi)'],[/bike|motor ?cycle|scooter|activa|two ?wheeler/,'Motor Cycle / Scooter'],[/furnitur|chair|table|sofa|almirah|cabinet|cupboard|desk\b/,'Furniture & Fittings — general'],[/build|factory|premis|\bshed\b|godown|construction/,'Building — RCC frame'],[/plant|machin|equipment|generator|dg ?set|compressor/,'Plant & Machinery — general'],[/electr|wiring|transformer|\bups\b|inverter|stabiliz/,'Electrical Installations & Equipment'],[/air ?condition|\bac\b|refriger|water ?purif|epabx|projector|office equip/,'Office Equipment'],[/software|licen|\berp\b|tally|website|app\b/,'Intangible / Software (AS 26)']];
+  for(var i=0;i<rules.length;i++){ if(rules[i][0].test(text)) return rules[i][1]; }
+  return 'Custom';
+}
+function seedFromTally(d){
+  var adds=d.additions||[];
+  if(!adds.length){ $('#pullOut').textContent=(d.note||'No fixed-asset additions found in this period.'); $('#pullOut').style.color='#a86617'; }
+  else {
+    var seen={}; rows.forEach(function(a){ seen[(a.dateInUse||'')+'|'+(a.desc||'')+'|'+(+a.cost||0)]=1; });
+    var added=0;
+    adds.forEach(function(x){ var desc=(x.narration||x.ledger||'Addition'); var k=(x.date||'')+'|'+desc+'|'+x.amount; if(seen[k])return; seen[k]=1;
+      var cls=guessClass(x.ledger+' '+(x.narration||'')); rows.push({desc:desc.slice(0,90),cls:cls,life:classLife(cls),method:$('#defMethod').value,resPct:$('#defRes').value,dateInUse:x.date,cost:x.amount,openAccum:'',disposalDate:'',proceeds:''}); added++; });
+    $('#pullOut').innerHTML='Seeded <b>'+added+'</b> addition line(s) from Tally — now set asset class, useful life &amp; method for each (a guess is pre-filled).'; $('#pullOut').style.color='#14461f';
+    render();
+  }
+  renderFaReview(d);
+}
+function tbl(headHtml, bodyHtml){ return '<div class="tbl-wrap" style="margin-top:8px"><table><thead>'+headHtml+'</thead><tbody>'+bodyHtml+'</tbody></table></div>'; }
+function renderFaReview(d){
+  var out='';
+  if(d.disposals && d.disposals.length){
+    out+='<div style="margin-top:14px"><b style="color:#6f4410">Disposals / credits to fixed-asset ledgers ('+d.disposals.length+')</b> — match each to an asset row, then set its disposal date &amp; sale proceeds.'+
+      tbl('<tr><th class="l">Date</th><th class="l">Ledger</th><th class="l">Narration</th><th>Amount</th></tr>',
+        d.disposals.map(function(x){return '<tr><td class="l">'+fmt(x.date)+'</td><td class="l">'+esc(x.ledger)+'</td><td class="l">'+esc(x.narration||'')+'</td><td class="num">'+money(x.amount)+'</td></tr>';}).join(''))+'</div>';
+  }
+  if(d.faLedgers && d.faLedgers.length){
+    out+='<div style="margin-top:14px"><b>Fixed-asset ledgers in Tally</b> — opening &amp; closing per ledger, to reconcile against your register\'s gross block.'+
+      tbl('<tr><th class="l">Ledger</th><th class="l">Group</th><th>Opening (Dr+)</th><th>Closing</th></tr>',
+        d.faLedgers.map(function(l){return '<tr><td class="l">'+esc(l.name)+'</td><td class="l muted">'+esc(l.group)+'</td><td class="num">'+money(l.opening)+'</td><td class="num">'+money(l.closing)+'</td></tr>';}).join(''))+'</div>';
+  }
+  $('#faReview').innerHTML=out;
+}
+$('#pull').addEventListener('click',pullFromTally);
+$('#conn-upd').addEventListener('click',updateConnector);
+
 /* ---------------- boot ---------------- */
-syncFyStart(); refTable(); load(); render();
+syncFyStart(); refTable(); load(); render(); checkConn();
 })();

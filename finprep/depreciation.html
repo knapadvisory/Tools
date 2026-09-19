@@ -82,6 +82,19 @@
   </div>
 
   <div class="card">
+    <h2>Seed additions from Tally <span class="muted" style="font-weight:400">· optional</span></h2>
+    <p class="sub">Run this <b>on the PC where Tally is open</b>. It pulls the year's debits to your Fixed-Asset ledgers as candidate additions (you then set life &amp; method). Disposals and ledger balances are shown so you can reconcile the gross block.</p>
+    <div class="row">
+      <div><label>Tally company (blank = the open company)</label><input id="tcompany" placeholder="open company" style="min-width:240px"></div>
+      <button class="btn sm" id="pull" type="button">⬇ Pull from Tally</button>
+      <span id="conn-ver" class="muted" style="align-self:center">checking connector…</span>
+      <button class="btn ghost sm" id="conn-upd" type="button">⟳ Update connector</button>
+    </div>
+    <div id="pullOut" class="muted" style="margin-top:8px"></div>
+    <div id="faReview"></div>
+  </div>
+
+  <div class="card">
     <h2>Fixed-asset register</h2>
     <div class="tbl-wrap">
       <table id="tbl">

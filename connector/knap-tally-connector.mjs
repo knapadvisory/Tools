@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.57';
+const VERSION = '4.58';
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -646,6 +646,46 @@ async function readTBFromVouchers(tallyUrl, readStart, from, to) {
     finProgress.step = 2 + done / Math.max(1, monthsTotal);
   }
   return { sums, cal, monthsTotal };
+}
+
+// ---- Fixed-asset movement reader (depreciation-register seeding, v4.58+) ----
+// Collect every DEBIT (addition) and CREDIT (disposal/transfer-out) posted to a
+// Fixed-Assets ledger in the period, with date + amount + narration, so the
+// Schedule II depreciation register can seed its "additions during the year"
+// rows straight from the books. Deduped by voucher GUID across monthly chunks.
+function collectFA(xml, faSet, additions, disposals, movement, seen, fromKey, toKey) {
+  const sig = new Map();
+  for (const block of xml.match(/<VOUCHER[\s>][\s\S]*?<\/VOUCHER>/gi) || []) {
+    if (/<ISCANCELLED>\s*Yes/i.test(block)) continue;
+    if (/<ISOPTIONAL>\s*Yes/i.test(block)) continue;
+    let key = tag(block, 'GUID');
+    if (!key) {
+      const s = `${tag(block, 'VOUCHERTYPENAME')}|${tag(block, 'DATE')}|${tag(block, 'VOUCHERNUMBER')}`;
+      const n = (sig.get(s) ?? 0) + 1; sig.set(s, n); key = s + '#' + n;
+    }
+    if (seen.has(key)) continue; seen.add(key);
+    const dk = dateKey(tag(block, 'DATE'));
+    if (toKey && dk > toKey) continue;
+    if (fromKey && dk < fromKey) continue;
+    const dd = parseTallyFieldDate(tag(block, 'DATE'));
+    const dateIso = dd ? dd.toISOString().slice(0, 10) : '';
+    const narr = decodeXml(tag(block, 'NARRATION')).trim();
+    const vtype = decodeXml(tag(block, 'VOUCHERTYPENAME')).trim();
+    const vno = decodeXml(tag(block, 'VOUCHERNUMBER')).trim();
+    const entryBlocks = block.match(/<(?:ALL)?LEDGERENTRIES\.LIST>[\s\S]*?<\/(?:ALL)?LEDGERENTRIES\.LIST>/gi) || [];
+    for (const e of entryBlocks) {
+      const name = decodeXml(tag(e, 'LEDGERNAME')).trim();
+      if (!name || !faSet.has(name)) continue;
+      const rawAmt = toNum(tag(e, 'AMOUNT'));
+      const amt = Math.abs(rawAmt);
+      if (amt < 0.005) continue;
+      const dpStr = tag(e, 'ISDEEMEDPOSITIVE');
+      const isDr = dpStr ? /yes/i.test(dpStr) : (rawAmt < 0);
+      movement[name] = r2((movement[name] || 0) + (isDr ? amt : -amt));
+      const line = { date: dateIso, ledger: name, amount: r2(amt), narration: narr, vtype, vno };
+      (isDr ? additions : disposals).push(line);
+    }
+  }
 }
 
 // Company period — master data (no balance computation), so it's fast like the
@@ -3905,6 +3945,75 @@ const server = http.createServer(async (req, res) => {
           : 'Could not read Tally: ' + String((e && e.message) || e);
         json(res, 502, { ok: false, error: msg });
       } finally { state.settings.company = tbSavedCompany; }
+      return;
+    }
+
+    // ---------- Fixed-asset additions/disposals (depreciation seeding) --------
+    // Reads debits (additions) and credits (disposals) to Fixed-Assets ledgers
+    // for the period, so the Schedule II depreciation register can pre-fill its
+    // additions from the books. The user still supplies useful life & method.
+    if (req.method === 'POST' && url.pathname === '/api/fin/fixedassets') {
+      const body = JSON.parse(await readBody(req));
+      const to = tallyDateOf(String(body.to || '').replace(/-/g, ''));
+      const from = tallyDateOf(String(body.from || '').replace(/-/g, ''));
+      if (!to || !from) { json(res, 400, { ok: false, error: 'Set both period dates.' }); return; }
+      if (from > to) { json(res, 400, { ok: false, error: 'Period-from is after period-to.' }); return; }
+      const faSavedCompany = state.settings.company;
+      if (body.company !== undefined) state.settings.company = String(body.company || '').trim();
+      finProgress.active = true; finProgress.steps = 2; finProgress.step = 1;
+      try {
+        finProgress.phase = 'Reading the group tree from Tally…';
+        const groups = parseGroups(await askTallyFast(state.settings.tallyUrl, GROUPS_REQUEST()));
+        finProgress.phase = 'Reading the ledger list from Tally…';
+        const masters = parseLedgerMasters(await askTallyFast(state.settings.tallyUrl, LEDGER_MASTERS_REQUEST()));
+        const isFA = (parent) => {
+          if (/^fixed assets$/i.test(primaryGroupOf(parent, groups))) return true;
+          return groupPathOf(parent, groups).some((g) => /fixed asset/i.test(g));
+        };
+        const faLedgers = {};
+        for (const [name, m] of Object.entries(masters)) {
+          if (isFA(m.parent)) faLedgers[name] = { name, group: m.parent, opening: m.openingDr || 0 };
+        }
+        const faSet = new Set(Object.keys(faLedgers));
+        if (!faSet.size) {
+          finProgress.active = false;
+          json(res, 200, { ok: true, version: VERSION, faLedgers: [], additions: [], disposals: [], note: 'No ledgers found under a “Fixed Assets” group in this company.' });
+          return;
+        }
+        const keyOfDate = (dt) => dt.getUTCFullYear() * 10000 + (dt.getUTCMonth() + 1) * 100 + dt.getUTCDate();
+        const fromKey = keyOfDate(from), toKey = keyOfDate(to);
+        const additions = [], disposals = [], movement = {}, seen = new Set();
+        let monthsTotal = 0;
+        for (let d = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 1)); d <= to;
+             d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1))) monthsTotal++;
+        let done = 0;
+        for (let d = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 1)); d <= to;
+             d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1))) {
+          const mFrom = d < from ? from : d;
+          const mEnd = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
+          const mTo = mEnd > to ? to : mEnd;
+          finProgress.step = 1 + done / Math.max(1, monthsTotal);
+          finProgress.phase = `Reading fixed-asset vouchers · ${MONTH_NAMES[mFrom.getUTCMonth()]} ${mFrom.getUTCFullYear()}…`;
+          const xml = await askTally(state.settings.tallyUrl, voucherCollectionRequest(mFrom, mTo));
+          collectFA(xml, faSet, additions, disposals, movement, seen, fromKey, toKey);
+          done++;
+        }
+        finProgress.active = false;
+        const list = Object.values(faLedgers).map((l) => ({ ...l, closing: r2((l.opening || 0) + (movement[l.name] || 0)) }));
+        additions.sort((a, b) => (a.date < b.date ? -1 : 1));
+        disposals.sort((a, b) => (a.date < b.date ? -1 : 1));
+        json(res, 200, {
+          ok: true, version: VERSION,
+          from: from.toISOString().slice(0, 10), asOn: to.toISOString().slice(0, 10),
+          faLedgers: list, additions, disposals,
+        });
+      } catch (e) {
+        finProgress.active = false;
+        const msg = /timed out|timeout|abort|released/i.test(String((e && e.message) || e))
+          ? 'Tally stopped responding while reading vouchers. Keep Tally on the Gateway and try a shorter period.'
+          : 'Could not read Tally: ' + String((e && e.message) || e);
+        json(res, 502, { ok: false, error: msg });
+      } finally { state.settings.company = faSavedCompany; }
       return;
     }
 
