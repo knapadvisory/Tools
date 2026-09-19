@@ -194,6 +194,17 @@
   .anflag.warn{background:var(--warn-soft);border-color:var(--warn-line);color:#6f4410}
   .anflag.bad{background:var(--bad-soft);border-color:var(--bad-line);color:#7a1c16}
   .anlist{margin:6px 0 0;padding-left:18px} .anlist li{font-size:13px;margin-top:3px}
+  /* supporting-workpapers sequence */
+  .wp-flow{margin:14px 0 6px;border:1px solid var(--green-line);background:var(--green-soft);border-radius:12px;padding:12px 14px}
+  .wp-lead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+  .wp-lead-t{font-weight:700;font-size:13px;color:var(--green-ink)} .wp-lead-s{font-size:12px;color:var(--muted)}
+  .wp-seq{display:flex;align-items:stretch;gap:8px;flex-wrap:wrap}
+  .wp-step{display:flex;align-items:center;gap:10px;background:var(--surface);border:1px solid var(--green-line);border-radius:10px;padding:9px 12px;text-decoration:none;color:var(--text);flex:1 1 200px;min-width:190px;transition:box-shadow .12s,transform .12s}
+  .wp-step:hover{box-shadow:0 4px 14px var(--shadow);transform:translateY(-1px);border-color:var(--green)}
+  .wp-n{flex:0 0 auto;width:26px;height:26px;border-radius:50%;background:var(--green);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px}
+  .wp-b{display:flex;flex-direction:column;line-height:1.25} .wp-b b{font-size:13.5px;color:var(--green-ink)} .wp-b small{color:var(--muted);font-size:11.5px}
+  .wp-arrow{display:flex;align-items:center;color:var(--green);font-size:18px;font-weight:700}
+  @media(max-width:640px){ .wp-arrow{display:none} }
   .hidden{display:none}
   footer{border-top:1px solid var(--border);margin-top:32px;padding:18px 22px;text-align:center;font-size:12.5px;color:var(--faint)}
 </style>
@@ -211,9 +222,6 @@
   <p class="lede">Builds the trial balance from Tally's vouchers through the connector — the same fast read the GST tools use, so it never freezes Tally — classifies every ledger into Schedule III heads, and prepares the Balance Sheet, Statement of Profit &amp; Loss, Cash Flow and notes, with every figure traceable back to a ledger.</p>
 
   <div class="chips" id="chips">
-    <a class="chip" href="depreciation.html" style="text-decoration:none;background:#e7f2ea;border-color:#cfe6d7;color:#14461f;font-weight:600">Δ Depreciation (Schedule II) →</a>
-    <a class="chip" href="reconciliations.html" style="text-decoration:none;background:#e7f2ea;border-color:#cfe6d7;color:#14461f;font-weight:600">⇄ Reconciliations (GST/TDS) →</a>
-    <a class="chip" href="grouping.html" style="text-decoration:none;background:#e7f2ea;border-color:#cfe6d7;color:#14461f;font-weight:600">≣ Grouping from last year →</a>
     <span class="chip" id="chipCo">— company —</span>
     <span class="chip" id="chipFy">FY —</span>
     <select class="chip" id="chipFw" title="Reporting framework — switches the Balance Sheet presentation (Schedule III Division I vs II)">
@@ -226,6 +234,18 @@
       <option value="100000">₹ in lakh</option>
       <option value="10000000">₹ in crore</option>
     </select>
+  </div>
+
+  <!-- supporting workpapers (separate pages, used in this order) -->
+  <div class="wp-flow">
+    <div class="wp-lead"><span class="wp-lead-t">Supporting workpapers</span><span class="wp-lead-s">prepare these alongside the main steps — they feed back into the financials</span></div>
+    <div class="wp-seq">
+      <a class="wp-step" href="grouping.html"><span class="wp-n">1</span><span class="wp-b"><b>Grouping</b><small>learn last year's heads &amp; sub-groups</small></span></a>
+      <span class="wp-arrow">→</span>
+      <a class="wp-step" href="depreciation.html"><span class="wp-n">2</span><span class="wp-b"><b>Depreciation</b><small>Schedule II register → PPE note</small></span></a>
+      <span class="wp-arrow">→</span>
+      <a class="wp-step" href="reconciliations.html"><span class="wp-n">3</span><span class="wp-b"><b>Reconciliations</b><small>GST &amp; TDS vs books</small></span></a>
+    </div>
   </div>
 
   <!-- stepper -->
