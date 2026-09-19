@@ -201,7 +201,7 @@
     {k:['negative','minus','sign','why is','bracket'],a:'Nothing on the face should print negative now. Equity, liabilities and income are shown in their natural (positive) sign; assets and expenses stay Dr-positive. On export, the Trial Balance sheet carries a Dr/Cr column and each figure in its natural sign, and the Notes/Balance-Sheet/P&L link to it — so no head exports as a negative.'},
     {k:['roll','forward','next year','carry'],a:'“Roll forward” (depreciation page) carries this year’s closing WDV as next year’s opening and shifts the financial year, so you re-import the working paper and continue without re-keying opening balances.'},
     {k:['unit','lakh','crore','thousand','scale','figure in'],a:'Use the unit selector at the top, or just tell me “show figures in lakhs / crores / thousands”. It only rescales the on-screen preview — the Excel export is always in full rupees.'},
-    {k:['ind as','indas','division','as','framework','gaap'],a:'The framework selector switches Schedule III presentation between AS (Division I) and Ind AS (Division II). Say “switch to Ind AS” or “use AS”. It changes the Balance Sheet/P&L layout (e.g. Ind AS adds OCI / Total comprehensive income).'},
+    {k:['ind as','indas','division','framework','gaap','schedule iii presentation'],a:'The framework selector switches Schedule III presentation between AS (Division I) and Ind AS (Division II). Say “switch to Ind AS” or “use AS”. It changes the Balance Sheet/P&L layout (e.g. Ind AS adds OCI / Total comprehensive income).'},
     {k:['depreciation','schedule ii','wdv','useful life','asset'],a:'Open the Depreciation (Schedule II) page from the workpapers row. Maintain the fixed-asset register; depreciation is charged pro-rata by days from date-in-use, capped at residual value. Its net block and charge fold back into Note 12 and the P&L here.'},
     {k:['income tax','section 32','block','it depreciation'],a:'The depreciation page also computes Income-tax depreciation (Section 32, block-of-assets WDV, half-rate under 180 days). Enter each block’s opening WDV as per the last return (or import it from last year’s working paper).'},
     {k:['deferred tax','dta','dtl','as 22','timing'],a:'The depreciation page computes deferred tax (AS 22) from the book-vs-tax WDV difference at your effective rate, plus any other timing differences you add. It gives the opening→closing→charge for the year.'},
@@ -213,12 +213,23 @@
     {k:['ratio','analysis','annexure'],a:'The export includes a Ratio Analysis sheet (Schedule III Annexure format: current, debt-equity, DSCR, returns, turnover ratios, etc.) with current vs previous year.'},
     {k:['assistant','what can you','help','commands','do you do'],a:'I can (1) change the tool — “switch to Ind AS”, “show figures in lakhs”, “group <ledger> under <head>”, “set CIN to …”; (2) teach persistent rules — “always treat ‘freight’ as Other expenses”; (3) answer how-to questions about the tool; and (4) log your feedback/improvement ideas (⚙ → Feedback) so they reach the developer. I work offline; you can also enable the AI (⚙) for free-form answers.'}
   ];
+  // word-boundary keyword scoring — a bare substring match (e.g. "as" inside
+  // "asking") must never win, or drafting requests get answered as tool help.
+  function kwHit(s,kw){
+    kw=norm(kw); if(!kw) return 0;
+    var words=kw.split(' ').length;
+    if(s.indexOf(' '+kw+' ')>=0) return words*2;            // exact word / phrase
+    if(kw.length>=5 && s.indexOf(' '+kw)>=0) return words;  // word-prefix: "grouping" ← "group"
+    return 0;
+  }
   function helpAnswer(text){
-    var s=norm(text); var toks=s.split(' ').filter(function(x){return x.length>2;});
+    var s=' '+norm(text)+' ';
     var best=null,bestSc=0;
-    FAQ.forEach(function(f){ var sc=0; f.k.forEach(function(kw){ if(s.indexOf(kw)>=0) sc+=2; toks.forEach(function(t){ if(kw.indexOf(t)>=0)sc+=0.5; }); }); if(sc>bestSc){bestSc=sc;best=f;} });
+    FAQ.forEach(function(f){ var sc=0; f.k.forEach(function(kw){ sc+=kwHit(s,kw); }); if(sc>bestSc){bestSc=sc;best=f;} });
     return bestSc>=2?best.a:null;
   }
+  // a drafting / writing / translation request is never tool help — send it to the model
+  var GEN=/\b(draft|write|compose|rewrite|rephrase|reword|translate|summarise|summarize|paraphrase|email|e mail|mail|letter|notice|reply|respond|paragraph|essay|script|proofread)\b/;
 
   /* ---------- feedback log ---------- */
   function logFeedback(kind,text){
@@ -237,12 +248,15 @@
     // try to act
     var act=parseAction(t);
     if(act){ var r=executeAction(act); if(r){ cb('✅ '+r); return; } }
+    var aiReady=(CFG.apiEnabled && (CFG.provider==='ollama' || CFG.apiKey));
+    // drafting/writing/translation → straight to the model, never the built-in help
+    if(aiReady && GEN.test(' '+norm(t)+' ')){ askAI(t,cb,null); return; }
     // help
     var h=helpAnswer(t);
     var mode=CFG.mode||'offline';
     if(h && !(CFG.apiEnabled && mode==='ai')){ cb(h); return; }
     // AI (optional) — Ollama/local needs no key
-    if(CFG.apiEnabled && (CFG.provider==='ollama' || CFG.apiKey)){ askAI(t,cb, h); return; }
+    if(aiReady){ askAI(t,cb, h); return; }
     // no AI: give help if any, else guide + log an unanswered question
     if(h){ cb(h); return; }
     if(isQuestion(t)){ logFeedback('question',t); cb('I don’t have a built-in answer for that. I’ve noted the question — you can enable the AI assistant (⚙) for free-form answers, or ask me about: importing last year’s figures, grouping, Ind AS vs AS, units, depreciation, deferred tax, or export.'); return; }
@@ -289,15 +303,26 @@ toolContext()
     var out=clean; if(applied.length) out+=(out?'\n\n':'')+applied.map(function(x){return '✅ '+x;}).join('\n');
     cb(out||'(no reply)');
   }
+  // fetch with a timeout so a stalled model never leaves the panel spinning
+  function fetchT(url,opts,ms){
+    var ctl=(typeof AbortController!=='undefined')?new AbortController():null;
+    if(ctl) opts.signal=ctl.signal;
+    var to=setTimeout(function(){ if(ctl)ctl.abort(); }, ms||300000);
+    return fetch(url,opts).then(function(r){ clearTimeout(to); return r; },function(e){ clearTimeout(to); throw e; });
+  }
   function askAI(text,cb,fallbackHelp){
     HIST.push({role:'user',content:text});
     var prov=CFG.provider||'anthropic';
     var recent=HIST.slice(-10);
-    var fail=function(e){ cb('⚠️ Could not reach the '+(prov==='ollama'?'local model':'AI')+' ('+esc(e&&e.message||e)+'). '+(prov==='ollama'?'Is Ollama running (ollama serve) and started with OLLAMA_ORIGINS=* so the browser can reach it? ':'')+(fallbackHelp?('\n\nMeanwhile: '+fallbackHelp):'Use the offline commands.')); };
+    var fail=function(e){
+      var aborted=e&&(e.name==='AbortError'||/abort/i.test(e.message||''));
+      if(aborted){ cb('⏱️ The model took too long and I stopped waiting. On a slower CPU try a smaller model (⚙ → Model → `qwen2.5:3b`) or ask a shorter question.'); return; }
+      cb('⚠️ Could not reach the '+(prov==='ollama'?'local model':'AI')+' ('+esc(e&&e.message||e)+'). '+(prov==='ollama'?'Is Ollama running, and was it started with OLLAMA_ORIGINS=* so the browser can reach it? ':'')+(fallbackHelp?('\n\nMeanwhile: '+fallbackHelp):'Use the offline commands.'));
+    };
     var errHTTP=function(msg){ cb('⚠️ AI error: '+esc(msg||'HTTP error')+(fallbackHelp?('\n\nMeanwhile: '+fallbackHelp):'')); };
     try{
       if(prov==='anthropic'){
-        fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':CFG.apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+        fetchT('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':CFG.apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
           body:JSON.stringify({model:CFG.model,max_tokens:800,system:sysPrompt(),messages:recent})})
         .then(function(r){ return r.json().then(function(j){return {ok:r.ok,j:j};}); })
         .then(function(res){ if(!res.ok)return errHTTP(res.j&&res.j.error&&res.j.error.message);
@@ -305,7 +330,7 @@ toolContext()
         .catch(fail);
       } else if(prov==='ollama'){
         var base=(CFG.baseUrl||'http://localhost:11434').replace(/\/+$/,'');
-        fetch(base+'/api/chat',{method:'POST',headers:{'content-type':'application/json'},
+        fetchT(base+'/api/chat',{method:'POST',headers:{'content-type':'application/json'},
           body:JSON.stringify({model:CFG.model,stream:false,messages:[{role:'system',content:sysPrompt()}].concat(recent)})})
         .then(function(r){ return r.json().then(function(j){return {ok:r.ok,j:j};}); })
         .then(function(res){ if(!res.ok)return errHTTP(res.j&&res.j.error);
@@ -314,7 +339,7 @@ toolContext()
       } else { // openai-compatible (Groq, OpenRouter, LM Studio, Ollama /v1, …)
         var b=(CFG.baseUrl||'').replace(/\/+$/,''); var url=/\/chat\/completions$/.test(b)?b:(b+'/chat/completions');
         var hdr={'content-type':'application/json'}; if(CFG.apiKey)hdr['authorization']='Bearer '+CFG.apiKey;
-        fetch(url,{method:'POST',headers:hdr,
+        fetchT(url,{method:'POST',headers:hdr,
           body:JSON.stringify({model:CFG.model,messages:[{role:'system',content:sysPrompt()}].concat(recent)})})
         .then(function(r){ return r.json().then(function(j){return {ok:r.ok,j:j};}); })
         .then(function(res){ if(!res.ok)return errHTTP(res.j&&res.j.error&&(res.j.error.message||res.j.error));
@@ -390,8 +415,15 @@ toolContext()
 
     function send(text){ var t=(text!=null?text:$('knapasInput').value).trim(); if(!t)return;
       addMsg('u',t); persist('u',t); $('knapasInput').value='';
-      var thinking=addMsg('a','…');
-      respond(t,function(reply){ thinking.querySelector('.b').innerHTML=renderText(reply||''); persist('a',reply||''); body.scrollTop=body.scrollHeight; });
+      var thinking=addMsg('a','…'); var cell=thinking.querySelector('.b');
+      // a local model on a slow CPU can take minutes — show a live timer so it never looks dead
+      var t0=Date.now(), done=false;
+      var tick=setInterval(function(){ if(done)return; var s=Math.round((Date.now()-t0)/1000);
+        cell.innerHTML='<i>Thinking… '+s+'s</i>'+(s>20?'<br><span style="font-size:11px;color:#5f6b62">Local model is generating — first reply after a restart also loads the model into RAM.</span>':'');
+      },1000);
+      var finish=function(reply){ if(done)return; done=true; clearInterval(tick);
+        cell.innerHTML=renderText(reply||''); persist('a',reply||''); body.scrollTop=body.scrollHeight; };
+      respond(t,finish);
     }
     function refreshMode(){ $('knapasMode').textContent=(CFG.apiEnabled?'AI + offline':'offline'); }
     refreshMode();
