@@ -194,6 +194,8 @@
   .anflag.warn{background:var(--warn-soft);border-color:var(--warn-line);color:#6f4410}
   .anflag.bad{background:var(--bad-soft);border-color:var(--bad-line);color:#7a1c16}
   .anlist{margin:6px 0 0;padding-left:18px} .anlist li{font-size:13px;margin-top:3px}
+  .sig-grid label{display:block;font-size:12px;color:var(--muted);margin:0 0 2px}
+  .sig-grid input{width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font:inherit;background:var(--surface);color:var(--text)}
   /* supporting-workpapers sequence */
   .wp-flow{margin:14px 0 6px;border:1px solid var(--green-line);background:var(--green-soft);border-radius:12px;padding:12px 14px}
   .wp-lead{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:10px}
@@ -368,6 +370,23 @@
     <div class="card">
       <h2>Export the working paper</h2>
       <div class="sub">One Excel workbook: Balance Sheet &amp; P&amp;L (faces linked to notes), Notes, Cash Flow, Trial Balance with “used-in” remarks, and a Review sheet. Figures in full rupees.</div>
+      <details class="sig-card" open style="margin:10px 0 4px;border:1px solid var(--border);border-radius:10px;padding:10px 14px;background:var(--surface-2)">
+        <summary style="cursor:pointer;font-weight:600;font-size:13px;color:var(--green)">Signatories &amp; entity details <span class="sub" style="font-weight:400">— pre-filled on the Balance Sheet &amp; P&amp;L signature block</span></summary>
+        <div class="sig-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin-top:10px">
+          <div><label>CIN</label><input id="sig_cin" placeholder="U74999XX2017PTC000000"></div>
+          <div><label>Auditor firm name</label><input id="sig_firm" placeholder="K N K &amp; COMPANY"></div>
+          <div><label>ICAI Firm Reg. No.</label><input id="sig_frn" placeholder="033312N"></div>
+          <div><label>Partner name</label><input id="sig_partner" placeholder="Neeraj Rohilla"></div>
+          <div><label>Membership No.</label><input id="sig_mno" placeholder="500000"></div>
+          <div><label>Director 1 name</label><input id="sig_dir1"></div>
+          <div><label>Director 1 DIN</label><input id="sig_din1"></div>
+          <div><label>Director 2 name</label><input id="sig_dir2"></div>
+          <div><label>Director 2 DIN</label><input id="sig_din2"></div>
+          <div><label>Place</label><input id="sig_place"></div>
+          <div><label>Date</label><input id="sig_date" placeholder="30 September 2026"></div>
+        </div>
+        <div class="sub" style="margin-top:6px">Firm details (auditor, FRN, partner, membership) are remembered globally; CIN &amp; directors per company. Blank fields fall back to placeholders.</div>
+      </details>
       <div class="period-row">
         <button class="btn primary lg" id="exportBtn">📗 Download working paper (Excel)</button>
         <button class="btn" id="backBuildBtn">← Back to build</button>
@@ -871,6 +890,27 @@ function renderReview(){
 (function(){ var f=document.getElementById('reviewFilter'), s=document.getElementById('reviewSearch');
   if(f) f.addEventListener('change',renderReview); if(s) s.addEventListener('input',renderReview);
 })();
+/* signatory & entity details — firm-level remembered globally, entity-level per company */
+var SIG_FIRM=['firm','frn','partner','mno'], SIG_CO=['cin','dir1','din1','dir2','din2','place','date'];
+function sigEl(k){ return document.getElementById('sig_'+k); }
+function sigCoKey(){ return 'knap-sig:'+grpNorm(depCompanyName()); }
+function loadSig(){
+  var firm={}, co={};
+  try{ firm=JSON.parse(localStorage.getItem('knap-firm')||'{}'); }catch(e){}
+  try{ co=JSON.parse(localStorage.getItem(sigCoKey())||'{}'); }catch(e){}
+  if(!localStorage.getItem('knap-firm')){ firm={firm:'K N K & COMPANY', frn:'033312N', partner:'', mno:''}; }
+  SIG_FIRM.forEach(function(k){ var el=sigEl(k); if(el) el.value=firm[k]||''; });
+  SIG_CO.forEach(function(k){ var el=sigEl(k); if(el) el.value=co[k]||''; });
+}
+function saveSig(){
+  var firm={}, co={};
+  SIG_FIRM.forEach(function(k){ var el=sigEl(k); firm[k]=el?el.value:''; });
+  SIG_CO.forEach(function(k){ var el=sigEl(k); co[k]=el?el.value:''; });
+  try{ localStorage.setItem('knap-firm', JSON.stringify(firm)); }catch(e){}
+  try{ localStorage.setItem(sigCoKey(), JSON.stringify(co)); }catch(e){}
+}
+function getSig(){ var o={}; SIG_FIRM.concat(SIG_CO).forEach(function(k){ var el=sigEl(k); o[k]=el?el.value.trim():''; }); return o; }
+(function(){ SIG_FIRM.concat(SIG_CO).forEach(function(k){ var el=document.getElementById('sig_'+k); if(el) el.addEventListener('input',saveSig); }); })();
 function subOvKey(){ return 'knap-subov:'+grpNorm(depCompanyName())+':'+(TB?TB.asOn:''); }
 function loadSubOv(){ try{ var raw=localStorage.getItem(subOvKey()); if(raw){ var o=JSON.parse(raw); Object.keys(o).forEach(function(k){ if(o[k]) subMap[k]=o[k]; }); } }catch(e){} }
 function saveSubOv(){ try{ localStorage.setItem(subOvKey(), JSON.stringify(subMap)); }catch(e){} }
@@ -1081,6 +1121,7 @@ function renderAnalytics(){
 
 /* ================= STEP 4 : export ================= */
 function renderExport(){
+  loadSig();
   var p=prepared, low=TB.ledgers.filter(function(l){return l._conf!=='high';}).length;
   document.getElementById('exportStats').innerHTML=
     card(TB.ledgers.length,'ledgers','')+
@@ -1095,7 +1136,7 @@ document.getElementById('exportBtn').onclick=function(){
   setTimeout(buildWorkbook,60);
 };
 function buildWorkbook(){
-  var p=prepared, wb=new ExcelJS.Workbook();
+  var p=prepared, wb=new ExcelJS.Workbook(); var sig=getSig();
   var head={fill:{type:'pattern',pattern:'solid',fgColor:{argb:'FF173F28'}},font:{color:{argb:'FFFFFFFF'},bold:true,size:10},alignment:{horizontal:'center'}};
   var money='#,##0.00';
   var curLabel=TB.asOn, priLabel=TB.priorAsOn||'';
@@ -1143,7 +1184,7 @@ function buildWorkbook(){
   var bs=wb.addWorksheet('Balance Sheet');
   bs.columns=[{width:58},{width:9},{width:18},{width:18}];
   bs.mergeCells('A1:D1'); bs.getCell('A1').value=entity; bs.getCell('A1').font={bold:true,size:13}; bs.getCell('A1').alignment={horizontal:'center'};
-  bs.mergeCells('A2:D2'); bs.getCell('A2').value='CIN: '; bs.getCell('A2').font={size:9}; bs.getCell('A2').alignment={horizontal:'center'};
+  bs.mergeCells('A2:D2'); bs.getCell('A2').value='CIN: '+(sig.cin||''); bs.getCell('A2').font={size:9}; bs.getCell('A2').alignment={horizontal:'center'};
   bs.mergeCells('A3:D3'); bs.getCell('A3').value='Balance Sheet as at '+curLabel; bs.getCell('A3').font={bold:true,size:11}; bs.getCell('A3').alignment={horizontal:'center'};
   bs.addRow([]);
   bs.addRow(['All amounts in Indian Rupees, unless otherwise stated']).getCell(1).font={italic:true,size:9,color:{argb:'FF6B7280'}};
@@ -1202,14 +1243,14 @@ function buildWorkbook(){
   bs.addRow(['The accompanying notes are an integral part of the financial statements']).getCell(1).font={italic:true,size:9};
   bs.addRow([]);
   bs.addRow(['As per our report of even date']).getCell(1).font={size:9};
-  bs.addRow(['For [Auditor firm name]','','For and on behalf of the Board of Directors of']);
+  bs.addRow(['For '+(sig.firm||'[Auditor firm name]'),'','For and on behalf of the Board of Directors of']);
   bs.addRow(['Chartered Accountants','',entity]);
+  bs.addRow(['Firm Registration No.: '+(sig.frn||'________')]);
   bs.addRow([]); bs.addRow([]);
-  bs.addRow(['[Partner name]','','[Director name]','[Director name]']);
+  bs.addRow([(sig.partner||'[Partner name]'),'',(sig.dir1||'[Director name]'),(sig.dir2||'[Director name]')]);
   bs.addRow(['Partner','','Director','Director']);
-  bs.addRow(['Membership No.: ________','','DIN: ________','DIN: ________']);
-  bs.addRow(['Firm Registration No.: ________']);
-  bs.addRow(['Place: ________   Date: ________']);
+  bs.addRow(['Membership No.: '+(sig.mno||'________'),'','DIN: '+(sig.din1||'________'),'DIN: '+(sig.din2||'________')]);
+  bs.addRow(['Place: '+(sig.place||'________')+'    Date: '+(sig.date||'________')]);
   bs.views=[{state:'frozen',ySplit:6}];
 
   var pl=wb.addWorksheet('Profit & Loss');
@@ -1249,13 +1290,14 @@ function buildWorkbook(){
   pl.addRow(['The accompanying notes are an integral part of the financial statements']).getCell(1).font={italic:true,size:9};
   pl.addRow([]);
   pl.addRow(['As per our report of even date']).getCell(1).font={size:9};
-  pl.addRow(['For [Auditor firm name]','','For and on behalf of the Board of Directors of']);
+  pl.addRow(['For '+(sig.firm||'[Auditor firm name]'),'','For and on behalf of the Board of Directors of']);
   pl.addRow(['Chartered Accountants','',entity]);
+  pl.addRow(['Firm Registration No.: '+(sig.frn||'________')]);
   pl.addRow([]); pl.addRow([]);
-  pl.addRow(['[Partner name]','','[Director name]','[Director name]']);
+  pl.addRow([(sig.partner||'[Partner name]'),'',(sig.dir1||'[Director name]'),(sig.dir2||'[Director name]')]);
   pl.addRow(['Partner','','Director','Director']);
-  pl.addRow(['Membership No.: ________','','DIN: ________','DIN: ________']);
-  pl.addRow(['Place: ________   Date: ________']);
+  pl.addRow(['Membership No.: '+(sig.mno||'________'),'','DIN: '+(sig.din1||'________'),'DIN: '+(sig.din2||'________')]);
+  pl.addRow(['Place: '+(sig.place||'________')+'    Date: '+(sig.date||'________')]);
   pl.views=[{state:'frozen',ySplit:3}];
 
   // Cash Flow (indirect, summary)
