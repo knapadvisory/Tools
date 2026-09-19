@@ -29,6 +29,7 @@ var CLASSES=[
 function r2(n){ return Math.round((+n||0)*100)/100; }
 function days(a,b){ return Math.round((Date.parse(b)-Date.parse(a))/86400000); }
 function computeAsset(a, fy){
+  if(a && a.excl){ return {openGross:0,openAccum:0,openNet:0,additions:0,deletionsGross:0,depForYear:0,depOnDeletion:0,closeGross:0,closeAccum:0,closeWDV:0,disposed:false,wdvAtDisposal:null,profitLoss:null,daysHeld:0,yearDays:1,residual:0,bookValue:0}; }
   var cost=+a.cost||0, life=+a.life||0, resPct=(a.resPct==null||a.resPct===''?5:+a.resPct);
   var residual=cost*resPct/100, depBase=Math.max(0,cost-residual);
   var S=fy.start,E=fy.end,D=a.dateInUse||S;
@@ -106,7 +107,7 @@ function itBlockDep(openWDV,add180,addLess,sale,rate){
 function itAdditions(){
   var F=fy(), out={};
   IT_BLOCKS.forEach(function(b){ out[b.name]={add180:0,addLess:0,sale:0,rate:b.rate}; });
-  rows.forEach(function(a){ var b=classToBlock(a.cls); if(!b) return; var o=out[b.name];
+  rows.forEach(function(a){ if(a.excl) return; var b=classToBlock(a.cls); if(!b) return; var o=out[b.name];
     var D=a.dateInUse||F.start;
     if(Date.parse(D)>=Date.parse(F.start) && Date.parse(D)<=Date.parse(F.end)){
       var held=daysBetween(D,F.end)+1; if(held<180) o.addLess+=(+a.cost||0); else o.add180+=(+a.cost||0);
@@ -215,7 +216,9 @@ function render(){
       '<td class="calc num">'+money(c.disposed?c.wdvAtDisposal:0)+'</td>'+
       '<td class="calc num">'+money(c.closeWDV)+'</td>'+
       '<td class="calc num'+(c.profitLoss!=null&&c.profitLoss<0?' neg':'')+'">'+(c.profitLoss==null?'':money(c.profitLoss))+'</td>'+
+      '<td style="text-align:center"><input type="checkbox" data-k="excl" data-i="'+i+'"'+(a.excl?' checked':'')+' title="Returned / reversed — exclude"></td>'+
       '<td><button class="del" data-del="'+i+'" title="Remove">✕</button></td>';
+    if(a.excl) tr.style.opacity='.5';
     tb.appendChild(tr);
     tot.openGross+=c.openGross; tot.openAccum+=c.openAccum; tot.additions+=c.additions; tot.depForYear+=c.depForYear;
     tot.deletionsGross+=c.deletionsGross; tot.depOnDeletion+=c.depOnDeletion; tot.closeGross+=c.closeGross;
@@ -227,7 +230,7 @@ function render(){
     '<td class="calc num">'+money(r2(tot.depForYear))+'</td>'+
     '<td class="calc num">'+money(r2(tot.depOnDeletion))+'</td>'+
     '<td class="calc num">'+money(r2(tot.closeWDV))+'</td>'+
-    '<td class="calc num'+(tot.profitLoss<0?' neg':'')+'">'+money(r2(tot.profitLoss))+'</td><td></td>';
+    '<td class="calc num'+(tot.profitLoss<0?' neg':'')+'">'+money(r2(tot.profitLoss))+'</td><td></td><td></td>';
   renderNote(F); renderIT(); renderDT(); renderFlags(F); save();
 }
 function esc(v){ return String(v==null?'':v).replace(/"/g,'&quot;'); }
@@ -240,8 +243,9 @@ $('#rows').addEventListener('change',onEdit);
 function onEdit(e){
   var t=e.target; var i=t.getAttribute('data-i'), k=t.getAttribute('data-k');
   if(i==null||k==null){ var d=t.getAttribute('data-del'); if(d!=null){ rows.splice(+d,1); render(); } return; }
-  i=+i; rows[i][k]=t.value;
+  i=+i; rows[i][k]=(t.type==='checkbox')?t.checked:t.value;
   if(k==='cls'){ var life=classLife(t.value); if(life>0){ rows[i].life=life; } render(); return; }
+  if(k==='excl'){ render(); return; }
   // light-touch: recompute calc cells without full re-render would be nicer, but re-render keeps it simple & correct
   if(k==='cost'||k==='life'||k==='resPct'||k==='method'||k==='dateInUse'||k==='openAccum'||k==='disposalDate'||k==='proceeds'){ render(); }
   else { save(); }
@@ -461,6 +465,34 @@ $('#pull').addEventListener('click',pullFromTally);
 $('#conn-upd').addEventListener('click',updateConnector);
 
 /* ---------------- boot ---------------- */
+/* ---------------- import opening WDV from last year's financials / working paper ---------------- */
+function dnorm(s){ return String(s==null?'':s).toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(); }
+function dCellText(c){ if(!c)return null; var v=c.value; if(v&&typeof v==='object'){ if(v.formula!==undefined)return (v.result!=null&&typeof v.result!=='number')?String(v.result).trim():null; if(v.result!=null)v=v.result; else if(v.text!=null)v=v.text; else if(v.richText)v=v.richText.map(function(t){return t.text;}).join(''); else return null; } if(typeof v==='number')return null; if(v==null)return null; var s=String(v).trim(); return s||null; }
+function dCellNum(c){ if(!c)return null; var v=c.value; if(v&&typeof v==='object'){ if(typeof v.result==='number')return v.result; return null; } return typeof v==='number'?v:null; }
+function itBlockByName(name){ var n=dnorm(name); return IT_BLOCKS.find(function(b){ var bn=dnorm(b.name); return bn===n || n.indexOf(bn)>=0 || bn.indexOf(n)>=0; }); }
+function classByLabel(label){ var n=dnorm(label); var c=CLASSES.find(function(x){ return x.label!=='Custom' && (dnorm(x.label)===n || n.indexOf(dnorm(x.label))>=0); }); return c?c.label:null; }
+function beforeFyStart(){ var d=new Date($('#fyStart').value); d.setUTCDate(d.getUTCDate()-1); return d.toISOString().slice(0,10); }
+function importLastYear(file){
+  if(!window.ExcelJS){ alert('Excel library still loading — try again.'); return; }
+  file.arrayBuffer().then(function(buf){ var wb=new ExcelJS.Workbook(); return wb.xlsx.load(buf).then(function(){
+    var itN=0, seeds=[];
+    var itws=wb.getWorksheet('Income Tax Dep');
+    if(itws){ itws.eachRow(function(row){ var name=dCellText(row.getCell(1)); var closing=dCellNum(row.getCell(8)); if(name&&closing!=null){ var b=itBlockByName(name); if(b){ itOpen[b.name]=r2(closing); itN++; } } }); }
+    var ppe=wb.getWorksheet('PPE Note');
+    if(ppe){ ppe.eachRow(function(row){ var cls=dCellText(row.getCell(1)); var netClose=dCellNum(row.getCell(10)); if(cls&&netClose!=null&&!/block of assets|^total/i.test(cls)) seeds.push({cls:cls,net:netClose}); }); }
+    if(!itws || !ppe){ wb.worksheets.forEach(function(ws){ if(ws.name==='Income Tax Dep'||ws.name==='PPE Note')return; ws.eachRow(function(row){
+      var label=dCellText(row.getCell(1))||dCellText(row.getCell(2)); if(!label)return; var nums=[]; row.eachCell({includeEmpty:false},function(c){ var n=dCellNum(c); if(n!=null)nums.push(n); }); if(!nums.length)return;
+      if(!itws){ var b=itBlockByName(label); if(b){ var w=nums[nums.length-1]; if(w>0){ itOpen[b.name]=r2(w); itN++; } return; } }
+      if(!ppe){ var cl=classByLabel(label); if(cl){ var net=nums.length>=2?nums[nums.length-2]:nums[nums.length-1]; if(net>0) seeds.push({cls:cl,net:net}); } }
+    }); }); }
+    var have={}; rows.forEach(function(a){ if(/^Opening — /.test(a.desc||'')) have[a.cls]=1; });
+    var schN=0; seeds.forEach(function(s){ var cls=CLASSES.find(function(c){return c.label===s.cls;})?s.cls:(classByLabel(s.cls)||'Custom'); if(!s.net||have[cls])return; have[cls]=1; rows.push({desc:'Opening — '+cls, cls:cls, life:(classLife(cls)||15), method:'WDV', resPct:5, dateInUse:beforeFyStart(), cost:r2(s.net), openAccum:0, disposalDate:'', proceeds:''}); schN++; });
+    render();
+    alert('Imported opening WDV — Income-tax: '+itN+' block(s); Schedule II: '+schN+' opening block row(s) seeded.\nReview the method & useful life for the opening rows.');
+  }); }).catch(function(e){ alert('Could not read the file: '+e.message); });
+}
+$('#impLastBtn').addEventListener('click',function(){ $('#impLastFile').click(); });
+$('#impLastFile').addEventListener('change',function(){ var f=this.files[0]; this.value=''; if(f) importLastYear(f); });
 $('#dtRate').addEventListener('input',function(){ dt.rate=this.value; scheduleSave(); renderDT(); });
 $('#dtOpen').addEventListener('input',function(){ dt.open=this.value; scheduleSave(); renderDT(); });
 $('#dtAdd').addEventListener('click',function(){ dt.others.push({desc:'',amount:'',nature:'DTL'}); scheduleSave(); renderDT(); });

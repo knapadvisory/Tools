@@ -73,6 +73,8 @@
       <button class="btn sm" id="add" type="button">+ Add asset</button>
       <button class="btn ghost sm" id="importBtn" type="button">⬆ Import Excel</button>
       <input type="file" id="importFile" accept=".xlsx" hidden>
+      <button class="btn ghost sm" id="impLastBtn" type="button" title="Read last year's financials / working paper to set opening WDV (Schedule II &amp; Income-tax)">⬆ Import last year's financials</button>
+      <input type="file" id="impLastFile" accept=".xlsx" hidden>
       <button class="btn ghost sm" id="exportBtn" type="button">⬇ Export Excel</button>
       <button class="btn ghost sm" id="roll" type="button">↻ Roll forward to next FY</button>
       <button class="btn ghost sm" id="sample" type="button">Load sample</button>
@@ -103,7 +105,7 @@
           <th>Life (yrs)</th><th>Method</th><th>Res %</th><th class="l">Date in use</th>
           <th>Cost</th><th>Opening accum. dep</th><th class="l">Disposal date</th><th>Sale proceeds</th>
           <th class="calc">Opening WDV</th><th class="calc">Additions</th><th class="calc">Dep for year</th>
-          <th class="calc">Deletions (WDV)</th><th class="calc">Closing WDV</th><th class="calc">P/(L) on sale</th><th></th>
+          <th class="calc">Deletions (WDV)</th><th class="calc">Closing WDV</th><th class="calc">P/(L) on sale</th><th title="Returned / reversed — exclude from depreciation">Excl.</th><th></th>
         </tr></thead>
         <tbody id="rows"></tbody>
         <tfoot><tr id="foot"></tr></tfoot>

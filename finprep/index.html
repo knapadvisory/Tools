@@ -1241,17 +1241,21 @@ function buildWorkbook(){
   var curLabel=asAtCur(), priLabel=asAtPri();
 
   var tb=wb.addWorksheet('Trial Balance');
-  tb.columns=[{width:38},{width:24},{width:22},{width:15},{width:15},{width:30}];
-  var hr=tb.addRow(['Ledger','Tally group','Primary group','Closing (CY)','Closing (PY)','Used in (Note)']);
+  tb.columns=[{width:38},{width:24},{width:22},{width:8},{width:15},{width:15},{width:30}];
+  var hr=tb.addRow(['Ledger','Tally group','Primary group','Dr/Cr','Closing (CY)','Closing (PY)','Used in (Note)']);
   hr.eachCell(function(c){c.fill=head.fill;c.font=head.font;c.alignment=head.alignment;});
   var tbRowOf={};
   TB.ledgers.forEach(function(l){
     var note=l._note!=null?l._note:classify(l);
-    var r=tb.addRow([l.name,l.group,l.primary,l.current,l.prior,'Note '+note+' · '+NOTES[note].head]);
-    r.font={size:9}; r.getCell(4).numFmt=money; r.getCell(5).numFmt=money;
+    // present each balance in its NATURAL sign (assets/expenses Dr+, liabilities/equity/income Cr shown positive)
+    var flip=/^(EQ|NCL|CL|INC)$/.test(NOTES[note].face);
+    var natCur=flip?-l.current:l.current, natPri=flip?-l.prior:l.prior;
+    var drcr=(l.current>=0?'Dr':'Cr');
+    var r=tb.addRow([l.name,l.group,l.primary,drcr,natCur,natPri,'Note '+note+' · '+NOTES[note].head]);
+    r.font={size:9}; r.getCell(5).numFmt=money; r.getCell(6).numFmt=money;
     tbRowOf[l.name]=r.number;
   });
-  tb.autoFilter='A1:F'+tb.lastRow.number; tb.views=[{state:'frozen',ySplit:1}];
+  tb.autoFilter='A1:G'+tb.lastRow.number; tb.views=[{state:'frozen',ySplit:1}];
 
   var ns=wb.addWorksheet('Notes');
   ns.columns=[{width:52},{width:15},{width:15}];
@@ -1267,7 +1271,7 @@ function buildWorkbook(){
     var nHasSub=nord.filter(function(s){return s!=='';}).length>0 && nord.length>1;
     var leafRows=[];  // TB-linked value rows, for the note total
     function leafRow(label,x){ var rr=tbRowOf[x.name];
-      var r=ns.addRow([label, rr?{formula:"'Trial Balance'!D"+rr,result:x.cur}:x.cur, rr?{formula:"'Trial Balance'!E"+rr,result:(x.pri||0)}:(x.pri||0)]);
+      var r=ns.addRow([label, rr?{formula:"'Trial Balance'!E"+rr,result:x.cur}:x.cur, rr?{formula:"'Trial Balance'!F"+rr,result:(x.pri||0)}:(x.pri||0)]);
       r.font={size:9}; r.getCell(2).numFmt=money; r.getCell(3).numFmt=money; leafRows.push(r.number); }
     if(nHasSub){
       nord.sort(function(a,b){ if(a==='')return 1; if(b==='')return -1; return a.localeCompare(b); });
