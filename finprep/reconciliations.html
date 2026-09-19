@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reconciliations — GST &amp; TDS vs books · KNAP Tools</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23173f28'/><text x='50' y='70' text-anchor='middle' font-size='52' font-weight='700' fill='%235fd68a'>⇄</text></svg>">
+<script src="/session.js" defer></script>
+<script src="/gstr2b/exceljs.js" defer></script>
+<style>
+  :root{ --green:#1b6a3a; --head:#173f28; --ink:#141a16; --mut:#5f6b62; --rule:#e2e5df; --card:#fff; --bg:#f4f5f2;
+    --soft:#e7f2ea; --warn:#a86617; --warn-soft:#fbf1dd; --bad:#b3261e; --bad-soft:#fbe9e7; --info:#1f5f8b; --info-soft:#e6eff5; }
+  *{box-sizing:border-box} body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:var(--ink);background:var(--bg)}
+  .band{background:var(--head);color:#fff;padding:11px 20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  .band a.back{color:#bfe6cd;text-decoration:none;font-size:13px} .band h1{margin:0;font-size:18px}
+  .band .sp{margin-left:auto}
+  main{max-width:1120px;margin:0 auto;padding:16px 14px 80px}
+  .btn{border:1px solid var(--green);background:var(--green);color:#fff;padding:8px 14px;border-radius:7px;font:inherit;font-weight:600;cursor:pointer}
+  .btn.ghost{background:#fff;color:var(--green)} .btn.sm{padding:6px 10px;font-size:13px;font-weight:500} .btn:disabled{opacity:.5;cursor:default}
+  .card{background:var(--card);border:1px solid var(--rule);border-radius:11px;padding:16px 18px;margin-top:14px}
+  .card h2{margin:0 0 4px;font-size:15px;color:var(--green)} .card p.sub{margin:0 0 12px;color:var(--mut);font-size:13px}
+  .row{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
+  label{display:block;font-size:12px;color:var(--mut);margin:0 0 3px}
+  input,select{padding:7px 8px;border:1px solid var(--rule);border-radius:6px;font:inherit;background:#fff}
+  .num{font-variant-numeric:tabular-nums} .muted{color:var(--mut);font-size:12px} .hide{display:none}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{border-bottom:1px solid var(--rule);padding:7px 9px;text-align:right}
+  th{background:#f0f4f0;color:#25402e;font-weight:600} th.l,td.l{text-align:left}
+  td input{border:1px solid var(--rule);border-radius:6px;padding:6px 7px;width:130px;text-align:right}
+  td.diff{font-variant-numeric:tabular-nums;font-weight:700}
+  .st{display:inline-block;border-radius:20px;padding:2px 9px;font-size:12px;font-weight:700}
+  .st.ok{background:var(--soft);color:#14461f} .st.warn{background:var(--warn-soft);color:#6f4410} .st.bad{background:var(--bad-soft);color:#7a1c16}
+  .buckets{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin-top:10px}
+  .bkt{border:1px solid var(--rule);border-radius:9px;padding:10px 12px;background:#f8faf8}
+  .bkt h3{margin:0 0 4px;font-size:13px;color:#25402e} .bkt .tot{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums}
+  .bkt ul{margin:6px 0 0;padding-left:16px;max-height:120px;overflow:auto} .bkt li{font-size:12px;color:var(--mut)}
+  .flags .f{border-radius:8px;padding:8px 11px;margin-top:8px;font-size:13px;border:1px solid}
+  .flags .warn{background:var(--warn-soft);border-color:#f0dcb4;color:#6f4410}
+  .flags .bad{background:var(--bad-soft);border-color:#f3cdc8;color:#7a1c16}
+  .flags .ok{background:var(--soft);border-color:#cfe6d7;color:#14461f}
+  .flags .info{background:var(--info-soft);border-color:#cfe0ee;color:#194864}
+  .links a{display:inline-block;margin:4px 8px 0 0;font-size:13px;color:var(--green);border:1px solid #cfe6d7;background:#f0f7f2;border-radius:7px;padding:5px 10px;text-decoration:none}
+</style>
+</head>
+<body>
+<div class="band">
+  <a class="back" href="/finprep/">← Financial statements</a>
+  <h1>Reconciliations · GST &amp; TDS vs books</h1>
+  <span class="muted" style="color:#cfe6d7">audit working paper</span>
+  <div class="sp"></div>
+  <a class="back" href="/">All tools</a>
+</div>
+
+<main>
+  <div class="card">
+    <div class="row">
+      <div><label>Company</label><input id="company" placeholder="e.g. Saartha Developments Pvt Ltd" style="min-width:260px"></div>
+      <div><label>Financial year ended</label><input id="fyEnd" type="date" value="2026-03-31"></div>
+      <div><label>Year begins</label><input id="fyStart" type="date" value="2025-04-01" readonly></div>
+      <div><label>Materiality — ₹</label><input id="matAbs" type="number" value="10000" style="width:110px"></div>
+      <div><label>and %</label><input id="matPct" type="number" value="1" step="0.1" style="width:80px"></div>
+      <button class="btn ghost sm" id="exportBtn" type="button">⬇ Export statement</button>
+      <span class="muted" id="saveState" style="align-self:center"></span>
+    </div>
+    <p class="sub" style="margin-top:10px">Book figures can be pulled from Tally below (verify them — control-ledger movements can differ from gross). Enter the return/portal figures (GSTR-1/3B, GSTR-2B, 26AS, 26Q). Differences beyond materiality become review points. Use the dedicated tools for line-level matching.</p>
+    <div class="links">
+      <a href="/itc-reco/" target="_blank">ITC: 2B vs books →</a>
+      <a href="/gstr2b/" target="_blank">GSTR-2B poster →</a>
+      <a href="/gstr1/" target="_blank">GSTR-1 summary →</a>
+      <a href="/tds26as/" target="_blank">TDS × 26AS →</a>
+      <a href="/tds26q/" target="_blank">TDS 26Q →</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Pull book figures from Tally <span class="muted" style="font-weight:400">· optional</span></h2>
+    <p class="sub">Run on the PC where Tally is open. Reads the trial balance and buckets GST / TDS / turnover ledgers so you can drop the books figure into each reconciliation.</p>
+    <div class="row">
+      <div><label>Tally company (blank = open company)</label><input id="tcompany" placeholder="open company" style="min-width:240px"></div>
+      <button class="btn sm" id="pull" type="button">⬇ Pull trial balance</button>
+      <span id="conn-ver" class="muted" style="align-self:center">checking connector…</span>
+      <button class="btn ghost sm" id="conn-upd" type="button">⟳ Update connector</button>
+    </div>
+    <div id="pullOut" class="muted" style="margin-top:8px"></div>
+    <div class="buckets" id="buckets"></div>
+  </div>
+
+  <div class="card">
+    <h2>Reconciliation statement</h2>
+    <table>
+      <thead><tr><th class="l">Reconciliation</th><th>As per books (₹)</th><th class="l" id="portalHdr">As per return / portal (₹)</th><th>Difference</th><th class="l">Status</th><th class="l">Auditor remark</th></tr></thead>
+      <tbody id="recoRows"></tbody>
+    </table>
+    <p class="muted" style="margin-top:8px">Difference = books − return. Green = within materiality; amber/red = review.</p>
+  </div>
+
+  <div class="card">
+    <h2>Points to review</h2>
+    <div class="flags" id="flags"></div>
+  </div>
+</main>
+
+<script src="reconciliations.js"></script>
+</body>
+</html>
