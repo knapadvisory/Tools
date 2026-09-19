@@ -204,6 +204,7 @@
   <div class="chips" id="chips">
     <a class="chip" href="depreciation.html" style="text-decoration:none;background:#e7f2ea;border-color:#cfe6d7;color:#14461f;font-weight:600">Δ Depreciation (Schedule II) →</a>
     <a class="chip" href="reconciliations.html" style="text-decoration:none;background:#e7f2ea;border-color:#cfe6d7;color:#14461f;font-weight:600">⇄ Reconciliations (GST/TDS) →</a>
+    <a class="chip" href="grouping.html" style="text-decoration:none;background:#e7f2ea;border-color:#cfe6d7;color:#14461f;font-weight:600">≣ Grouping from last year →</a>
     <span class="chip" id="chipCo">— company —</span>
     <span class="chip" id="chipFy">FY —</span>
     <select class="chip mono" id="chipUnit" title="Display scale for the on-screen previews (the Excel is always in full rupees)">
@@ -598,7 +599,11 @@ function doRead(){
       TB=j;
       // remembered assignments from the connector become the starting overrides
       if(j.savedMap){ Object.keys(j.savedMap).forEach(function(k){ overrides[k]=Number(j.savedMap[k]); }); }
-      document.getElementById('msgTally').innerHTML='<span class="msg ok">✅ Read '+j.ledgers.length+' ledgers'+(j.voucherCount!=null?(' from '+j.voucherCount.toLocaleString('en-IN')+' vouchers'):'')+'.</span>';
+      // prior-year learned grouping (from grouping.html) fills any head the user/
+      // connector hasn't already set — company-specific, remembered across years.
+      var learnCount=0;
+      try{ var lm=grpLoad(depCompanyName()); if(lm&&lm.map){ j.ledgers.forEach(function(l){ if(overrides[l.name]==null){ var hit=lm.map[grpNorm(l.name)]; if(hit&&hit.note!=null){ overrides[l.name]=Number(hit.note); learnCount++; } } }); } }catch(e){}
+      document.getElementById('msgTally').innerHTML='<span class="msg ok">✅ Read '+j.ledgers.length+' ledgers'+(j.voucherCount!=null?(' from '+j.voucherCount.toLocaleString('en-IN')+' vouchers'):'')+(learnCount?(' · applied '+learnCount+' groupings learned from last year'):'')+'.</span>';
       if(!document.getElementById('entity').value) document.getElementById('entity').value=cleanCoName(company&&company.name)||'';
       prepare();            /* classify + aggregate */
       renderReviewStep2();  /* build step-2 view */
@@ -847,6 +852,15 @@ function renderPL(){
   document.getElementById('plWrap').innerHTML=h;
 }
 function depCompanyName(){ return pickedCompany || (company&&company.name) || ''; }
+function grpNorm(s){ return String(s==null?'':s).toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(); }
+function grpLoad(co){
+  try{
+    var exact=localStorage.getItem('knap-grp:'+grpNorm(co)); if(exact) return JSON.parse(exact);
+    var hits=[]; for(var i=0;i<localStorage.length;i++){ var k=localStorage.key(i); if(k&&k.indexOf('knap-grp:')===0) hits.push(k); }
+    if(hits.length===1) return JSON.parse(localStorage.getItem(hits[0]));
+    return null;
+  }catch(e){ return null; }
+}
 function getDepSummary(){ try{ if(!window.KnapDep||!TB) return {found:false}; return KnapDep.summarize(depCompanyName(), TB.asOn); }catch(e){ return {found:false}; } }
 function depRegisterRows(){
   var s=getDepSummary();

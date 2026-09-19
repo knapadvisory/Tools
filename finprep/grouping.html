@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grouping from last year — KNAP Tools</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23173f28'/><text x='50' y='70' text-anchor='middle' font-size='52' font-weight='700' fill='%235fd68a'>≣</text></svg>">
+<script src="/session.js" defer></script>
+<script src="/gstr2b/exceljs.js" defer></script>
+<style>
+  :root{ --green:#1b6a3a; --head:#173f28; --ink:#141a16; --mut:#5f6b62; --rule:#e2e5df; --card:#fff; --bg:#f4f5f2;
+    --soft:#e7f2ea; --warn:#a86617; --warn-soft:#fbf1dd; --bad:#b3261e; --bad-soft:#fbe9e7; --info:#1f5f8b; --info-soft:#e6eff5; }
+  *{box-sizing:border-box} body{margin:0;font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;color:var(--ink);background:var(--bg)}
+  .band{background:var(--head);color:#fff;padding:11px 20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  .band a.back{color:#bfe6cd;text-decoration:none;font-size:13px} .band h1{margin:0;font-size:18px} .band .sp{margin-left:auto}
+  main{max-width:1080px;margin:0 auto;padding:16px 14px 80px}
+  .btn{border:1px solid var(--green);background:var(--green);color:#fff;padding:8px 14px;border-radius:7px;font:inherit;font-weight:600;cursor:pointer}
+  .btn.ghost{background:#fff;color:var(--green)} .btn.sm{padding:6px 10px;font-size:13px;font-weight:500} .btn:disabled{opacity:.5;cursor:default}
+  .card{background:var(--card);border:1px solid var(--rule);border-radius:11px;padding:16px 18px;margin-top:14px}
+  .card h2{margin:0 0 4px;font-size:15px;color:var(--green)} .card p.sub{margin:0 0 12px;color:var(--mut);font-size:13px}
+  .row{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
+  label{display:block;font-size:12px;color:var(--mut);margin:0 0 3px}
+  input,select{padding:7px 8px;border:1px solid var(--rule);border-radius:6px;font:inherit;background:#fff}
+  .drop{border:2px dashed #c9d3cb;border-radius:10px;padding:22px;text-align:center;color:var(--mut);cursor:pointer;background:#fafbfa}
+  .drop.hot{border-color:var(--green);background:#f0f7f2}
+  table{border-collapse:collapse;width:100%;font-size:13px} th,td{border-bottom:1px solid var(--rule);padding:6px 8px;text-align:left}
+  th{background:#f0f4f0;color:#25402e;font-weight:600} td select,td input{width:100%;padding:5px 6px}
+  .tbl-wrap{overflow:auto;max-height:520px;border:1px solid var(--rule);border-radius:9px;margin-top:10px}
+  .pill{display:inline-block;border-radius:20px;padding:2px 9px;font-size:12px;font-weight:700}
+  .pill.ok{background:var(--soft);color:#14461f} .pill.warn{background:var(--warn-soft);color:#6f4410} .pill.bad{background:var(--bad-soft);color:#7a1c16}
+  .muted{color:var(--mut);font-size:12px} .hide{display:none}
+  .kpi{display:flex;gap:16px;flex-wrap:wrap;margin-top:8px}
+  .kpi .k{background:#f6f8f6;border:1px solid var(--rule);border-radius:9px;padding:8px 12px} .kpi .k .v{font-size:17px;font-weight:700} .kpi .k .t{font-size:12px;color:var(--mut)}
+</style>
+</head>
+<body>
+<div class="band">
+  <a class="back" href="/finprep/">← Financial statements</a>
+  <h1>Grouping from last year</h1>
+  <span class="muted" style="color:#cfe6d7">learn company-specific heads &amp; sub-groups</span>
+  <div class="sp"></div>
+  <a class="back" href="/">All tools</a>
+</div>
+
+<main>
+  <div class="card">
+    <div class="row">
+      <div><label>Company</label><input id="company" placeholder="e.g. Saartha Developments Pvt Ltd" style="min-width:280px"></div>
+      <button class="btn ghost sm" id="loadSaved" type="button">Load saved map</button>
+      <span class="muted" id="saveState" style="align-self:center"></span>
+    </div>
+    <p class="sub" style="margin-top:10px">Upload last year's <b>grouped trial balance / working paper</b> (Excel) that lists each ledger and the Schedule III head (and sub-group) it went into. The tool learns the mapping and, next time you build financials in Tally, applies it automatically to the matching ledgers. Signed statements without ledger names can't be learned — use a grouped TB.</p>
+    <div class="drop" id="drop">Drop last year's Excel here, or click to choose <input type="file" id="file" accept=".xlsx" hidden></div>
+    <div id="mapWrap" class="hide" style="margin-top:12px">
+      <div class="row">
+        <div><label>Sheet</label><select id="sheet"></select></div>
+        <div><label>Ledger / particulars column</label><select id="colLedger"></select></div>
+        <div><label>Head / group column</label><select id="colHead"></select></div>
+        <div><label>Sub-group column (optional)</label><select id="colSub"></select></div>
+        <button class="btn sm" id="learn" type="button">Learn mapping</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card hide" id="resultCard">
+    <h2>Learned grouping</h2>
+    <div class="kpi" id="kpi"></div>
+    <p class="sub" style="margin-top:8px">Confirm each ledger's Schedule III head (auto-translated from your head text) and sub-group. Edit anything, then save.</p>
+    <div class="row"><button class="btn" id="save" type="button">💾 Save &amp; apply</button><span class="muted" id="savedMsg" style="align-self:center"></span></div>
+    <div class="tbl-wrap">
+      <table id="tbl"><thead><tr><th>Ledger</th><th>Your head text</th><th>Schedule III head</th><th>Sub-group</th></tr></thead><tbody id="rows"></tbody></table>
+    </div>
+  </div>
+</main>
+
+<script src="grouping.js"></script>
+</body>
+</html>
