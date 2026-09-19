@@ -23,7 +23,14 @@
   function lsJSON(k,d){ try{ var v=JSON.parse(localStorage.getItem(k)); return v==null?d:v; }catch(e){ return d; } }
 
   /* ---------- config (persisted) ---------- */
-  var CFG=lsJSON('knap-as-cfg',{apiEnabled:false,apiKey:'',model:'claude-haiku-4-5-20251001',mode:'offline'});
+  var CFG=lsJSON('knap-as-cfg',{});
+  CFG.provider=CFG.provider||'anthropic';
+  CFG.baseUrl=CFG.baseUrl||'http://localhost:11434';
+  if(CFG.apiEnabled==null) CFG.apiEnabled=false;
+  if(CFG.apiKey==null) CFG.apiKey='';
+  if(!CFG.model) CFG.model='claude-haiku-4-5-20251001';
+  CFG.mode=CFG.mode||'offline';
+  var MODEL_HINT={anthropic:'claude-haiku-4-5-20251001',ollama:'llama3.1',openai:'llama-3.1-8b-instant'};
   function saveCfg(){ lsSet('knap-as-cfg',JSON.stringify(CFG)); }
 
   /* ---------- note / head vocabulary ---------- */
@@ -234,8 +241,8 @@
     var h=helpAnswer(t);
     var mode=CFG.mode||'offline';
     if(h && !(CFG.apiEnabled && mode==='ai')){ cb(h); return; }
-    // AI (optional)
-    if(CFG.apiEnabled && CFG.apiKey){ askClaude(t,cb, h); return; }
+    // AI (optional) — Ollama/local needs no key
+    if(CFG.apiEnabled && (CFG.provider==='ollama' || CFG.apiKey)){ askAI(t,cb, h); return; }
     // no AI: give help if any, else guide + log an unanswered question
     if(h){ cb(h); return; }
     if(isQuestion(t)){ logFeedback('question',t); cb('I don’t have a built-in answer for that. I’ve noted the question — you can enable the AI assistant (⚙) for free-form answers, or ask me about: importing last year’s figures, grouping, Ind AS vs AS, units, depreciation, deferred tax, or export.'); return; }
@@ -272,23 +279,49 @@ toolContext()
     ].join('\n');
   }
   var HIST=[];
-  function askClaude(text,cb,fallbackHelp){
+  // run the model's reply through the action executor and hand the text back
+  function finishAI(txt,cb){
+    txt=String(txt||'').trim();
+    HIST.push({role:'assistant',content:txt});
+    var applied=[]; var clean=txt.replace(/```knap-action\s*([\s\S]*?)```/g,function(_,blk){
+      try{ var obj=JSON.parse(blk.trim()); var r=executeAction(obj); if(r)applied.push(r); }catch(e){ applied.push('(could not apply an action: '+e.message+')'); } return ''; });
+    clean=clean.replace(/\n{3,}/g,'\n\n').trim();
+    var out=clean; if(applied.length) out+=(out?'\n\n':'')+applied.map(function(x){return '✅ '+x;}).join('\n');
+    cb(out||'(no reply)');
+  }
+  function askAI(text,cb,fallbackHelp){
     HIST.push({role:'user',content:text});
-    var body={model:CFG.model||'claude-haiku-4-5-20251001',max_tokens:800,system:sysPrompt(),messages:HIST.slice(-10)};
-    fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':CFG.apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify(body)})
-    .then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); })
-    .then(function(res){
-      if(!res.ok){ var em=(res.j&&res.j.error&&res.j.error.message)||('HTTP error'); cb('⚠️ AI error: '+esc(em)+(fallbackHelp?('\n\nMeanwhile: '+fallbackHelp):'')); return; }
-      var txt=''; try{ txt=res.j.content.map(function(c){return c.text||'';}).join('').trim(); }catch(e){}
-      HIST.push({role:'assistant',content:txt});
-      // extract & run action blocks
-      var applied=[]; var clean=txt.replace(/```knap-action\s*([\s\S]*?)```/g,function(_,blk){
-        try{ var obj=JSON.parse(blk.trim()); var r=executeAction(obj); if(r)applied.push(r); }catch(e){ applied.push('(could not apply an action: '+e.message+')'); } return ''; });
-      clean=clean.replace(/\n{3,}/g,'\n\n').trim();
-      var out=clean; if(applied.length) out+= (out?'\n\n':'')+applied.map(function(x){return '✅ '+x;}).join('\n');
-      cb(out||'(no reply)');
-    })
-    .catch(function(e){ cb('⚠️ Could not reach the AI ('+esc(e.message)+'). '+(fallbackHelp||'Try again, or use the offline commands.')); });
+    var prov=CFG.provider||'anthropic';
+    var recent=HIST.slice(-10);
+    var fail=function(e){ cb('⚠️ Could not reach the '+(prov==='ollama'?'local model':'AI')+' ('+esc(e&&e.message||e)+'). '+(prov==='ollama'?'Is Ollama running (ollama serve) and started with OLLAMA_ORIGINS=* so the browser can reach it? ':'')+(fallbackHelp?('\n\nMeanwhile: '+fallbackHelp):'Use the offline commands.')); };
+    var errHTTP=function(msg){ cb('⚠️ AI error: '+esc(msg||'HTTP error')+(fallbackHelp?('\n\nMeanwhile: '+fallbackHelp):'')); };
+    try{
+      if(prov==='anthropic'){
+        fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'content-type':'application/json','x-api-key':CFG.apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},
+          body:JSON.stringify({model:CFG.model,max_tokens:800,system:sysPrompt(),messages:recent})})
+        .then(function(r){ return r.json().then(function(j){return {ok:r.ok,j:j};}); })
+        .then(function(res){ if(!res.ok)return errHTTP(res.j&&res.j.error&&res.j.error.message);
+          var txt=''; try{ txt=res.j.content.map(function(c){return c.text||'';}).join(''); }catch(e){} finishAI(txt,cb); })
+        .catch(fail);
+      } else if(prov==='ollama'){
+        var base=(CFG.baseUrl||'http://localhost:11434').replace(/\/+$/,'');
+        fetch(base+'/api/chat',{method:'POST',headers:{'content-type':'application/json'},
+          body:JSON.stringify({model:CFG.model,stream:false,messages:[{role:'system',content:sysPrompt()}].concat(recent)})})
+        .then(function(r){ return r.json().then(function(j){return {ok:r.ok,j:j};}); })
+        .then(function(res){ if(!res.ok)return errHTTP(res.j&&res.j.error);
+          finishAI(res.j&&res.j.message&&res.j.message.content,cb); })
+        .catch(fail);
+      } else { // openai-compatible (Groq, OpenRouter, LM Studio, Ollama /v1, …)
+        var b=(CFG.baseUrl||'').replace(/\/+$/,''); var url=/\/chat\/completions$/.test(b)?b:(b+'/chat/completions');
+        var hdr={'content-type':'application/json'}; if(CFG.apiKey)hdr['authorization']='Bearer '+CFG.apiKey;
+        fetch(url,{method:'POST',headers:hdr,
+          body:JSON.stringify({model:CFG.model,messages:[{role:'system',content:sysPrompt()}].concat(recent)})})
+        .then(function(r){ return r.json().then(function(j){return {ok:r.ok,j:j};}); })
+        .then(function(res){ if(!res.ok)return errHTTP(res.j&&res.j.error&&(res.j.error.message||res.j.error));
+          var txt=''; try{ txt=res.j.choices[0].message.content; }catch(e){} finishAI(txt,cb); })
+        .catch(fail);
+      }
+    }catch(e){ fail(e); }
   }
 
   /* =================== UI =================== */
@@ -379,18 +412,47 @@ toolContext()
       var b=$('knapasSetBody');
       b.innerHTML=''
         +'<h4>AI engine (optional)</h4>'
-        +'<label><input type="checkbox" id="knapasApiOn"'+(CFG.apiEnabled?' checked':'')+'> Enable free-form answers via the Anthropic API</label>'
-        +'<div class="warn">Offline mode keeps everything on this machine. Enabling the API sends your messages and a tool summary (company name, framework, ledger <b>names</b> — no amounts) to Anthropic over the internet. Use your own API key.</div>'
-        +'<label>API key (stored only in this browser)</label><input type="password" id="knapasApiKey" placeholder="sk-ant-…" value="'+esc(CFG.apiKey||'')+'">'
-        +'<label>Model</label><input type="text" id="knapasModel" value="'+esc(CFG.model||'claude-haiku-4-5-20251001')+'">'
+        +'<label><input type="checkbox" id="knapasApiOn"'+(CFG.apiEnabled?' checked':'')+'> Enable free-form answers</label>'
+        +'<label>Provider</label><select id="knapasProv">'
+          +'<option value="ollama"'+(CFG.provider==='ollama'?' selected':'')+'>Local — Ollama (free, unlimited, private)</option>'
+          +'<option value="anthropic"'+(CFG.provider==='anthropic'?' selected':'')+'>Anthropic (Claude) — paid API</option>'
+          +'<option value="openai"'+(CFG.provider==='openai'?' selected':'')+'>OpenAI-compatible (Groq / OpenRouter / LM Studio)</option>'
+        +'</select>'
+        +'<div class="warn" id="knapasProvHint"></div>'
+        +'<label id="knapasUrlLab">Server URL</label><input type="text" id="knapasBaseUrl" placeholder="http://localhost:11434" value="'+esc(CFG.baseUrl||'')+'">'
+        +'<label id="knapasKeyLab">API key (stored only in this browser)</label><input type="password" id="knapasApiKey" placeholder="sk-…" value="'+esc(CFG.apiKey||'')+'">'
+        +'<label>Model</label><input type="text" id="knapasModel" value="'+esc(CFG.model||'')+'">'
         +'<label>When to use AI</label><select id="knapasApiMode"><option value="offline"'+(CFG.mode==='offline'?' selected':'')+'>Offline first — AI only when I have no built-in answer</option><option value="ai"'+(CFG.mode==='ai'?' selected':'')+'>Prefer AI for questions</option></select>'
-        +'<button class="btn" id="knapasSaveCfg">Save settings</button>'
+        +'<div><button class="btn" id="knapasSaveCfg">Save settings</button> <button class="btn ghost" id="knapasTest">Test connection</button> <span id="knapasTestMsg" style="font-size:12px"></span></div>'
         +'<h4>Learned grouping rules ('+lr.length+')</h4>'
         +'<div class="knapas-list" id="knapasRules">'+(lr.length?lr.map(function(r,i){return '<div>“'+esc(r.kw)+'” → '+esc(headName(r.note))+' <a href="#" data-del="'+i+'" style="color:#b42318;float:right">remove</a></div>';}).join(''):'<div>None yet. Teach me: “always treat ‘freight’ as Other expenses”.</div>')+'</div>'
         +'<h4>Feedback log ('+fb.length+')</h4>'
         +'<div class="knapas-list">'+(fb.length?fb.slice(-8).reverse().map(function(f){return '<div><b>'+esc(f.kind)+'</b> · '+esc((f.ts||'').slice(0,10))+'<br>'+esc(f.text)+'</div>';}).join(''):'<div>No feedback yet.</div>')+'</div>'
         +'<div><button class="btn ghost" id="knapasExportFb">⬇ Export feedback</button> <button class="btn ghost" id="knapasCopyFb">Copy all</button> <button class="btn ghost" id="knapasClearFb">Clear</button></div>';
-      $('knapasSaveCfg').onclick=function(){ CFG.apiEnabled=$('knapasApiOn').checked; CFG.apiKey=$('knapasApiKey').value.trim(); CFG.model=$('knapasModel').value.trim()||'claude-haiku-4-5-20251001'; CFG.mode=$('knapasApiMode').value; saveCfg(); refreshMode(); setBox.classList.remove('open'); addMsg('a',CFG.apiEnabled?'AI enabled. I’ll use it for free-form questions; the offline commands still work instantly.':'Running fully offline.'); };
+      // provider-specific guidance + field labels
+      var HINT={
+        ollama:'Free, unlimited, and fully private — the model runs on this PC and no data leaves it. Install from ollama.com, then in a terminal: <code>ollama pull llama3.1</code> and start it so the browser can reach it: <code>OLLAMA_ORIGINS=* ollama serve</code> (Windows: set OLLAMA_ORIGINS=* first). No API key needed.',
+        anthropic:'Sends your messages + a tool summary (company name, framework, ledger <b>names</b> — no amounts) to Anthropic over the internet. Paid, pay-as-you-go with your own key from console.anthropic.com. Haiku is very cheap.',
+        openai:'Any OpenAI-compatible endpoint (Groq, OpenRouter, LM Studio, or Ollama’s /v1). Free tiers exist (Groq/OpenRouter) but are rate-limited. Sends messages + tool summary to that service.'
+      };
+      function syncProv(){ var p=$('knapasProv').value;
+        $('knapasProvHint').innerHTML=HINT[p];
+        var needUrl=(p!=='anthropic'); $('knapasUrlLab').style.display=needUrl?'':'none'; $('knapasBaseUrl').style.display=needUrl?'':'none';
+        var needKey=(p!=='ollama'); $('knapasKeyLab').style.display=needKey?'':'none'; $('knapasApiKey').style.display=needKey?'':'none';
+        $('knapasUrlLab').textContent=(p==='ollama')?'Ollama server URL':'API base URL';
+        if(!$('knapasBaseUrl').value) $('knapasBaseUrl').value=(p==='ollama')?'http://localhost:11434':'https://api.groq.com/openai/v1';
+        if(!$('knapasModel').value) $('knapasModel').value=MODEL_HINT[p]||'';
+      }
+      $('knapasProv').onchange=function(){ if($('knapasModel').value===MODEL_HINT[CFG.provider]) $('knapasModel').value=''; if($('knapasBaseUrl').value==='http://localhost:11434'&&this.value!=='ollama') $('knapasBaseUrl').value=''; syncProv(); };
+      syncProv();
+      $('knapasSaveCfg').onclick=function(){ CFG.apiEnabled=$('knapasApiOn').checked; CFG.provider=$('knapasProv').value; CFG.baseUrl=$('knapasBaseUrl').value.trim(); CFG.apiKey=$('knapasApiKey').value.trim(); CFG.model=$('knapasModel').value.trim()||MODEL_HINT[CFG.provider]; CFG.mode=$('knapasApiMode').value; saveCfg(); refreshMode(); setBox.classList.remove('open'); addMsg('a',CFG.apiEnabled?('AI enabled ('+(CFG.provider==='ollama'?'local Ollama':CFG.provider)+'). Free-form questions go to it; the offline commands still work instantly.'):'Running fully offline.'); };
+      $('knapasTest').onclick=function(){ var m=$('knapasTestMsg'); m.textContent='Testing…'; m.style.color='';
+        // apply current form values temporarily
+        var save={provider:CFG.provider,baseUrl:CFG.baseUrl,apiKey:CFG.apiKey,model:CFG.model};
+        CFG.provider=$('knapasProv').value; CFG.baseUrl=$('knapasBaseUrl').value.trim(); CFG.apiKey=$('knapasApiKey').value.trim(); CFG.model=$('knapasModel').value.trim()||MODEL_HINT[CFG.provider];
+        HIST.length=0;
+        askAI('Reply with the single word OK.',function(r){ m.textContent=/⚠️/.test(r)?r.replace(/^⚠️\s*/,''):('✓ Connected — “'+r.slice(0,40)+'”'); m.style.color=/⚠️|error|could not/i.test(r)?'#b42318':'#14461f';
+          CFG.provider=save.provider; CFG.baseUrl=save.baseUrl; CFG.apiKey=save.apiKey; CFG.model=save.model; HIST.length=0; }); };
       b.querySelectorAll('[data-del]').forEach(function(a){ a.onclick=function(e){ e.preventDefault(); var i=+a.getAttribute('data-del'); window.__learnRules.splice(i,1); lsSet('knap-learn',JSON.stringify(window.__learnRules)); knapRefreshAll(); renderSettings(); }; });
       $('knapasExportFb').onclick=function(){ var blob=new Blob([JSON.stringify(fb,null,2)],{type:'application/json'}); var a=el('a'); a.href=URL.createObjectURL(blob); a.download='knap-finprep-feedback.json'; a.click(); setTimeout(function(){URL.revokeObjectURL(a.href);},1500); };
       $('knapasCopyFb').onclick=function(){ try{ navigator.clipboard.writeText(fb.map(function(f){return '['+f.kind+' '+(f.ts||'').slice(0,10)+'] '+f.text;}).join('\n')); $('knapasCopyFb').textContent='Copied'; }catch(e){} };
