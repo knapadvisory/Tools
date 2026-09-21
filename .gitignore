@@ -4,3 +4,7 @@ gstr1-data/
 
 # local quotation store (server test)
 /data/
+data/
+*.db
+*.db-wal
+*.db-shm

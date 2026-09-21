@@ -193,6 +193,19 @@ setInterval(() => {
 
 const NO_CACHE = { 'Cache-Control': 'no-cache' };
 
+/* ---- finprep engagement API (SQLite-backed accounting core) -------------
+ * Mounted behind the same session gate as the rest of the app. The database
+ * lives on a persistent volume; set KNAP_DB to relocate it.                */
+try {
+  const { openAt } = await import('./server/db.js');
+  openAt(process.env.KNAP_DB || path.join(__dirname, 'data', 'knap.db'));
+  const { router: finprep2 } = await import('./server/routes/finprep2.js');
+  app.use('/api/fin2', finprep2);
+  console.log('[finprep2] engagement API mounted at /api/fin2');
+} catch (e) {
+  console.error('[finprep2] NOT mounted:', e.message);
+}
+
 app.get('/healthz', (_req, res) => res.type('text').send('ok'));
 
 app.get('/', (_req, res) => res.set(NO_CACHE).sendFile(path.join(__dirname, 'index.html')));
