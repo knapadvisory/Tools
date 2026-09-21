@@ -12,6 +12,7 @@
 
 import { add, neg } from './money.js';
 import { linesFor, captionFor, sectionOf, sideOf, line as lineDef } from './schedule3.js';
+import { byLine as disclosuresForLine } from './disclosures.js';
 
 /** Aggregate a line's ledger contributions per period into note sub-lines. */
 function subLines(r, lineId, periods) {
@@ -155,20 +156,50 @@ export function profitAndLossFace(r) {
  * Heads in use whose Schedule III disclosures are not yet evidenced.
  * Status vocabulary per spec §8 — nothing is ever asserted as "Nil" on its own.
  */
+/** The post-2021 additions, which the supplied Schedule III text predates. */
+const AMD_2021 = /ageing|title deed|revaluation by|registered valuer|promoter|overdue|exceeding cost|loans? to promoters|quarterly returns|struck.off|wilful|benami|crypto|undisclosed income|layers of companies|scheme of arrangement|utilisation of borrowed/i;
+const isAmendment2021 = (req) => AMD_2021.test(req);
+
 export function disclosureRegister(r, answers = {}) {
   const reg = [];
+  const seen = new Set();
+  const push = (lineId, note, caption, requirement, source, citation, kind) => {
+    const key = `${lineId}::${requirement}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const a = answers[key];
+    reg.push({
+      key, lineId, note, caption, requirement, source, citation, kind,
+      status: a ? a.status : 'Required — data missing',
+      evidence: a ? a.evidence || null : null,
+    });
+  };
+
   for (const g of r.disclosureGaps) {
-    for (const req of g.requires) {
-      const key = `${g.lineId}::${req}`;
-      const a = answers[key];
-      reg.push({
-        key, lineId: g.lineId, note: g.note, caption: g.caption, requirement: req,
-        status: a ? a.status : 'Required — data missing',
-        evidence: a ? a.evidence || null : null,
-      });
+    // 1. Requirements extracted from the Schedule III text supplied to the tool,
+    //    each carrying its own clause citation.
+    for (const d of disclosuresForLine(g.lineId)) {
+      if (d.division !== 'BOTH' && d.division !== (r.division === 'INDAS' ? 'II' : 'I')) continue;
+      push(g.lineId, g.note, g.caption, d.requirement, 'Schedule III (text supplied)', d.citation, d.kind);
+    }
+    // 2. The 2021-amendment requirements. They are real and due, but they are
+    //    NOT in the Schedule III text supplied to this tool, so they carry no
+    //    citation and are marked accordingly. Anything already covered by a
+    //    cited entry above is dropped rather than repeated.
+    for (const req of g.requires.filter(isAmendment2021)) {
+      push(g.lineId, g.note, g.caption, req,
+        'Companies (Accounts) amendment 2021 — NOT verified here',
+        'Verify against MCA notification G.S.R. 207(E) dated 24 March 2021; the Schedule III text supplied to this tool predates it.',
+        'unverified-source');
     }
   }
   return reg;
+}
+
+/** Split of where the register's requirements came from, for the UI to show. */
+export function disclosureSources(reg) {
+  const verified = reg.filter((d) => d.kind !== 'unverified-source').length;
+  return { verified, unverified: reg.length - verified, total: reg.length };
 }
 
 export function presentationModel(r, opts = {}) {
@@ -178,6 +209,7 @@ export function presentationModel(r, opts = {}) {
     profitAndLoss: profitAndLossFace(r),
     notes: buildNotes(r),
     disclosures: disclosureRegister(r, opts.answers),
+    disclosureSources: disclosureSources(disclosureRegister(r, opts.answers)),
     checks: r.checks,
     releasable: r.releasable,
   };

@@ -65,6 +65,11 @@
   <a href="/">← All tools</a>
   <h1>Financial statements <span class="muted" style="color:#cfe6d7;font-weight:400">· Schedule III</span></h1>
   <span class="pill info" id="engPill" style="background:#245a3c;color:#cfe6d7">no engagement</span>
+  <select id="scalePick" title="Schedule III requires the figures to be rounded off" style="font-size:12px;padding:4px 6px">
+    <option value="full">₹ in full</option><option value="hundreds">₹ in hundreds</option>
+    <option value="thousands">₹ in thousands</option><option value="lakhs">₹ in lakhs</option>
+    <option value="millions">₹ in millions</option><option value="crores">₹ in crores</option>
+  </select>
   <div class="sp"></div>
   <a href="/finprep/">old version</a>
 </div>
@@ -115,6 +120,7 @@
       <h2>Provide the supporting documents</h2>
       <p class="sub">These are the records the statements will be checked against. You can go on without them — the tool will simply tell you, in step 7, exactly which checks it could not perform. Originals are kept with their fingerprint, so the same file uploaded twice is recognised rather than counted twice.</p>
       <div id="inpKinds"></div>
+      <div id="priorPreview"></div>
     </div>
     <div class="card">
       <h2>Coverage</h2>

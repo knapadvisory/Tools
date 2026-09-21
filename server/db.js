@@ -183,6 +183,54 @@ const MIGRATIONS = [
     CREATE INDEX idx_info_eng ON info_requests(engagement_id, status);
     `,
   },
+  {
+    id: 3,
+    name: 'presentation_scale',
+    up: `ALTER TABLE engagements ADD COLUMN scale TEXT NOT NULL DEFAULT 'full';`,
+  },
+  {
+    id: 4,
+    name: 'prior_year_import',
+    up: `
+    -- Comparatives taken from last year's SIGNED statements, once confirmed by
+    -- the preparer. Stored in paise, in PRESENTED terms (positive in the line's
+    -- own nature), with the place in the source document they came from.
+    CREATE TABLE prior_figures (
+      engagement_id TEXT NOT NULL REFERENCES engagements(id),
+      line_id       TEXT NOT NULL,
+      amount_paise  INTEGER NOT NULL,
+      source        TEXT,
+      caption       TEXT,
+      confirmed_by  TEXT,
+      confirmed_at  TEXT NOT NULL,
+      PRIMARY KEY (engagement_id, line_id)
+    );
+
+    -- Entity, auditor and signatory particulars read from that document. Each
+    -- keeps its source and confidence and is unconfirmed until a human says so.
+    CREATE TABLE entity_particulars (
+      engagement_id TEXT NOT NULL REFERENCES engagements(id),
+      field_key     TEXT NOT NULL,
+      label         TEXT,
+      value         TEXT,
+      source        TEXT,
+      confidence    TEXT,
+      status        TEXT NOT NULL DEFAULT 'unconfirmed',
+      updated_at    TEXT NOT NULL,
+      PRIMARY KEY (engagement_id, field_key)
+    );
+
+    CREATE TABLE shareholders (
+      id            TEXT PRIMARY KEY,
+      engagement_id TEXT NOT NULL REFERENCES engagements(id),
+      name          TEXT NOT NULL,
+      shares        REAL,
+      percent       REAL,
+      source        TEXT
+    );
+    CREATE INDEX idx_sh_eng ON shareholders(engagement_id);
+    `,
+  },
 ];
 
 let db = null;

@@ -72,7 +72,7 @@ export function validateJournal(j) {
 }
 
 /* ---------- the build --------------------------------------------------- */
-export function build({ ledgers, journals = [], periods = ['current', 'prior'], division = 'AS', overrides = {} }) {
+export function build({ ledgers, journals = [], periods = ['current', 'prior'], division = 'AS', overrides = {}, priorOverrides = null }) {
   const leds = normaliseLedgers(ledgers, periods);
   const checks = [];
 
@@ -164,6 +164,33 @@ export function build({ ledgers, journals = [], periods = ['current', 'prior'], 
     }
   }
 
+  // ---- 3b. Comparatives from last year's SIGNED accounts ---------------
+  // Values arrive in PRESENTED terms (positive in the line's own nature) and
+  // REPLACE the Tally-derived comparative, so the prior column ties to the
+  // signed statements. If that makes the prior balance sheet stop tying, the
+  // check below reports it rather than hiding it.
+  const priorSet = new Set();
+  if (priorOverrides && typeof priorOverrides === 'object') {
+    const pp = periods[1];
+    for (const [lineId, rupees] of Object.entries(priorOverrides)) {
+      if (!line(lineId)) {
+        checks.push({ id: `PRI-${lineId}`, severity: SEV.HIGH,
+          message: `Imported comparative for "${lineId}" ignored — it is not a Schedule III head.` });
+        continue;
+      }
+      const presentedPaise = toPaise(rupees);
+      const dr = sideOf(lineId) === 'Cr' ? neg(presentedPaise) : presentedPaise;
+      const cur = byLine.get(lineId) || {};
+      cur[pp] = dr;
+      byLine.set(lineId, cur);
+      priorSet.add(lineId);
+    }
+    if (priorSet.size) {
+      checks.push({ id: 'PRI-APPLIED', severity: SEV.INFO,
+        message: `${priorSet.size} comparative figure(s) taken from last year's signed financial statements rather than from Tally.` });
+    }
+  }
+
   // ---- 4. Statements ---------------------------------------------------
   const lineVal = (id, p) => (byLine.get(id) || {})[p] || 0;
   const sectionTotal = (section, p) =>
@@ -196,7 +223,11 @@ export function build({ ledgers, journals = [], periods = ['current', 'prior'], 
     // reserves close on PAT (C2). Reserve ledgers carry the opening accumulated
     // balance; the year's result is added here, after tax.
     const reservesOpening = pres('reserves_surplus', p);
-    const reserves = add(reservesOpening, pl[p].pat);
+    // An imported comparative for reserves is last year's CLOSING figure, so the
+    // year's profit is already inside it and must not be added again.
+    const reserves = (p === periods[1] && priorSet.has('reserves_surplus'))
+      ? reservesOpening
+      : add(reservesOpening, pl[p].pat);
     const equity = add(pres('share_capital', p), reserves,
                        pres('share_warrants', p), pres('share_application_money', p));
     const ncl = presSection('NCL', p);
@@ -255,6 +286,7 @@ export function build({ ledgers, journals = [], periods = ['current', 'prior'], 
     byLine, trace, noteNumbers, used,
     tbSum, unclassified: { dr: unclDr, cr: unclCr },
     pl, bs, checks, disclosureGaps, releasable,
+    priorOverridesApplied: [...priorSet],
     /** helpers for the presentation layer */
     value: lineVal, presented: pres, caption: (id) => captionFor(id, division),
   };

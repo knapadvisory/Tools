@@ -11,7 +11,7 @@ import express from 'express';
 import { handle, uid, now, log, sealSnapshot, isSealed } from '../db.js';
 import { build, validateJournal } from '../../finprep/core/engine.js';
 import { buildCashFlow } from '../../finprep/core/cashflow.js';
-import { toPaise, toRupees } from '../../finprep/core/money.js';
+import { toPaise, toRupees, SCALES, permittedScales } from '../../finprep/core/money.js';
 import { captionFor } from '../../finprep/core/schedule3.js';
 import { presentationModel } from '../../finprep/core/notes.js';
 import { sectionOf as sectionOfLine, linesFor, SECTIONS } from '../../finprep/core/schedule3.js';
@@ -41,8 +41,9 @@ function priorLabel(iso) {
 const NON_MONEY = new Set(['number', 'note', 'id', 'key', 'lineId', 'caption', 'name', 'reason',
   'severity', 'status', 'requirement', 'evidence', 'section', 'title', 'period', 'method',
   'reconciled', 'drcr', 'group', 'primary', 'lineCaption', 'text', 'label']);
+let SCALE_DIV = 1;
 const rupDeep = (v, key) => {
-  if (typeof v === 'number') return NON_MONEY.has(key) ? v : toRupees(v);
+  if (typeof v === 'number') return NON_MONEY.has(key) ? v : (toRupees(v) / SCALE_DIV);
   if (Array.isArray(v)) return v.map((x) => rupDeep(x, key));
   if (v && typeof v === 'object') {
     return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, rupDeep(x, k)]));
@@ -199,13 +200,20 @@ function loadForBuild(engagementId, snapshotId) {
   for (const m of d.prepare('SELECT * FROM mappings WHERE engagement_id=? AND approved=1').all(engagementId)) {
     overrides[m.ledger_key] = m.line_id;
   }
+  // Comparatives confirmed from last year's signed statements, if any. These
+  // REPLACE the Tally prior column head by head.
+  const priorRows = d.prepare('SELECT * FROM prior_figures WHERE engagement_id=?').all(engagementId);
+  const priorOverrides = priorRows.length
+    ? Object.fromEntries(priorRows.map((x) => [x.line_id, toRupees(x.amount_paise)]))
+    : null;
+
   const jrows = d.prepare('SELECT * FROM journals WHERE engagement_id=? AND superseded=0').all(engagementId);
   const journals = jrows.map((j) => ({
     id: j.id, approved: !!j.approved, period: j.period, narration: j.narration,
     entries: d.prepare('SELECT * FROM journal_entries WHERE journal_id=?').all(j.id)
       .map((e) => ({ ledgerId: e.ledger_id, lineId: e.line_id, amount: toRupees(e.amount_paise) })),
   }));
-  return { eng, snap, ledgers, overrides, journals };
+  return { eng, snap, ledgers, overrides, journals, priorOverrides };
 }
 
 router.get('/engagements/:id/statements', (req, res) => {
@@ -218,8 +226,10 @@ router.get('/engagements/:id/statements', (req, res) => {
 
 /** One shared payload for the screen and the export, so they cannot disagree. */
 function buildPayload(ctx, schedules = {}) {
+  const scaleKey = SCALES[ctx.eng.scale] ? ctx.eng.scale : 'full';
+  SCALE_DIV = SCALES[scaleKey].div;
   const r = build({ ledgers: ctx.ledgers, journals: ctx.journals,
-    division: ctx.eng.division, overrides: ctx.overrides });
+    division: ctx.eng.division, overrides: ctx.overrides, priorOverrides: ctx.priorOverrides });
   const cf = buildCashFlow(r, { schedules });
   const model = presentationModel(r);
   const allChecks = r.checks.concat(cf.checks);
@@ -235,8 +245,8 @@ function buildPayload(ctx, schedules = {}) {
     return {
       ledger: l.name, group: l.group, primary: l.primary,
       drcr: cur.amount >= 0 ? 'Dr' : 'Cr',
-      current: toRupees(natural(cur.amount, cur.lineId)),
-      prior: toRupees(natural(pri.amount, pri.lineId)),
+      current: toRupees(natural(cur.amount, cur.lineId)) / SCALE_DIV,
+      prior: toRupees(natural(pri.amount, pri.lineId)) / SCALE_DIV,
       lineId: cur.lineId, lineCaption: captionFor(cur.lineId, r.division),
       note: r.noteNumbers.get(cur.lineId) || null,
     };
@@ -248,15 +258,18 @@ function buildPayload(ctx, schedules = {}) {
       currentLabel: fmtDate(ctx.eng.fy_end), priorLabel: priorLabel(ctx.eng.fy_end),
       status: releasable ? 'Draft' : 'Draft — blocked',
       snapshotId: ctx.snap.id, takenAt: ctx.snap.taken_at,
-      scaleLabel: 'Amounts in ₹',
+      scale: scaleKey,
+      scaleLabel: SCALES[scaleKey].label,
+      permittedScales: permittedScales(r.value('revenue_operations', 'current') * -1 || 0),
     },
     trialBalance,
     balanceSheet: rupDeep(model.balanceSheet),
     profitAndLoss: rupDeep(model.profitAndLoss),
     notes: rupDeep(model.notes),
     cashFlow: rupDeep({ ...cf, checks: undefined }),
-    checks: allChecks.map((c) => ({ ...c, amount: c.amount != null ? toRupees(c.amount) : undefined })),
+    checks: allChecks.map((c) => ({ ...c, amount: c.amount != null ? toRupees(c.amount) / SCALE_DIV : undefined })),
     disclosures: model.disclosures,
+    disclosureSources: model.disclosureSources,
     releasable,
     status: releasable ? 'draft' : 'blocked',
     _engine: r,
@@ -281,6 +294,69 @@ router.post('/engagements/:id/release', (req, res) => {
       JSON.stringify({ pl: r.pl, bs: r.bs, cashFlow: cf, checks: r.checks.concat(cf.checks) }));
   log(ctx.eng.id, actor(req), 'report.released', { id, status: wanted });
   res.json({ ok: true, reportVersionId: id, status: wanted });
+});
+
+/* ---------- prior-year import, once the preparer has confirmed it -------- */
+router.post('/engagements/:id/prior-import', (req, res) => {
+  const eng = db().prepare('SELECT * FROM engagements WHERE id=?').get(req.params.id);
+  if (!eng) return bad(res, 'engagement not found', 404);
+  const { figures = [], particulars = [], shareholders = [], replace = true } = req.body || {};
+  const d = db();
+  d.exec('BEGIN');
+  try {
+    if (replace) {
+      d.prepare('DELETE FROM prior_figures WHERE engagement_id=?').run(eng.id);
+      d.prepare('DELETE FROM shareholders WHERE engagement_id=?').run(eng.id);
+    }
+    const pf = d.prepare(`INSERT INTO prior_figures (engagement_id,line_id,amount_paise,source,caption,confirmed_by,confirmed_at)
+      VALUES (?,?,?,?,?,?,?) ON CONFLICT(engagement_id,line_id) DO UPDATE SET
+      amount_paise=excluded.amount_paise, source=excluded.source, caption=excluded.caption,
+      confirmed_by=excluded.confirmed_by, confirmed_at=excluded.confirmed_at`);
+    for (const f of figures) {
+      if (!f || !f.lineId) continue;
+      pf.run(eng.id, f.lineId, toPaise(f.amount), f.source || null, f.caption || null, actor(req), now());
+    }
+    const ep = d.prepare(`INSERT INTO entity_particulars (engagement_id,field_key,label,value,source,confidence,status,updated_at)
+      VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(engagement_id,field_key) DO UPDATE SET
+      value=excluded.value, source=excluded.source, confidence=excluded.confidence,
+      status=excluded.status, updated_at=excluded.updated_at`);
+    for (const f of particulars) {
+      if (!f || !f.key) continue;
+      ep.run(eng.id, f.key, f.label || null, f.value == null ? null : String(f.value),
+        f.source || null, f.confidence || null, f.status || 'confirmed', now());
+    }
+    const sh = d.prepare('INSERT INTO shareholders (id,engagement_id,name,shares,percent,source) VALUES (?,?,?,?,?,?)');
+    for (const x of shareholders) { if (x && x.name) sh.run(uid('sh'), eng.id, x.name, x.shares ?? null, x.percent ?? null, x.source || null); }
+
+    // keep the engagement header in step with the confirmed particulars
+    const get = (k) => (particulars.find((f) => f.key === k) || {}).value;
+    if (get('legalName')) d.prepare('UPDATE engagements SET client_name=? WHERE id=?').run(get('legalName'), eng.id);
+    if (get('cin')) d.prepare('UPDATE engagements SET cin=? WHERE id=?').run(get('cin'), eng.id);
+    d.exec('COMMIT');
+  } catch (e) { d.exec('ROLLBACK'); return bad(res, e.message, 500); }
+  log(eng.id, actor(req), 'prior.imported', { figures: figures.length, particulars: particulars.length, shareholders: shareholders.length });
+  res.json({ ok: true, figures: figures.length, particulars: particulars.length, shareholders: shareholders.length });
+});
+
+router.get('/engagements/:id/prior-import', (req, res) => {
+  const d = db();
+  res.json({ ok: true,
+    figures: d.prepare('SELECT line_id, amount_paise, source, caption FROM prior_figures WHERE engagement_id=?').all(req.params.id)
+      .map((x) => ({ lineId: x.line_id, amount: toRupees(x.amount_paise), source: x.source, caption: x.caption })),
+    particulars: d.prepare('SELECT * FROM entity_particulars WHERE engagement_id=?').all(req.params.id),
+    shareholders: d.prepare('SELECT * FROM shareholders WHERE engagement_id=?').all(req.params.id) });
+});
+
+/* ---------- presentation scale (Schedule III General Instruction 4) ------ */
+router.get('/scales', (_req, res) => {
+  res.json({ ok: true, scales: Object.entries(SCALES).map(([key, v]) => ({ key, label: v.label, divisor: v.div })) });
+});
+router.post('/engagements/:id/scale', (req, res) => {
+  const scale = String((req.body && req.body.scale) || 'full');
+  if (!SCALES[scale]) return bad(res, 'unknown scale');
+  db().prepare('UPDATE engagements SET scale=? WHERE id=?').run(scale, req.params.id);
+  log(req.params.id, actor(req), 'scale.set', { scale });
+  res.json({ ok: true, scale });
 });
 
 /* ---------- the full chart of Schedule III heads ------------------------- */

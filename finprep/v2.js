@@ -13,7 +13,7 @@ const inr = (n) => (n == null || n === '' ? '' :
   (n < 0 ? '(' + Math.abs(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ')'
          : n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })));
 
-const S = { eng: null, payload: null, ledgers: null, maxStep: 1, tab: 'bs', heads: [] };
+const S = { eng: null, payload: null, ledgers: null, maxStep: 1, tab: 'bs', heads: [], inputs: null, prior: null };
 
 /* ---------- plumbing ---------------------------------------------------- */
 async function api(path, opts = {}) {
@@ -78,6 +78,7 @@ async function openEngagement(id) {
   if (!S.eng) return;
   $('engPill').textContent = S.eng.client_name + ' · FY ' + S.eng.fy_end.slice(0, 4);
   $('pFrom').value = S.eng.fy_start; $('pTo').value = S.eng.fy_end;
+  if (S.eng.scale) $('scalePick').value = S.eng.scale;
   reach(3); go(2);
   await loadInputs();
   try { await refresh(); } catch { /* no snapshot yet — expected */ }
@@ -409,6 +410,12 @@ async function uploadKind(kind) {
   if (pf && pf.value) fd.append('periodFrom', pf.value);
   if (pt && pt.value) fd.append('periodTo', pt.value || pf.value);
   for (const f of inp.files) fd.append('files', f);
+  // last year's financials are also READ, not just stored
+  if (kind === 'prior_financials') {
+    $('priorPreview').innerHTML = '<p class="muted">Reading the document…</p>';
+    try { renderPriorPreview(await extractPrior(inp.files[0])); }
+    catch (e) { $('priorPreview').innerHTML = `<div class="chk CRITICAL">Could not read it: ${esc(e.message)}</div>`; }
+  }
   try {
     const r = await fetch(API + `/engagements/${S.eng.id}/inputs`, { method: 'POST', body: fd });
     const j = await r.json();
@@ -455,6 +462,103 @@ function renderInputRows(j) {
   });
 }
 $('inpNext').onclick = () => { reach(3); go(3); };
+
+/* ---------- read last year's signed financials -------------------------- */
+/* Parsed HERE, in the browser, where the file already is. Nothing is applied
+ * until the preparer confirms it — spec §4 requires value, source, confidence
+ * and review status for every extracted field.                              */
+async function extractPrior(file) {
+  const buf = await file.arrayBuffer();
+  const mod = await import('./core/priorImport.js');
+  if (/\.pdf$/i.test(file.name)) {
+    if (!window.pdfjsLib) {
+      await new Promise((ok, err) => {
+        const sc = document.createElement('script');
+        sc.src = '/pdftools/pdf.min.js'; sc.onload = ok; sc.onerror = err;
+        document.head.appendChild(sc);
+      });
+      if (window.pdfjsLib) window.pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdftools/pdf.worker.min.js';
+    }
+    return mod.readPdf(window.pdfjsLib, buf);
+  }
+  if (!window.ExcelJS) throw new Error('the Excel library is still loading — try again in a moment');
+  return mod.readWorkbook(window.ExcelJS, buf, (S.eng && S.eng.division) || 'AS');
+}
+
+function renderPriorPreview(x) {
+  S.prior = x;
+  const f = x.fields || [], fig = x.figures || [], sh = x.shareholders || [];
+  let h = `<div style="border:1px solid #cfe6d7;background:#f4faf6;border-radius:10px;padding:14px;margin:12px 0">
+    <b>Read from last year's financial statements</b>
+    <div class="muted" style="margin:4px 0 10px">Nothing below has been applied. Check each value against the signed accounts, correct anything wrong, then confirm.</div>`;
+  if (x.note) h += `<div class="chk REVIEW">${esc(x.note)}</div>`;
+
+  h += '<h4 style="margin:12px 0 4px;font-size:12px;color:var(--mut)">PARTICULARS</h4>';
+  h += f.length ? `<table class="fin"><thead><tr><th>Field</th><th>Value read</th><th>Where it was found</th><th>Use?</th></tr></thead><tbody>`
+    + f.map((x2, i) => `<tr><td>${esc(x2.label || x2.key)}</td>
+        <td><input data-pf="${i}" value="${esc(x2.value)}" style="width:100%"></td>
+        <td class="muted">${esc(x2.source)}</td>
+        <td style="text-align:center"><input type="checkbox" data-pfu="${i}" checked></td></tr>`).join('')
+    + '</tbody></table>' : '<p class="muted">No particulars could be read.</p>';
+
+  h += '<h4 style="margin:14px 0 4px;font-size:12px;color:var(--mut)">COMPARATIVE FIGURES</h4>';
+  h += fig.length ? `<div class="wrap" style="max-height:280px"><table class="fin"><thead><tr><th>Head</th><th>Caption in the document</th><th class="r">Amount</th><th>Source</th><th>Use?</th></tr></thead><tbody>`
+    + fig.map((x2, i) => `<tr><td>${esc((S.heads.find((hh) => hh.lineId === x2.lineId) || {}).caption || x2.lineId)}</td>
+        <td class="muted">${esc(x2.caption)}</td>
+        <td class="r"><input data-pg="${i}" value="${x2.amount}" style="width:120px;text-align:right"></td>
+        <td class="muted">${esc(x2.source)}</td>
+        <td style="text-align:center"><input type="checkbox" data-pgu="${i}" checked></td></tr>`).join('')
+    + '</tbody></table></div>'
+    : '<p class="muted">No comparative figures were read. Key them in, or upload the Excel if you uploaded a PDF.</p>';
+
+  if (sh.length) h += '<h4 style="margin:14px 0 4px;font-size:12px;color:var(--mut)">SHAREHOLDERS</h4>'
+    + '<table class="fin"><tbody>' + sh.map((x2) =>
+      `<tr><td>${esc(x2.name)}</td><td class="r">${x2.shares ?? ''}</td><td class="r">${x2.percent != null ? x2.percent + '%' : ''}</td></tr>`).join('')
+    + '</tbody></table>';
+
+  if ((x.unmatched || []).length) h += `<div class="chk REVIEW" style="margin-top:10px">
+      ${x.unmatched.length} line(s) could not be matched to a Schedule III head and were left out —
+      e.g. ${x.unmatched.slice(0, 3).map((u) => esc(u.label)).join('; ')}. Key those comparatives manually if they matter.</div>`;
+
+  h += `<div style="margin-top:12px"><button class="btn" id="priorConfirm" type="button">Confirm and use these</button>
+        <button class="btn ghost" id="priorDiscard" type="button">Discard</button></div></div>`;
+  $('priorPreview').innerHTML = h;
+  $('priorConfirm').onclick = confirmPrior;
+  $('priorDiscard').onclick = () => { $('priorPreview').innerHTML = ''; S.prior = null; };
+}
+
+async function confirmPrior() {
+  const x = S.prior; if (!x) return;
+  const particulars = (x.fields || []).map((f, i) => ({ ...f,
+    value: ($(`priorPreview`).querySelector(`[data-pf="${i}"]`) || {}).value ?? f.value,
+    use: ($(`priorPreview`).querySelector(`[data-pfu="${i}"]`) || {}).checked,
+  })).filter((f) => f.use && f.value).map((f) => ({ key: f.key, label: f.label, value: f.value, source: f.source, status: 'confirmed' }));
+  const figures = (x.figures || []).map((g, i) => ({ ...g,
+    amount: Number(($(`priorPreview`).querySelector(`[data-pg="${i}"]`) || {}).value ?? g.amount),
+    use: ($(`priorPreview`).querySelector(`[data-pgu="${i}"]`) || {}).checked,
+  })).filter((g) => g.use && Number.isFinite(g.amount))
+    .map((g) => ({ lineId: g.lineId, amount: g.amount, source: g.source, caption: g.caption }));
+  try {
+    const r = await api(`/engagements/${S.eng.id}/prior-import`, { method: 'POST', body: JSON.stringify({
+      figures, particulars, shareholders: x.shareholders || [] }) });
+    $('priorPreview').innerHTML = `<div class="banner ok">Applied: ${r.figures} comparative figure(s), ${r.particulars} particular(s), ${r.shareholders} shareholder(s). The comparative column now comes from the signed accounts.</div>`;
+    S.prior = null;
+    await loadEngagements();
+    const list = await api('/engagements');
+    S.eng = list.engagements.find((e) => e.id === S.eng.id) || S.eng;
+    $('engPill').textContent = S.eng.client_name + ' · FY ' + S.eng.fy_end.slice(0, 4);
+    try { await refresh(); } catch { /* no snapshot yet */ }
+  } catch (e) { alert('Could not apply: ' + e.message); }
+}
+
+/* ---------- presentation scale ------------------------------------------ */
+$('scalePick').onchange = async () => {
+  if (!S.eng) return;
+  try {
+    await api(`/engagements/${S.eng.id}/scale`, { method: 'POST', body: JSON.stringify({ scale: $('scalePick').value }) });
+    await refresh();
+  } catch (e) { alert(e.message); }
+};
 
 /* ---------- 7. observations --------------------------------------------- */
 async function renderObservations() {

@@ -1,0 +1,315 @@
+/* ============================================================================
+ * priorImport.js — read last year's signed financial statements
+ *
+ * Extracts the entity, auditor and signatory particulars, the shareholding, and
+ * the prior-year figures, so the comparative column ties to the SIGNED accounts
+ * rather than to Tally's prior column.
+ *
+ * Runs in the browser, where the file already is: Excel through ExcelJS and PDF
+ * through PDF.js. Nothing is applied automatically — everything comes back with
+ * its source and confidence for the preparer to confirm or correct (spec §4:
+ * "For each extracted field show value, source, confidence and review status").
+ *
+ * Figures are matched on the CAPTION, not on last year's note numbers. Note
+ * numbering differs between firms — many number note 1 as the accounting
+ * policies — and matching on a number silently shifts every head by one.
+ * ==========================================================================*/
+
+import { LINES, linesFor } from './schedule3.js';
+
+/* ---------- cell helpers (ExcelJS) -------------------------------------- */
+export function cellText(cell) {
+  if (!cell) return null;
+  let v = cell.value;
+  if (v && typeof v === 'object') {
+    if (v.richText) return v.richText.map((t) => t.text).join('').trim() || null;
+    if (v.formula !== undefined) return (v.result != null && typeof v.result !== 'number') ? String(v.result).trim() : null;
+    if (v.text != null) v = v.text;
+    else if (v.result != null) v = v.result;
+    else return null;
+  }
+  if (typeof v === 'number' || v == null) return null;
+  const s = String(v).trim();
+  return s || null;
+}
+export function cellNum(cell) {
+  if (!cell) return null;
+  let v = cell.value;
+  if (v && typeof v === 'object') {
+    if (typeof v.result === 'number') return v.result;
+    if (v.result != null && typeof v.result !== 'object') v = v.result;
+    else if (v.text != null) v = v.text;
+    else return null;
+  }
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string') {
+    const t = v.trim();
+    const neg = /^\(.*\)$/.test(t) || /-\s*$/.test(t);
+    const s = t.replace(/(?:₹|₹|\bRs\.?\b|\bINR\b)/gi, '').replace(/[(),\s]/g, '').replace(/-\s*$/, '');
+    if (s === '' || s === '-') return null;
+    const n = Number(s);
+    if (!Number.isFinite(n)) return null;
+    return neg ? -Math.abs(n) : n;
+  }
+  return null;
+}
+
+/* ---------- caption → line id ------------------------------------------- */
+const norm = (s) => ' ' + String(s == null ? '' : s).toLowerCase()
+  .replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim() + ' ';
+
+/** Extra wordings commonly seen on signed statements, beyond our own captions. */
+const CAPTION_ALIASES = {
+  share_capital: ['share capital', 'equity share capital', 'paid up capital'],
+  reserves_surplus: ['reserves and surplus', 'reserves surplus', 'other equity'],
+  share_warrants: ['money received against share warrants'],
+  share_application_money: ['share application money pending allotment'],
+  lt_borrowings: ['long term borrowings', 'long-term borrowings'],
+  deferred_tax_liability: ['deferred tax liabilities net', 'deferred tax liability net', 'deferred tax liabilities'],
+  other_lt_liabilities: ['other long term liabilities', 'other long-term liabilities'],
+  lt_provisions: ['long term provisions', 'long-term provisions'],
+  st_borrowings: ['short term borrowings', 'short-term borrowings'],
+  trade_payables_msme: ['total outstanding dues of micro enterprises and small enterprises',
+    'dues of micro enterprises and small enterprises', 'micro and small enterprises'],
+  trade_payables_others: ['total outstanding dues of creditors other than micro enterprises and small enterprises',
+    'trade payables', 'other than micro enterprises and small enterprises'],
+  other_current_liabilities: ['other current liabilities'],
+  st_provisions: ['short term provisions', 'short-term provisions'],
+  ppe: ['property plant and equipment', 'tangible assets', 'fixed assets',
+    'property plant and equipment and intangible assets'],
+  cwip: ['capital work in progress', 'capital work-in-progress'],
+  intangibles: ['intangible assets', 'other intangible assets'],
+  intangibles_under_dev: ['intangible assets under development'],
+  nc_investments: ['non current investments', 'non-current investments'],
+  deferred_tax_asset: ['deferred tax assets net', 'deferred tax asset net', 'deferred tax assets'],
+  lt_loans_advances: ['long term loans and advances', 'long-term loans and advances'],
+  other_nc_assets: ['other non current assets', 'other non-current assets'],
+  current_investments: ['current investments'],
+  inventories: ['inventories', 'inventory'],
+  trade_receivables: ['trade receivables', 'sundry debtors'],
+  cash_and_equivalents: ['cash and cash equivalents', 'cash and bank balances'],
+  bank_other_balances: ['other bank balances', 'bank balances other than cash and cash equivalents'],
+  st_loans_advances: ['short term loans and advances', 'short-term loans and advances'],
+  other_current_assets: ['other current assets'],
+  revenue_operations: ['revenue from operations', 'revenue from operation', 'turnover'],
+  other_income: ['other income'],
+  cost_materials_consumed: ['cost of materials consumed', 'cost of material consumed'],
+  purchases_stock_in_trade: ['purchases of stock in trade', 'purchase of traded goods', 'purchases of stock-in-trade'],
+  changes_in_inventories: ['changes in inventories of finished goods work in progress and stock in trade',
+    'changes in inventories', 'change in inventories'],
+  employee_benefits: ['employee benefits expense', 'employee benefit expense'],
+  finance_costs: ['finance costs', 'finance cost'],
+  depreciation_amortisation: ['depreciation and amortization expense', 'depreciation and amortisation expense',
+    'depreciation and amortization', 'depreciation'],
+  other_expenses: ['other expenses'],
+  current_tax: ['current tax'],
+  deferred_tax: ['deferred tax charge credit', 'deferred tax'],
+  tax_earlier_years: ['tax expense credit pertaining to earlier years', 'taxes for earlier years'],
+  exceptional_items: ['exceptional items'],
+};
+
+/** Longest-match caption lookup, so "Other income" never beats "Other expenses". */
+export function lineFromCaption(text, division = 'AS') {
+  const s = norm(text);
+  if (s.trim().length < 3) return null;
+  let best = null, bestLen = 0;
+  const consider = (id, phrase) => {
+    const p = norm(phrase).trim();
+    if (!p || p.length <= bestLen) return;
+    if (s.includes(' ' + p + ' ')) { best = id; bestLen = p.length; }
+  };
+  for (const l of linesFor(division)) {
+    consider(l.id, l.caption);
+    if (l.indasCaption) consider(l.id, l.indasCaption);
+  }
+  for (const [id, list] of Object.entries(CAPTION_ALIASES)) for (const p of list) consider(id, p);
+  return best;
+}
+
+/* ---------- entity / signatory particulars ------------------------------ */
+const CIN_RX = /\b([LU]\d{5}[A-Z]{2}\d{4}[A-Z]{3}\d{6})\b/i;
+
+export function extractParticulars(cells) {
+  const joined = cells.map((c) => c.v).join('\n');
+  const out = { fields: [], shareholders: [] };
+  const add = (key, label, value, source, confidence = 'high') => {
+    if (value == null || value === '') return;
+    out.fields.push({ key, label, value: String(value).trim(), source, confidence, status: 'unconfirmed' });
+  };
+
+  const cin = joined.match(CIN_RX);
+  if (cin) add('cin', 'CIN', cin[1].toUpperCase(), 'pattern match in the document');
+
+  const frn = joined.match(/(?:Firm\s*)?Registration\s*(?:No|Number)\.?\s*:?\s*([0-9]{5,6}[A-Za-z]?)/i);
+  if (frn) add('auditorFrn', 'Auditor firm registration number', frn[1].toUpperCase(), 'near "Registration No."');
+
+  const mrn = joined.match(/(?:Membership|M\.?\s*No|Mem\.?\s*No|MRN)\.?\s*:?\s*([0-9]{5,6})/i);
+  if (mrn) add('auditorMrn', 'Auditor membership number', mrn[1], 'near "Membership No."');
+
+  // "For <firm name>" immediately above "Chartered Accountants", in the SAME
+  // column. The board's "For and on behalf of the Board of Directors of" sits
+  // alongside it and must never be mistaken for the auditor.
+  const isBoard = (t) => /on behalf of|board of directors/i.test(t);
+  const ca = cells.find((c) => /^chartered accountants$/i.test(c.v.trim()));
+  if (ca) {
+    const above = cells
+      .filter((c) => c.sheet === ca.sheet && c.c === ca.c && c.r < ca.r && c.r >= ca.r - 3)
+      .sort((a, b) => b.r - a.r)
+      .find((c) => /^for\s+.{2,}/i.test(c.v) && c.v.length < 80 && !isBoard(c.v));
+    if (above) add('auditorFirm', 'Auditor firm', above.v.replace(/^for\s+/i, '').trim(),
+      'line above "Chartered Accountants"');
+  }
+  // The entity the board signs for: the line under "For and on behalf of ..."
+  const boardLine = cells.find((c) => isBoard(c.v));
+  if (boardLine) {
+    const under = cells.find((c) => c.sheet === boardLine.sheet && c.c === boardLine.c && c.r === boardLine.r + 1);
+    if (under && under.v.length < 90 && !isBoard(under.v)) {
+      add('legalName', 'Company legal name', under.v.trim(), 'line under "For and on behalf of the Board of Directors of"');
+    }
+  }
+
+  /** the name printed directly above a role label, in the same column */
+  const nameAbove = (role) => cells
+    .filter((c) => c.v.trim().toLowerCase() === role)
+    .map((L) => cells.find((c) => c.sheet === L.sheet && c.c === L.c && c.r === L.r - 1))
+    .filter(Boolean).map((c) => c.v.trim())
+    .filter((n) => n && n.length < 60 && !/^din|^membership|^place|^date/i.test(n));
+
+  const partners = nameAbove('partner');
+  if (partners[0]) add('auditorPartner', 'Signing partner', partners[0], 'name above "Partner"');
+
+  const dirs = nameAbove('director');
+  dirs.slice(0, 4).forEach((d, i) => add('director' + (i + 1), `Signing director ${i + 1}`, d, 'name above "Director"'));
+
+  const dins = [...joined.matchAll(/DIN\s*:?\s*([0-9]{8})/gi)].map((m) => m[1]);
+  dins.slice(0, 4).forEach((d, i) => add('din' + (i + 1), `DIN ${i + 1}`, d, 'near "DIN"'));
+
+  // Company name: the most repeated short line that is not a heading
+  const counts = new Map();
+  for (const c of cells) {
+    const t = c.v.trim();
+    if (t.length < 5 || t.length > 90) continue;
+    if (/balance sheet|profit and loss|cash flow|notes|schedule|particulars|chartered/i.test(t)) continue;
+    if (/(private limited|pvt\.? ltd|limited|llp)\b/i.test(t)) counts.set(t, (counts.get(t) || 0) + 1);
+  }
+  const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+  if (top && !out.fields.some((f) => f.key === 'legalName')) add('legalName', 'Company legal name', top[0], `appears ${top[1]} times in the document`);
+
+  // Shareholders holding more than 5%
+  const shIdx = cells.findIndex((c) => /shareholders?\s+holding\s+more\s+than\s+5|holding\s+more\s+than\s+5\s*%/i.test(c.v));
+  if (shIdx >= 0) {
+    const anchor = cells[shIdx];
+    const rows = new Map();
+    for (const c of cells) {
+      if (c.sheet !== anchor.sheet || c.r <= anchor.r || c.r > anchor.r + 14) continue;
+      if (!rows.has(c.r)) rows.set(c.r, {});
+      rows.get(c.r)[c.c] = c.v;
+    }
+    for (const [, cols] of [...rows.entries()].sort((a, b) => a[0] - b[0])) {
+      const name = cols[1] || cols[2];
+      if (!name) continue;
+      if (/name of|number of|% ?holding|particulars|^note\b/i.test(name)) continue;
+      if (/promoter/i.test(name) && Object.keys(cols).length < 2) break;
+      const nums = Object.values(cols).map((x) => Number(String(x).replace(/[, %]/g, ''))).filter(Number.isFinite);
+      out.shareholders.push({ name: name.trim(), shares: nums[0] ?? null, percent: nums[1] ?? null });
+      if (out.shareholders.length >= 12) break;
+    }
+  }
+  return out;
+}
+
+/* ---------- figures ------------------------------------------------------ */
+/** Find the header row of a face/note sheet and the amount columns. */
+function findHeader(ws) {
+  const max = Math.min(ws.rowCount || 40, 40);
+  for (let r = 1; r <= max; r++) {
+    const row = ws.getRow(r);
+    let note = null, cy = null, py = null, particulars = false;
+    row.eachCell({ includeEmpty: false }, (c, cn) => {
+      const t = cellText(c);
+      if (!t) return;
+      if (/particular/i.test(t)) particulars = true;
+      if (/^notes?$/i.test(t)) note = cn;
+      if (/as at|year ended|for the year/i.test(t)) { if (cy == null) cy = cn; else if (py == null) py = cn; }
+    });
+    if (particulars && cy != null) return { r, note, cy, py };
+  }
+  return null;
+}
+
+/**
+ * Prior-year figures, keyed by OUR line id.
+ * Last year's CURRENT column becomes this year's comparative.
+ */
+export function extractFigures(wb, division = 'AS') {
+  const found = new Map();   // lineId -> {amount, source, caption}
+  const unmatched = [];
+  const take = (id, amount, source, caption) => {
+    if (id == null || amount == null || !Number.isFinite(amount)) return;
+    if (found.has(id)) return;                        // first (face) wins over notes
+    found.set(id, { amount, source, caption });
+  };
+
+  for (const ws of wb.worksheets) {
+    const H = findHeader(ws);
+    if (!H) continue;
+    const last = ws.rowCount || 0;
+    for (let r = H.r + 1; r <= last; r++) {
+      const row = ws.getRow(r);
+      const label = cellText(row.getCell(1)) || cellText(row.getCell(2)) || cellText(row.getCell(3));
+      if (!label) continue;
+      if (/^total\b/i.test(label)) continue;          // totals are derived, never imported
+      const amount = cellNum(row.getCell(H.cy));
+      if (amount == null) continue;
+      const id = lineFromCaption(label, division);
+      if (id) take(id, amount, `${ws.name}!row ${r}`, label);
+      else if (Math.abs(amount) > 0) unmatched.push({ sheet: ws.name, row: r, label, amount });
+    }
+  }
+  return {
+    figures: [...found.entries()].map(([lineId, v]) => ({ lineId, ...v })),
+    unmatched: unmatched.slice(0, 40),
+  };
+}
+
+/* ---------- entry points ------------------------------------------------- */
+/** Read an .xlsx. `ExcelJS` is injected so this stays environment-agnostic. */
+export async function readWorkbook(ExcelJS, arrayBuffer, division = 'AS') {
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(arrayBuffer);
+  const cells = [];
+  wb.worksheets.forEach((ws) => ws.eachRow((row, r) =>
+    row.eachCell((c, cn) => { const v = cellText(c); if (v) cells.push({ sheet: ws.name, r, c: cn, v }); })));
+  const particulars = extractParticulars(cells);
+  const fig = extractFigures(wb, division);
+  return { kind: 'xlsx', ...particulars, ...fig };
+}
+
+/**
+ * Read a PDF's text layer. Particulars only — figures are NOT taken from a PDF,
+ * because column alignment cannot be recovered reliably from extracted text and
+ * a mis-read comparative is worse than none.
+ */
+export async function readPdf(pdfjsLib, arrayBuffer) {
+  const doc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const cells = [];
+  for (let p = 1; p <= doc.numPages; p++) {
+    const page = await doc.getPage(p);
+    const content = await page.getTextContent();
+    // group items into rows by their y position so "name above role" still works
+    const rows = new Map();
+    for (const it of content.items) {
+      const y = Math.round(it.transform[5]);
+      if (!rows.has(y)) rows.set(y, []);
+      rows.get(y).push({ x: Math.round(it.transform[4]), s: it.str });
+    }
+    const ys = [...rows.keys()].sort((a, b) => b - a);
+    ys.forEach((y, idx) => {
+      const items = rows.get(y).sort((a, b) => a.x - b.x);
+      items.forEach((it, i) => { if (it.s.trim()) cells.push({ sheet: 'p' + p, r: idx + 1, c: i + 1, v: it.s.trim() }); });
+    });
+  }
+  const particulars = extractParticulars(cells);
+  return { kind: 'pdf', ...particulars, figures: [], unmatched: [],
+    note: 'Figures are not read from a PDF — column alignment cannot be recovered reliably from extracted text. Upload the Excel, or key the comparatives.' };
+}
