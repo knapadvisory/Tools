@@ -26,13 +26,20 @@ async function api(path, opts = {}) {
   return j;
 }
 const connBase = () => ($('connUrl').value || 'http://127.0.0.1:8797').replace(/\/+$/, '');
-async function conn(path, body) {
-  const r = await fetch(connBase() + path, body
-    ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }
-    : {});
-  if (!r.ok) throw new Error('connector HTTP ' + r.status);
+/** The connector's data routes are POST-only; GET them and they 404. */
+async function connPost(path, body = {}) {
+  const r = await fetch(connBase() + path, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error('connector HTTP ' + r.status + ' on ' + path);
   return r.json();
 }
+async function connGet(path) {
+  const r = await fetch(connBase() + path);
+  if (!r.ok) throw new Error('connector HTTP ' + r.status + ' on ' + path);
+  return r.json();
+}
+/** Tally appends " - (from …)" to a company name; strip it for display. */
+const cleanCoName = (n) => String(n || '').replace(/\s*-\s*\(from[^)]*\)\s*$/i, '').trim();
 function msg(el, text, kind) {
   const c = kind === 'bad' ? 'var(--bad)' : kind === 'ok' ? 'var(--ok)' : 'var(--mut)';
   $(el).innerHTML = `<span style="color:${c}">${esc(text)}</span>`;
@@ -87,21 +94,50 @@ $('engOpen').onclick = () => { const v = $('engList').value; if (v) openEngageme
 
 /* ---------- 2. import from Tally --------------------------------------- */
 $('coScan').onclick = async () => {
-  msg('m2', 'Scanning…');
+  msg('m2', 'Scanning Tally…');
   try {
-    const j = await conn('/api/dc/companies');
-    const list = j.companies || j.list || [];
-    $('coList').innerHTML = list.map((c) => `<option>${esc(c.name || c)}</option>`).join('')
-      || '<option value="">— none open —</option>';
-    msg('m2', list.length + ' company(ies) open in Tally.', 'ok');
-  } catch (e) { msg('m2', 'Connector not reachable (' + e.message + '). Is the KNAP Tally connector running on this PC?', 'bad'); }
+    const j = await connPost('/api/dc/companies', {});
+    // shape: { endpoints: [ { companies: [ "Name" | {name, gstins[]} ] } ] }
+    const list = [];
+    for (const ep of j.endpoints || []) {
+      for (const c of ep.companies || []) {
+        list.push({ name: typeof c === 'string' ? c : c.name,
+                    gstin: typeof c === 'string' ? '' : ((c.gstins || [])[0] || '') });
+      }
+    }
+    if (!list.length) {
+      $('coList').innerHTML = '<option value="">— no company open —</option>';
+      return msg('m2', 'No company is open in Tally. Open one on the Gateway of Tally, then scan again.', 'bad');
+    }
+    $('coList').innerHTML = list.map((c) =>
+      `<option value="${esc(c.name)}">${esc(cleanCoName(c.name))}${c.gstin ? ' · ' + esc(c.gstin) : ''}</option>`).join('');
+    msg('m2', list.length === 1 ? '1 company open.' : `${list.length} companies open — pick one.`, 'ok');
+    await detectCompany();
+  } catch (e) {
+    msg('m2', 'Could not reach the connector (' + e.message + '). Is the KNAP Tally connector running on this PC, and is Tally open?', 'bad');
+  }
 };
+
+/** Ask the connector about the picked company so the period fills itself in. */
+async function detectCompany() {
+  const co = $('coList').value;
+  try {
+    const c = await connGet('/api/fin/company' + (co ? '?company=' + encodeURIComponent(co) : ''));
+    if (!c || !c.ok) return;
+    if (c.start) $('pFrom').value = c.start;
+    const end = c.lastVoucher || c.endingAt;
+    if (end) $('pTo').value = end;
+    msg('m2', `${cleanCoName(c.name) || 'Company'} · books from ${c.start || '?'} to ${end || '?'}. Adjust the period if you need to, then read the trial balance.`, 'ok');
+  } catch { /* period stays as the engagement's FY — not fatal */ }
+}
+$('coList').onchange = detectCompany;
 $('pull').onclick = async () => {
   if (!S.eng) return;
   msg('m2', 'Reading the trial balance from Tally…');
   try {
-    const tb = await conn('/api/fin/trialbalance', {
+    const tb = await connPost('/api/fin/trialbalance', {
       from: $('pFrom').value, to: $('pTo').value, company: $('coList').value || '' });
+    if (tb.ok === false) throw new Error(tb.error || 'Tally refused the request — is the company open?');
     const ledgers = (tb.ledgers || []).map((l) => ({
       name: l.name, group: l.group, primary: l.primary, groupPath: l.groupPath || [],
       gstin: l.gstin || '', isRevenue: !!l.isRevenue, current: l.current || 0, prior: l.prior || 0 }));
