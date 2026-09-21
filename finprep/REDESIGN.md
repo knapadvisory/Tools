@@ -42,6 +42,7 @@ Tally connector (local, read-only)
 | `finprep/core/schedule3.js` | The chart of statement lines with **stable IDs**; note numbers are assigned at presentation time. Carries each head's Schedule III information requirements. |
 | `finprep/core/classify.js` | Ledger → line. Whole-word matching; rules carry an `altLine` so a balance on the abnormal side is reclassified rather than netted. |
 | `finprep/core/engine.js` | Original TB → journals → adjusted TB → lines → P&L/BS, integrity checks, disclosure gaps, release flag. |
+| `finprep/core/cashflow.js` | AS 3 / Ind AS 7 indirect cash flow, built bottom-up from PBT and reconciled to the balance sheet. No plug. |
 | `server/db.js` | SQLite, versioned migrations, snapshot sealing, activity log. |
 | `server/routes/finprep2.js` | Engagement API at `/api/fin2`. |
 
@@ -60,7 +61,7 @@ after creation; corrections are made by journal, never by editing a snapshot.
 | C3 | A ledger was classified once from the current-year sign and that head used for both columns. | Each period resolves its own line; a change of head is flagged as a regrouping. |
 | C4 | Creditors with debit balances and debtors with credit balances were netted, contrary to Schedule III. | `altLine` moves them to advances; both gross amounts are presented. |
 | C5 | Depreciation could be capitalised into PPE and vanish from the P&L, and the balance sheet still tied. | Depreciation classifies straight to the P&L line; PPE is never a staging area. |
-| C6 | Operating cash flow was a plug. | No plug exists in the engine. The cash flow is **not yet rebuilt** — see below. |
+| C6 | Operating cash flow was a plug (`netCash − financing − investing`), so it always tied and could never be audited. Depreciation appeared as an investing inflow. | Rebuilt bottom-up from PBT with add-backs, working-capital movements and taxes paid. The statement is then reconciled to the movement in cash per the balance sheet and any residual is **reported as CRITICAL**, never absorbed. Interest and dividend income move to investing; finance costs to financing. |
 | H1 | Unclassified balances were dropped from both face totals; offsetting items made the drop invisible. | Reported **gross Dr and Cr**, and blocks release. |
 | H2 | No heads for share application money, share warrants, CWIP, intangibles, purchases of stock-in-trade or tax. | All added, with classification rules. |
 | H4 | TDS receivable was captured by the Duties & Taxes group rule. | Name-specific tax rules run first. |
@@ -68,14 +69,21 @@ after creation; corrections are made by journal, never by editing a snapshot.
 | M2 | Bank charges and interest on late statutory dues were finance costs. | Reclassified to other expenses. |
 | M5 | Bank overdrafts appeared as negative cash. | Credit bank balances move to short-term borrowings. |
 
-Verified by `node finprep/core/engine.test.mjs` (26 assertions).
+Verified by `node finprep/core/engine.test.mjs` (26 assertions) and
+`node finprep/core/cashflow.test.mjs` (8 assertions).
+
+### What the cash flow cannot know from a trial balance
+
+Gross additions vs disposals, borrowings drawn vs repaid, and actual taxes paid
+cannot be derived from two balance sheets. Where a supporting schedule is
+supplied it is used; otherwise the net movement is presented and an **explicit
+assumption is recorded and returned** (`CF-FA`, `CF-BOR`, `CF-TAX`, `CF-INT`).
+Assumptions are surfaced, never silently applied.
 
 ## Not yet built
 
 Listed honestly; none of it is stubbed or faked.
 
-- **Cash flow statement** — the defective plug-based version is not carried over.
-  A bottom-up AS 3 / Ind AS 7 statement is the next item.
 - **Notes/disclosure rendering and Excel/PDF/DOCX export** from the new engine.
   The existing export still runs off the old path.
 - **Schedule III 2021 disclosures** — ageing schedules, promoter holdings, title

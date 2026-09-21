@@ -10,6 +10,7 @@
 import express from 'express';
 import { handle, uid, now, log, sealSnapshot, isSealed } from '../db.js';
 import { build, validateJournal } from '../../finprep/core/engine.js';
+import { buildCashFlow } from '../../finprep/core/cashflow.js';
 import { toPaise, toRupees } from '../../finprep/core/money.js';
 import { captionFor } from '../../finprep/core/schedule3.js';
 
@@ -187,6 +188,15 @@ router.get('/engagements/:id/statements', (req, res) => {
   }
   const rup = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) =>
     [k, typeof v === 'number' ? toRupees(v) : (v && typeof v === 'object' ? rup(v) : v)]));
+  const rupDeep = (v) => (typeof v === 'number' ? toRupees(v)
+    : Array.isArray(v) ? v.map(rupDeep)
+    : (v && typeof v === 'object') ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, rupDeep(x)]))
+    : v);
+
+  const schedules = (req.query.schedules && JSON.parse(req.query.schedules)) || {};
+  const cf = buildCashFlow(r, { schedules });
+  const allChecks = r.checks.concat(cf.checks);
+  const releasable = r.releasable && cf.reconciled;
 
   res.json({
     ok: true,
@@ -195,10 +205,11 @@ router.get('/engagements/:id/statements', (req, res) => {
     lines,
     profitAndLoss: rup(r.pl),
     balanceSheet: rup(r.bs),
-    checks: r.checks.map((c) => ({ ...c, amount: c.amount != null ? toRupees(c.amount) : undefined })),
+    cashFlow: rupDeep({ ...cf, checks: undefined }),
+    checks: allChecks.map((c) => ({ ...c, amount: c.amount != null ? toRupees(c.amount) : undefined })),
     disclosureGaps: r.disclosureGaps,
-    releasable: r.releasable,
-    status: r.releasable ? 'draft' : 'blocked',
+    releasable,
+    status: releasable ? 'draft' : 'blocked',
   });
 });
 
@@ -207,15 +218,17 @@ router.post('/engagements/:id/release', (req, res) => {
   const ctx = loadForBuild(req.params.id, req.body && req.body.snapshotId);
   if (ctx.error) return bad(res, ctx.error, 404);
   const r = build({ ledgers: ctx.ledgers, journals: ctx.journals, division: ctx.eng.division, overrides: ctx.overrides });
+  const cf = buildCashFlow(r, { schedules: (req.body && req.body.schedules) || {} });
+  const blocking = r.checks.concat(cf.checks).filter((c) => c.severity === 'CRITICAL');
   const wanted = (req.body && req.body.status) || 'reviewed';
-  if (wanted === 'final' && !r.releasable) {
-    return bad(res, 'Cannot mark Final: ' + r.checks.filter((c) => c.severity === 'CRITICAL').map((c) => c.message).join(' | '));
+  if (wanted === 'final' && blocking.length) {
+    return bad(res, 'Cannot mark Final: ' + blocking.map((c) => c.message).join(' | '));
   }
   const id = uid('rep');
   db().prepare(`INSERT INTO report_versions (id,engagement_id,snapshot_id,kind,status,framework,created_at,created_by,payload)
                 VALUES (?,?,?,?,?,?,?,?,?)`)
     .run(id, ctx.eng.id, ctx.snap.id, 'pack', wanted, ctx.eng.division, now(), actor(req),
-      JSON.stringify({ pl: r.pl, bs: r.bs, checks: r.checks }));
+      JSON.stringify({ pl: r.pl, bs: r.bs, cashFlow: cf, checks: r.checks.concat(cf.checks) }));
   log(ctx.eng.id, actor(req), 'report.released', { id, status: wanted });
   res.json({ ok: true, reportVersionId: id, status: wanted });
 });
