@@ -297,7 +297,11 @@ function buildPayload(ctx, schedules = {}) {
 router.post('/engagements/:id/release', (req, res) => {
   const ctx = loadForBuild(req.params.id, req.body && req.body.snapshotId);
   if (ctx.error) return bad(res, ctx.error, 404);
-  const r = build({ ledgers: ctx.ledgers, journals: ctx.journals, division: ctx.eng.division, overrides: ctx.overrides });
+  // The SAME build as the one that was reviewed and exported. Leaving the
+  // imported comparatives out here would seal a version whose prior column
+  // differs from the one on screen.
+  const r = build({ ledgers: ctx.ledgers, journals: ctx.journals, division: ctx.eng.division,
+    overrides: ctx.overrides, priorOverrides: ctx.priorOverrides });
   const cf = buildCashFlow(r, { schedules: (req.body && req.body.schedules) || {} });
   const blocking = r.checks.concat(cf.checks).filter((c) => c.severity === 'CRITICAL');
   const wanted = (req.body && req.body.status) || 'reviewed';
@@ -345,9 +349,12 @@ router.post('/engagements/:id/prior-import', (req, res) => {
   const d = db();
   d.exec('BEGIN');
   try {
+    // replace: true  — this import supersedes everything on file
+    // replace: 'figures' — the comparatives editor rewrites the figures only,
+    //                      leaving particulars and shareholders alone
     if (replace) {
       d.prepare('DELETE FROM prior_figures WHERE engagement_id=?').run(eng.id);
-      d.prepare('DELETE FROM shareholders WHERE engagement_id=?').run(eng.id);
+      if (replace !== 'figures') d.prepare('DELETE FROM shareholders WHERE engagement_id=?').run(eng.id);
     }
     const pf = d.prepare(`INSERT INTO prior_figures (engagement_id,line_id,amount_paise,source,caption,confirmed_by,confirmed_at)
       VALUES (?,?,?,?,?,?,?) ON CONFLICT(engagement_id,line_id) DO UPDATE SET

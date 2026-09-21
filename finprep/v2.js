@@ -13,7 +13,7 @@ const inr = (n) => (n == null || n === '' ? '' :
   (n < 0 ? '(' + Math.abs(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ')'
          : n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })));
 
-const S = { eng: null, payload: null, ledgers: null, maxStep: 1, tab: 'bs', heads: [], inputs: null, prior: null };
+const S = { eng: null, payload: null, ledgers: null, maxStep: 1, tab: 'bs', heads: [], inputs: null, prior: null, comparatives: [] };
 
 /* ---------- plumbing ---------------------------------------------------- */
 async function api(path, opts = {}) {
@@ -408,7 +408,66 @@ async function loadInputs() {
   const j = await api(`/engagements/${S.eng.id}/inputs`);
   S.inputs = j;
   renderKinds(j); renderCoverage(j); renderInputRows(j);
+  await loadComparatives();
 }
+
+/* ---------- comparatives on file --------------------------------------- */
+/**
+ * Every prior-year figure the statements will use, head by head, editable.
+ * The import fills this in; where it could not read a statement — a P&L whose
+ * layout it does not recognise, or a set supplied only as a PDF — the
+ * comparatives can still be keyed in here rather than silently reading nil.
+ */
+const PL_SECTIONS = ['INCOME', 'EXPENSE', 'TAX', 'OCI'];
+async function loadComparatives() {
+  if (!S.eng) return;
+  if (!S.heads.length) await loadHeads();
+  const { figures } = await api(`/engagements/${S.eng.id}/prior-import`);
+  S.comparatives = figures.map((f) => ({ ...f }));
+  $('cmpHead').innerHTML = headOptions(null);
+  renderComparatives();
+}
+function renderComparatives() {
+  const rows = (S.comparatives || []).slice();
+  const head = (id) => S.heads.find((h) => h.lineId === id) || {};
+  const stmt = (id) => (PL_SECTIONS.includes(head(id).section) ? 'Profit and loss' : 'Balance sheet');
+  rows.sort((a, b) => stmt(a.lineId).localeCompare(stmt(b.lineId)) || (head(a.lineId).caption || '').localeCompare(head(b.lineId).caption || ''));
+  const nPL = rows.filter((r) => PL_SECTIONS.includes(head(r.lineId).section)).length;
+  $('cmpRows').innerHTML = rows.length ? rows.map((r, i) => `
+    <tr><td class="muted">${esc(stmt(r.lineId))}</td>
+      <td>${esc(head(r.lineId).caption || r.lineId)}</td>
+      <td class="r"><input data-cmp="${i}" type="number" step="0.01" value="${r.amount}" style="width:150px;text-align:right"></td>
+      <td class="muted">${esc(r.source || 'keyed in')}${r.caption ? ' — “' + esc(r.caption) + '”' : ''}</td>
+      <td><button class="btn ghost sm" data-cmpdel="${i}" type="button">Remove</button></td></tr>`).join('')
+    : '<tr><td colspan="5" class="muted">No comparative is on file. The prior column will come from Tally.</td></tr>';
+  msg('mCmp', `${rows.length - nPL} on the balance sheet · ${nPL} on the statement of profit and loss.`,
+    rows.length && !nPL ? 'bad' : '');
+  $('cmpRows').querySelectorAll('[data-cmpdel]').forEach((b) => b.onclick = () => {
+    S.comparatives.splice(+b.dataset.cmpdel, 1); renderComparatives();
+  });
+  $('cmpRows').querySelectorAll('[data-cmp]').forEach((inp) => inp.onchange = () => {
+    S.comparatives[+inp.dataset.cmp].amount = Number(inp.value) || 0;
+    S.comparatives[+inp.dataset.cmp].source = 'keyed in by the preparer';
+  });
+}
+$('cmpAdd').onclick = () => {
+  const lineId = $('cmpHead').value, amount = Number($('cmpAmt').value);
+  if (!lineId || !Number.isFinite(amount)) return msg('mCmp', 'Pick a head and type an amount.', 'bad');
+  S.comparatives = S.comparatives || [];
+  const at = S.comparatives.findIndex((x) => x.lineId === lineId);
+  const row = { lineId, amount, source: 'keyed in by the preparer', caption: null };
+  if (at >= 0) S.comparatives[at] = row; else S.comparatives.push(row);
+  $('cmpAmt').value = '';
+  renderComparatives();
+};
+$('cmpSave').onclick = async () => {
+  try {
+    await api(`/engagements/${S.eng.id}/prior-import`, { method: 'POST', body: JSON.stringify({
+      figures: S.comparatives || [], particulars: [], shareholders: [], replace: 'figures' }) });
+    await refresh().catch(() => {});
+    msg('mCmp', 'Saved. The comparative column now uses these figures.', 'ok');
+  } catch (e) { msg('mCmp', e.message, 'bad'); }
+};
 
 function renderKinds(j) {
   $('inpKinds').innerHTML = j.kinds.map((k) => {
@@ -584,6 +643,7 @@ async function confirmPrior() {
     const r = await api(`/engagements/${S.eng.id}/prior-import`, { method: 'POST', body: JSON.stringify({
       figures, particulars, shareholders: x.shareholders || [] }) });
     $('priorPreview').innerHTML = `<div class="banner ok">Applied: ${r.figures} comparative figure(s), ${r.particulars} particular(s), ${r.shareholders} shareholder(s). The comparative column now comes from the signed accounts.</div>`;
+    await loadComparatives();
     S.prior = null;
     await loadEngagements();
     const list = await api('/engagements');

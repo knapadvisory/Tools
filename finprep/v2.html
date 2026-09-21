@@ -123,6 +123,20 @@
       <div id="priorPreview"></div>
     </div>
     <div class="card">
+      <h2>Comparative figures on file</h2>
+      <p class="sub">Every prior-year figure the statements will use, head by head. A head left blank falls back to Tally's own prior column — which reads as nil for a year that is not in these books. Correct anything the import read wrongly, and key in anything it could not read at all.</p>
+      <div class="row" style="margin-bottom:10px">
+        <select id="cmpHead" style="min-width:280px"></select>
+        <input id="cmpAmt" type="number" step="0.01" placeholder="Amount in ₹, as presented" style="min-width:200px">
+        <button class="btn ghost sm" id="cmpAdd" type="button">Add / replace</button>
+        <button class="btn sm" id="cmpSave" type="button">Save comparatives</button>
+        <span id="mCmp" class="muted"></span>
+      </div>
+      <div class="wrap" style="max-height:340px"><table class="fin"><thead><tr>
+        <th>Statement</th><th>Head</th><th class="r">Prior-year amount</th><th>Where it came from</th><th></th>
+      </tr></thead><tbody id="cmpRows"></tbody></table></div>
+    </div>
+    <div class="card">
       <h2>Coverage</h2>
       <p class="sub">A month with no return on file is shown as a <b>gap</b>. It is never assumed to be a nil return.</p>
       <div id="inpCoverage"></div>
