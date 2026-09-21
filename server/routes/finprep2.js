@@ -13,6 +13,40 @@ import { build, validateJournal } from '../../finprep/core/engine.js';
 import { buildCashFlow } from '../../finprep/core/cashflow.js';
 import { toPaise, toRupees } from '../../finprep/core/money.js';
 import { captionFor } from '../../finprep/core/schedule3.js';
+import { presentationModel } from '../../finprep/core/notes.js';
+import { sectionOf as sectionOfLine } from '../../finprep/core/schedule3.js';
+import { assessAll, requiredFacts, RULE_DEFS } from '../../finprep/core/applicability.js';
+
+/** "2026-03-31" -> "31 March 2026" */
+function fmtDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso + (iso.length === 10 ? 'T00:00:00Z' : ''));
+  if (isNaN(d)) return String(iso);
+  const M = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  return `${d.getUTCDate()} ${M[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+function priorLabel(iso) {
+  if (!iso) return '';
+  const d = new Date(iso + 'T00:00:00Z');
+  if (isNaN(d)) return '';
+  d.setUTCFullYear(d.getUTCFullYear() - 1);
+  return fmtDate(d.toISOString().slice(0, 10));
+}
+/**
+ * Deep paise -> rupees. Key-aware: some numeric fields (note numbers, ids) are
+ * NOT money and must not be scaled.
+ */
+const NON_MONEY = new Set(['number', 'note', 'id', 'key', 'lineId', 'caption', 'name', 'reason',
+  'severity', 'status', 'requirement', 'evidence', 'section', 'title', 'period', 'method',
+  'reconciled', 'drcr', 'group', 'primary', 'lineCaption', 'text', 'label']);
+const rupDeep = (v, key) => {
+  if (typeof v === 'number') return NON_MONEY.has(key) ? v : toRupees(v);
+  if (Array.isArray(v)) return v.map((x) => rupDeep(x, key));
+  if (v && typeof v === 'object') {
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, rupDeep(x, k)]));
+  }
+  return v;
+};
 
 export const router = express.Router();
 router.use(express.json({ limit: '32mb' }));
@@ -175,43 +209,57 @@ function loadForBuild(engagementId, snapshotId) {
 router.get('/engagements/:id/statements', (req, res) => {
   const ctx = loadForBuild(req.params.id, req.query.snapshot);
   if (ctx.error) return bad(res, ctx.error, 404);
+  const payload = buildPayload(ctx, req.query.schedules ? JSON.parse(req.query.schedules) : {});
+  delete payload._engine;
+  res.json({ ok: true, ...payload });
+});
+
+/** One shared payload for the screen and the export, so they cannot disagree. */
+function buildPayload(ctx, schedules = {}) {
   const r = build({ ledgers: ctx.ledgers, journals: ctx.journals,
     division: ctx.eng.division, overrides: ctx.overrides });
-
-  const lines = [];
-  for (const id of r.used) {
-    lines.push({
-      lineId: id, caption: captionFor(id, r.division), note: r.noteNumbers.get(id) || null,
-      current: toRupees(r.presented(id, 'current')), prior: toRupees(r.presented(id, 'prior')),
-      contributors: (r.trace.get(id) || []).map((t) => ({ ledger: t.name, period: t.period, amount: toRupees(t.amount), reason: t.reason })),
-    });
-  }
-  const rup = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) =>
-    [k, typeof v === 'number' ? toRupees(v) : (v && typeof v === 'object' ? rup(v) : v)]));
-  const rupDeep = (v) => (typeof v === 'number' ? toRupees(v)
-    : Array.isArray(v) ? v.map(rupDeep)
-    : (v && typeof v === 'object') ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, rupDeep(x)]))
-    : v);
-
-  const schedules = (req.query.schedules && JSON.parse(req.query.schedules)) || {};
   const cf = buildCashFlow(r, { schedules });
+  const model = presentationModel(r);
   const allChecks = r.checks.concat(cf.checks);
   const releasable = r.releasable && cf.reconciled;
 
-  res.json({
-    ok: true,
-    engagement: { id: ctx.eng.id, client: ctx.eng.client_name, division: ctx.eng.division },
-    snapshot: { id: ctx.snap.id, takenAt: ctx.snap.taken_at, sealed: !!ctx.snap.sealed, method: ctx.snap.method },
-    lines,
-    profitAndLoss: rup(r.pl),
-    balanceSheet: rup(r.bs),
+  // trial balance rows, natural sign, with the head each ledger reached
+  const trialBalance = r.ledgers.map((l) => {
+    const cur = l.perPeriod.current, pri = l.perPeriod.prior;
+    const natural = (v, id) => {
+      const sec = sectionOfLine(id);
+      return ['EQUITY', 'NCL', 'CL', 'INCOME', 'OCI'].includes(sec) ? -v : v;
+    };
+    return {
+      ledger: l.name, group: l.group, primary: l.primary,
+      drcr: cur.amount >= 0 ? 'Dr' : 'Cr',
+      current: toRupees(natural(cur.amount, cur.lineId)),
+      prior: toRupees(natural(pri.amount, pri.lineId)),
+      lineId: cur.lineId, lineCaption: captionFor(cur.lineId, r.division),
+      note: r.noteNumbers.get(cur.lineId) || null,
+    };
+  });
+
+  return {
+    meta: {
+      entity: ctx.eng.client_name, cin: ctx.eng.cin || '', division: ctx.eng.division,
+      currentLabel: fmtDate(ctx.eng.fy_end), priorLabel: priorLabel(ctx.eng.fy_end),
+      status: releasable ? 'Draft' : 'Draft — blocked',
+      snapshotId: ctx.snap.id, takenAt: ctx.snap.taken_at,
+      scaleLabel: 'Amounts in ₹',
+    },
+    trialBalance,
+    balanceSheet: rupDeep(model.balanceSheet),
+    profitAndLoss: rupDeep(model.profitAndLoss),
+    notes: rupDeep(model.notes),
     cashFlow: rupDeep({ ...cf, checks: undefined }),
     checks: allChecks.map((c) => ({ ...c, amount: c.amount != null ? toRupees(c.amount) : undefined })),
-    disclosureGaps: r.disclosureGaps,
+    disclosures: model.disclosures,
     releasable,
     status: releasable ? 'draft' : 'blocked',
-  });
-});
+    _engine: r,
+  };
+}
 
 /* ---------- release control (spec §11) ---------------------------------- */
 router.post('/engagements/:id/release', (req, res) => {
@@ -231,6 +279,44 @@ router.post('/engagements/:id/release', (req, res) => {
       JSON.stringify({ pl: r.pl, bs: r.bs, cashFlow: cf, checks: r.checks.concat(cf.checks) }));
   log(ctx.eng.id, actor(req), 'report.released', { id, status: wanted });
   res.json({ ok: true, reportVersionId: id, status: wanted });
+});
+
+/* ---------- applicability (spec §12) ------------------------------------ */
+router.get('/rules', (_req, res) => {
+  const stored = db().prepare('SELECT * FROM rules').all();
+  res.json({ ok: true, definitions: RULE_DEFS, stored, requiredFacts: requiredFacts() });
+});
+
+/** Record a verified rule. The reviewer's name and the authority are mandatory:
+ *  an unattributed threshold is exactly what this engine refuses to rely on. */
+router.post('/rules', (req, res) => {
+  const { domain, ruleKey, authority, provision, url, effectiveFrom, effectiveTo, operands, notes, reviewedBy } = req.body || {};
+  if (!domain || !ruleKey) return bad(res, 'domain and ruleKey are required');
+  if (!RULE_DEFS.some((d) => d.domain === domain && d.key === ruleKey)) return bad(res, 'unknown rule');
+  if (!authority || !provision || !effectiveFrom || !reviewedBy) {
+    return bad(res, 'a verified rule needs authority, provision, effectiveFrom and reviewedBy');
+  }
+  db().prepare(`INSERT INTO rules (id,domain,rule_key,status,authority,provision,url,effective_from,effective_to,operands,retrieved_at,reviewed_by,reviewed_at,notes)
+                VALUES (?,?,?,'verified',?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(domain, rule_key, COALESCE(effective_from,'')) DO UPDATE SET
+                  status='verified', authority=excluded.authority, provision=excluded.provision,
+                  url=excluded.url, effective_to=excluded.effective_to, operands=excluded.operands,
+                  reviewed_by=excluded.reviewed_by, reviewed_at=excluded.reviewed_at, notes=excluded.notes`)
+    .run(uid('rule'), domain, ruleKey, authority, provision, url || null, effectiveFrom, effectiveTo || null,
+      JSON.stringify(operands || {}), now(), reviewedBy, now(), notes || null);
+  log(null, actor(req), 'rule.verified', { domain, ruleKey, authority, provision, effectiveFrom });
+  res.json({ ok: true });
+});
+
+router.get('/engagements/:id/applicability', (req, res) => {
+  const eng = db().prepare('SELECT * FROM engagements WHERE id=?').get(req.params.id);
+  if (!eng) return bad(res, 'engagement not found', 404);
+  let facts = {};
+  try { facts = JSON.parse(req.query.facts || '{}'); } catch { /* ignore */ }
+  const stored = db().prepare('SELECT * FROM rules').all();
+  const results = assessAll(stored, facts, eng.fy_end);
+  res.json({ ok: true, asOf: eng.fy_end, results, requiredFacts: requiredFacts(),
+    caveat: 'No conclusion is produced from an unverified rule. Record the authority, provision, effective dates and operands for each rule, have them reviewed, and re-run.' });
 });
 
 router.get('/engagements/:id/activity', (req, res) => {

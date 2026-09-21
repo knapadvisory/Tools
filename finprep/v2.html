@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Financial statements — KNAP Tools</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23173f28'/><text x='50' y='70' text-anchor='middle' font-size='52' font-weight='700' fill='%235fd68a'>₹</text></svg>">
+<script src="/session.js" defer></script>
+<script src="/gstr2b/exceljs.js" defer></script>
+<style>
+  :root{--green:#1b6a3a;--head:#173f28;--ink:#141a16;--mut:#5f6b62;--rule:#e2e5df;--card:#fff;--bg:#f4f5f2;
+    --soft:#e7f2ea;--warn:#a86617;--warn-soft:#fbf1dd;--bad:#b3261e;--bad-soft:#fbe9e7;--ok:#14461f;--info-soft:#e6eff5;--info:#1f5f8b}
+  *{box-sizing:border-box} body{margin:0;font:14px/1.55 -apple-system,Segoe UI,Roboto,sans-serif;color:var(--ink);background:var(--bg)}
+  .band{background:var(--head);color:#fff;padding:11px 20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  .band a{color:#bfe6cd;text-decoration:none;font-size:13px} .band h1{margin:0;font-size:18px} .band .sp{margin-left:auto}
+  main{max-width:1240px;margin:0 auto;padding:16px 14px 80px}
+  .btn{border:1px solid var(--green);background:var(--green);color:#fff;padding:8px 14px;border-radius:7px;font:inherit;font-weight:600;cursor:pointer}
+  .btn.ghost{background:#fff;color:var(--green)} .btn.sm{padding:6px 10px;font-size:13px}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
+  .card{background:var(--card);border:1px solid var(--rule);border-radius:11px;padding:16px 18px;margin-top:14px}
+  .card h2{margin:0 0 4px;font-size:15px;color:var(--green)} .card p.sub{margin:0 0 12px;color:var(--mut);font-size:13px}
+  label{display:block;font-size:12px;color:var(--mut);margin:0 0 3px}
+  input,select{padding:7px 8px;border:1px solid var(--rule);border-radius:6px;font:inherit;background:#fff}
+  .row{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
+  /* stepper */
+  #stepper{display:flex;background:#fff;border:1px solid var(--rule);border-radius:11px;overflow:hidden;margin-top:14px}
+  #stepper .step{flex:1;padding:12px 14px;display:flex;gap:9px;align-items:center;border-right:1px solid var(--rule);color:var(--mut);font-size:13px}
+  #stepper .step:last-child{border-right:0}
+  #stepper .step .n{width:22px;height:22px;border-radius:50%;background:#eef2ee;color:var(--mut);display:grid;place-items:center;font-size:12px;font-weight:700}
+  #stepper .step.active{background:var(--soft);color:var(--ok);font-weight:600} #stepper .step.active .n{background:var(--green);color:#fff}
+  #stepper .step.done .n{background:#cfe6d7;color:var(--ok)} #stepper .step.clk{cursor:pointer}
+  .hidden{display:none}
+  table.fin{border-collapse:collapse;width:100%;font-size:13px}
+  table.fin th,table.fin td{padding:6px 9px;border-bottom:1px solid var(--rule)}
+  table.fin th{background:#f0f4f0;color:#25402e;text-align:left;font-weight:600;position:sticky;top:0}
+  table.fin td.r,table.fin th.r{text-align:right;font-variant-numeric:tabular-nums}
+  table.fin tr.grp td{background:#eef4ee;font-weight:700}
+  table.fin tr.sec td{background:#f7f9f7;font-style:italic;color:var(--mut)}
+  table.fin td.note{text-align:center;color:var(--mut);width:52px}
+  .wrap{overflow:auto;max-height:560px;border:1px solid var(--rule);border-radius:9px}
+  .pill{display:inline-block;border-radius:20px;padding:2px 9px;font-size:11px;font-weight:700}
+  .pill.ok{background:var(--soft);color:var(--ok)} .pill.warn{background:var(--warn-soft);color:var(--warn)}
+  .pill.bad{background:var(--bad-soft);color:var(--bad)} .pill.info{background:var(--info-soft);color:var(--info)}
+  .chk{border-radius:9px;padding:10px 12px;margin-top:8px;font-size:13px;border:1px solid}
+  .chk.CRITICAL{background:var(--bad-soft);border-color:#f3cdc8;color:#7a1c16}
+  .chk.HIGH{background:var(--warn-soft);border-color:#f0dcb4;color:#6f4410}
+  .chk.REVIEW{background:var(--info-soft);border-color:#cfe0ee;color:#194864}
+  .chk.INFO{background:#f6f8f6;border-color:var(--rule);color:var(--mut)}
+  .kpi{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px}
+  .kpi .k{background:#f6f8f6;border:1px solid var(--rule);border-radius:9px;padding:9px 13px;min-width:150px}
+  .kpi .k .v{font-size:17px;font-weight:700;font-variant-numeric:tabular-nums} .kpi .k .t{font-size:12px;color:var(--mut)}
+  .kpi .k.bad .v{color:var(--bad)} .kpi .k.good .v{color:var(--ok)}
+  .muted{color:var(--mut);font-size:12px}
+  .banner{border-radius:9px;padding:11px 14px;margin-top:12px;font-weight:600;font-size:13px}
+  .banner.bad{background:var(--bad-soft);border:1px solid #f3cdc8;color:#7a1c16}
+  .banner.ok{background:var(--soft);border:1px solid #cfe6d7;color:var(--ok)}
+  .tabs{display:flex;gap:6px;margin:12px 0}
+  .tabs button{border:1px solid var(--rule);background:#fff;padding:7px 13px;border-radius:7px;cursor:pointer;font:inherit;font-size:13px}
+  .tabs button.on{background:var(--green);color:#fff;border-color:var(--green);font-weight:600}
+  td select.assign{width:100%;min-width:190px;font-size:12px;padding:4px}
+</style>
+</head>
+<body>
+<div class="band">
+  <a href="/">← All tools</a>
+  <h1>Financial statements <span class="muted" style="color:#cfe6d7;font-weight:400">· Schedule III</span></h1>
+  <span class="pill info" id="engPill" style="background:#245a3c;color:#cfe6d7">no engagement</span>
+  <div class="sp"></div>
+  <a href="/finprep/">old version</a>
+</div>
+
+<main>
+  <div id="stepper">
+    <div class="step active" data-step="1"><span class="n">1</span> Engagement</div>
+    <div class="step" data-step="2"><span class="n">2</span> Import books</div>
+    <div class="step" data-step="3"><span class="n">3</span> Review grouping</div>
+    <div class="step" data-step="4"><span class="n">4</span> Statements</div>
+    <div class="step" data-step="5"><span class="n">5</span> Exceptions</div>
+    <div class="step" data-step="6"><span class="n">6</span> Export</div>
+  </div>
+
+  <!-- 1 ENGAGEMENT -->
+  <section id="s1">
+    <div class="card">
+      <h2>Engagement</h2>
+      <p class="sub">An engagement holds the client, the financial year and every snapshot, mapping and adjustment made for it. Everything is stored on the server, not in this browser.</p>
+      <div class="row">
+        <div style="flex:1;min-width:260px"><label>Existing engagements</label><select id="engList" style="width:100%"></select></div>
+        <button class="btn ghost sm" id="engOpen" type="button">Open</button>
+      </div>
+      <hr style="border:0;border-top:1px solid var(--rule);margin:16px 0">
+      <div class="row">
+        <div style="flex:1;min-width:240px"><label>Client legal name</label><input id="cName" placeholder="ABC Private Limited" style="width:100%"></div>
+        <div><label>CIN</label><input id="cCin" placeholder="U74999XX2019PTC000000"></div>
+        <div><label>FY start</label><input id="cStart" type="date" value="2025-04-01"></div>
+        <div><label>FY end</label><input id="cEnd" type="date" value="2026-03-31"></div>
+        <div><label>Framework</label><select id="cDiv"><option value="AS">AS · Division I</option><option value="INDAS">Ind AS · Division II</option></select></div>
+        <button class="btn" id="engNew" type="button">Create</button>
+      </div>
+      <div id="m1" class="muted" style="margin-top:8px"></div>
+    </div>
+  </section>
+
+  <!-- 2 IMPORT -->
+  <section id="s2" class="hidden">
+    <div class="card">
+      <h2>Import the books from Tally</h2>
+      <p class="sub">Run this on the PC where Tally is open. The extract is stored as a <b>sealed snapshot</b> — it is never edited afterwards; corrections are made by journal.</p>
+      <div class="row">
+        <div><label>Connector</label><input id="connUrl" value="http://127.0.0.1:8797" style="min-width:210px"></div>
+        <div style="flex:1;min-width:220px"><label>Company</label><select id="coList" style="width:100%"></select></div>
+        <button class="btn ghost sm" id="coScan" type="button">Scan companies</button>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <div><label>From</label><input id="pFrom" type="date"></div>
+        <div><label>To</label><input id="pTo" type="date"></div>
+        <button class="btn" id="pull" type="button">⬇ Read trial balance</button>
+      </div>
+      <div id="m2" style="margin-top:10px"></div>
+      <div class="kpi" id="k2"></div>
+    </div>
+  </section>
+
+  <!-- 3 GROUPING -->
+  <section id="s3" class="hidden">
+    <div class="card">
+      <h2>Review the grouping</h2>
+      <p class="sub">Every ledger and the Schedule III head it reached, with the reason. Change anything that is wrong, then approve. Approved decisions are remembered for this engagement.</p>
+      <div class="row">
+        <div><label>Show</label><select id="gFilter"><option value="review">Needs review</option><option value="all">All ledgers</option><option value="uncl">Unclassified only</option></select></div>
+        <div style="flex:1;min-width:200px"><label>Search</label><input id="gSearch" placeholder="ledger name" style="width:100%"></div>
+        <button class="btn" id="gSave" type="button">Approve &amp; rebuild</button>
+      </div>
+      <div class="wrap" style="margin-top:10px"><table class="fin" id="gTbl"><thead><tr>
+        <th>Ledger</th><th>Tally group</th><th class="r">Current</th><th>Schedule III head</th><th>Why</th>
+      </tr></thead><tbody id="gRows"></tbody></table></div>
+      <div id="m3" class="muted" style="margin-top:8px"></div>
+    </div>
+  </section>
+
+  <!-- 4 STATEMENTS -->
+  <section id="s4" class="hidden">
+    <div class="card">
+      <h2>Statements</h2>
+      <div id="stBanner"></div>
+      <div class="tabs" id="stTabs">
+        <button data-t="bs" class="on">Balance Sheet</button>
+        <button data-t="pl">Profit &amp; Loss</button>
+        <button data-t="cf">Cash Flow</button>
+        <button data-t="nt">Notes</button>
+      </div>
+      <div class="wrap"><div id="stBody"></div></div>
+    </div>
+  </section>
+
+  <!-- 5 EXCEPTIONS -->
+  <section id="s5" class="hidden">
+    <div class="card">
+      <h2>Exceptions</h2>
+      <p class="sub">A <b>critical</b> exception blocks release. These are arithmetic and completeness failures, not opinions — none of them can be waived by the tool.</p>
+      <div id="chkList"></div>
+    </div>
+    <div class="card">
+      <h2>Disclosures still required</h2>
+      <p class="sub">Schedule III information each head in use still needs. Nothing is ever asserted as nil on its own — a "Nil" has to be confirmed with evidence.</p>
+      <div class="wrap" style="max-height:420px"><table class="fin"><thead><tr><th>Note</th><th>Head</th><th>Requirement</th><th>Status</th></tr></thead><tbody id="discRows"></tbody></table></div>
+    </div>
+  </section>
+
+  <!-- 6 EXPORT -->
+  <section id="s6" class="hidden">
+    <div class="card">
+      <h2>Export</h2>
+      <p class="sub">One workbook: Balance Sheet, Profit &amp; Loss, Cash Flow, Notes, Trial Balance, Disclosures and Review. The faces are formula-linked to the notes and the notes to the trial balance, so every figure is traceable inside the file.</p>
+      <div id="exBanner"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn" id="exXlsx" type="button">⬇ Download Excel working paper</button>
+        <button class="btn ghost" id="exFinal" type="button">Mark Reviewed</button>
+      </div>
+      <div id="m6" style="margin-top:10px"></div>
+    </div>
+  </section>
+</main>
+
+<script type="module" src="v2.js"></script>
+</body>
+</html>
