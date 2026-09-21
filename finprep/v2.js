@@ -615,8 +615,10 @@ function renderPriorPreview(x) {
   const yr = priorYear();
   const cols = x.columns || [], units = x.units || [];
   const years = [...new Set(cols.flatMap((c) => c.all.map((a) => a.year)).filter(Boolean))].sort((a, b) => b - a);
-  const UNIT_OPTS = [['', 'as stated in the document'], ['1', 'rupees'], ['1000', "thousands ('000)"],
-                     ['100000', 'lakhs'], ['1000000', 'millions'], ['10000000', 'crores']];
+  // the same scales the tool itself presents in (money.js SCALES)
+  const UNIT_OPTS = [['', 'as stated in the document'], ['1', 'rupees'], ['100', "hundreds ('00)"],
+                     ['1000', "thousands ('000)"], ['100000', 'lakhs'],
+                     ['1000000', 'millions'], ['10000000', 'crores']];
   const unitNow = units.length ? String(units[0].applied) : '';
   h += `<div style="border:1px solid var(--rule);border-radius:8px;padding:10px 12px;margin:10px 0;background:#fff">
     <div class="row" style="gap:14px;align-items:flex-end">

@@ -275,11 +275,17 @@ export function yearOf(text) {
  * is ₹8,73,04,540. Importing that figure as rupees understates the comparative
  * a thousandfold, so the units are read, applied, and reported — never assumed.
  */
+/**
+ * Order matters: the longer figure-wordings are tested first, so "'000" is
+ * read as thousands and never as hundreds with a stray zero. The scales match
+ * the ones the tool itself presents in (money.js SCALES).
+ */
 export const UNIT_RULES = [
   [/\bin\s*(?:rs\.?\s*)?['’]?\s*000\s*(?:'s)?\b|\bin\s*thousands?\b|\bthousands?\s+(?:of\s+)?rupees\b|\brupees\s+in\s+thousands?\b/i, 1000, 'thousands'],
   [/\bin\s*(?:rs\.?\s*)?lakhs?\b|\bin\s*(?:rs\.?\s*)?lacs?\b|\brupees\s+in\s+lakhs?\b/i, 100000, 'lakhs'],
   [/\bin\s*(?:rs\.?\s*)?millions?\b|\brupees\s+in\s+millions?\b/i, 1000000, 'millions'],
   [/\bin\s*(?:rs\.?\s*)?crores?\b|\brupees\s+in\s+crores?\b/i, 10000000, 'crores'],
+  [/\bin\s*(?:rs\.?\s*)?hundreds?\b|\brupees\s+in\s+hundreds?\b|\bin\s*(?:rs\.?\s*)?['’]\s*00\b(?!0)/i, 100, 'hundreds'],
 ];
 export function unitsOf(ws, scanRows = 10) {
   for (let r = 1; r <= Math.min(scanRows, ws.rowCount || 0); r++) {

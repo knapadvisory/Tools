@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 const ExcelJS = createRequire('/tmp/x.js')('/tmp/xl.cjs');
-const { readWorkbook, lineFromCaption, cellNum, yearOf } = await import('./priorImport.js');
+const { readWorkbook, lineFromCaption, cellNum, yearOf, UNIT_RULES } = await import('./priorImport.js');
 let p=0,f=0; const t=(n,fn)=>{try{fn();p++;console.log('  PASS  '+n)}catch(e){f++;console.log('  FAIL  '+n+'\n        '+e.message)}};
 
 console.log('\n── caption matching ──');
@@ -215,5 +215,15 @@ t('"FY 2025-26" is the year ended 2026, not 2025', ()=>{
   assert.equal(yearOf('2024-25'), 2025);
   assert.equal(yearOf('As at March 31, 2025'), 2025);
   assert.equal(yearOf('Year ended'), null);
+});
+t('the units the tool presents in are all recognised, longest wording first', ()=>{
+  const probe = (t) => { for (const [rx, f] of UNIT_RULES) if (rx.test(t)) return f; return 1; };
+  assert.equal(probe("(All amounts in '000 unless otherwise stated)"), 1000);
+  assert.equal(probe("(All amounts in '00)"), 100, "'00 must be hundreds");
+  assert.equal(probe('Amounts in Rs. hundreds'), 100);
+  assert.equal(probe('(All amounts in lakhs)'), 100000);
+  assert.equal(probe('Rupees in crores'), 10000000);
+  assert.equal(probe('(All amounts in Indian Rupees, unless otherwise stated)'), 1,
+    'plain rupees must not match a scale');
 });
 console.log(`\n${p} passed, ${f} failed\n`); process.exit(f?1:0);
