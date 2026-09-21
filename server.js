@@ -198,7 +198,13 @@ const NO_CACHE = { 'Cache-Control': 'no-cache' };
  * lives on a persistent volume; set KNAP_DB to relocate it.                */
 try {
   const { openAt } = await import('./server/db.js');
-  openAt(process.env.KNAP_DB || path.join(__dirname, 'data', 'knap.db'));
+  // /data is the persistent Docker volume (see deploy/tools-setup.sh). Fall back
+  // to ./data for local runs. Without this the database would sit on the
+  // container filesystem and be lost on every redeploy.
+  const dbDefault = fs.existsSync('/data') ? '/data/knap.db' : path.join(__dirname, 'data', 'knap.db');
+  const dbPath = process.env.KNAP_DB || dbDefault;
+  openAt(dbPath);
+  console.log('[finprep2] database at ' + dbPath);
   const { router: finprep2 } = await import('./server/routes/finprep2.js');
   app.use('/api/fin2', finprep2);
   console.log('[finprep2] engagement API mounted at /api/fin2');

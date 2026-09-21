@@ -14,6 +14,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
 COPY server.js ./
+COPY server/ ./server/
 COPY parser/ ./parser/
 COPY index.html gate.html session.js cockpit.css ./
 COPY fee-parser/ ./fee-parser/
