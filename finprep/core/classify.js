@@ -118,11 +118,17 @@ const RULES = [
     then: () => R('share_warrants', 'high', 'Money received against share warrants') },
   { when: (c) => anyWord(c.path, ['reserve and surplus', 'reserve surplus']) ||
                  anyWord(c.gn, ['reserve', 'surplus', 'retained earning', 'securities premium',
-                                'general reserve', 'profit and loss account', 'p l account']),
+                                'general reserve', 'capital reserve', 'revaluation reserve',
+                                'profit and loss account', 'p l account',
+                                // Tally writes the P&L ledger as "Profit & Loss A/c"
+                                'profit and loss a c', 'profit loss a c', 'p l a c']),
     then: () => R('reserves_surplus', 'high', 'Reserves and surplus') },
-  { when: (c) => anyWord(c.path, ['capital account']),
-    then: () => R('share_capital', 'high', 'Under Capital Account',
-      { review: true, needs: ['confirm paid-up capital; proprietor/partner capital is not share capital'] }) },
+  { when: (c) => anyWord(c.path, ['capital account', 'share capital', 'equity share capital',
+                                  'preference share capital']) ||
+                 anyWord(c.name, ['share capital', 'equity share capital', 'preference share capital']),
+    then: () => R('share_capital', 'high', 'Under Share Capital / Capital Account',
+      { review: true, needs: ['confirm issued, subscribed and paid-up capital',
+                              'a proprietor or partner capital account is not share capital'] }) },
 
   // ===== borrowings ======================================================
   { when: (c) => anyWord(c.path, ['bank od', 'bank occ', 'cash credit', 'bank o d']) ||

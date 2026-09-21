@@ -14,7 +14,7 @@ import { buildCashFlow } from '../../finprep/core/cashflow.js';
 import { toPaise, toRupees } from '../../finprep/core/money.js';
 import { captionFor } from '../../finprep/core/schedule3.js';
 import { presentationModel } from '../../finprep/core/notes.js';
-import { sectionOf as sectionOfLine } from '../../finprep/core/schedule3.js';
+import { sectionOf as sectionOfLine, linesFor, SECTIONS } from '../../finprep/core/schedule3.js';
 import { assessAll, requiredFacts, RULE_DEFS } from '../../finprep/core/applicability.js';
 import { observe } from '../../finprep/core/observations.js';
 import { coverage } from './inputs.js';
@@ -281,6 +281,24 @@ router.post('/engagements/:id/release', (req, res) => {
       JSON.stringify({ pl: r.pl, bs: r.bs, cashFlow: cf, checks: r.checks.concat(cf.checks) }));
   log(ctx.eng.id, actor(req), 'report.released', { id, status: wanted });
   res.json({ ok: true, reportVersionId: id, status: wanted });
+});
+
+/* ---------- the full chart of Schedule III heads ------------------------- */
+/* The grouping dropdown must offer EVERY head, not only the ones already in
+ * use — otherwise a head can never be assigned for the first time.           */
+router.get('/lines', (req, res) => {
+  const division = ['AS', 'INDAS'].includes(req.query.division) ? req.query.division : 'AS';
+  const SECTION_TITLE = {
+    EQUITY: 'Shareholders’ funds / Equity', NCL: 'Non-current liabilities', CL: 'Current liabilities',
+    NCA: 'Non-current assets', CA: 'Current assets', INCOME: 'Income', EXPENSE: 'Expenses',
+    TAX: 'Tax expense', OCI: 'Other comprehensive income', UNCLASSIFIED: 'Unassigned',
+  };
+  const lines = linesFor(division).map((l) => ({
+    lineId: l.id, caption: captionFor(l.id, division), section: l.section,
+    sectionTitle: SECTION_TITLE[l.section] || l.section,
+    statement: (SECTIONS[l.section] || {}).statement || '',
+  }));
+  res.json({ ok: true, division, lines });
 });
 
 /* ---------- observations (for the preparer to verify) -------------------- */

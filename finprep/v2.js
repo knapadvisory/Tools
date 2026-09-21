@@ -159,18 +159,35 @@ const kpi = (v, t, cls = '') => `<div class="k ${cls}"><div class="v">${esc(v)}<
 async function refresh() {
   const j = await api(`/engagements/${S.eng.id}/statements`);
   S.payload = j;
-  S.heads = collectHeads(j);
+  if (!S.heads.length) await loadHeads();
   renderGrouping(); renderStatements(); renderChecks(); renderExport();
   reach(5);
   renderObservations();
 }
-function collectHeads(j) {
-  const seen = new Map();
-  for (const r of j.trialBalance) if (r.lineId) seen.set(r.lineId, r.lineCaption);
-  for (const n of j.notes) seen.set(n.lineId, n.caption);
-  for (const sec of [...j.balanceSheet.equityAndLiabilities, ...j.balanceSheet.assets])
-    for (const r of sec.rows) seen.set(r.lineId, r.caption);
-  return [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+/**
+ * The full Schedule III chart, from the server. It must NOT be derived from the
+ * heads already in use, or a head could never be assigned for the first time.
+ */
+async function loadHeads() {
+  const div = (S.eng && S.eng.division) || 'AS';
+  const { lines } = await api('/lines?division=' + div);
+  S.heads = lines;
+}
+/** <optgroup> markup, sections in Schedule III order, with the current pick selected. */
+function headOptions(sel) {
+  const order = ['EQUITY', 'NCL', 'CL', 'NCA', 'CA', 'INCOME', 'EXPENSE', 'TAX', 'OCI', 'UNCLASSIFIED'];
+  const bySec = new Map();
+  for (const l of S.heads) {
+    if (!bySec.has(l.section)) bySec.set(l.section, { title: l.sectionTitle, items: [] });
+    bySec.get(l.section).items.push(l);
+  }
+  let html = '';
+  for (const sec of order) {
+    const g = bySec.get(sec); if (!g) continue;
+    html += `<optgroup label="${esc(g.title)}">` + g.items.map((l) =>
+      `<option value="${esc(l.lineId)}"${l.lineId === sel ? ' selected' : ''}>${esc(l.caption)}</option>`).join('') + '</optgroup>';
+  }
+  return html;
 }
 
 /* ---------- 3. grouping ------------------------------------------------- */
@@ -185,8 +202,7 @@ function renderGrouping() {
     if (filter === 'review') return r.lineId === 'unclassified' || needsReview.has(r.ledger);
     return true;
   });
-  const opts = (sel) => S.heads.map(([id, cap]) =>
-    `<option value="${esc(id)}"${id === sel ? ' selected' : ''}>${esc(cap)}</option>`).join('');
+  const opts = (sel) => headOptions(sel);
   $('gRows').innerHTML = rows.length ? rows.map((r) => `
     <tr${r.lineId === 'unclassified' ? ' style="background:var(--bad-soft)"' : ''}>
       <td>${esc(r.ledger)}</td>

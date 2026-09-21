@@ -173,5 +173,18 @@ t('used heads carry their Schedule III information requirements', () => {
   assert.ok(tr && tr.requires.some((x) => /gross block/i.test(x)));
 });
 
+
+console.log('\n── Tally group spellings seen in real books ──');
+t('"Share Capital" group reaches share capital', () => {
+  assert.equal(ruleLine(L('EDU KOREA CO., LTD Share Capital', ['Share Capital'], -101970, 0)), 'share_capital');
+  assert.equal(ruleLine(L('Yong Ki Hong Capital', ['Share Capital'], -1030, 0)), 'share_capital');
+});
+t('Tally’s "Profit & Loss A/c" reaches reserves', () => {
+  assert.equal(ruleLine(L('Profit & Loss A/c', ['Primary'], 956601, 0)), 'reserves_surplus');
+});
+t('"Capital Account" still works', () => {
+  assert.equal(ruleLine(L('Share Capital', ['Capital Account'], -1000000, 0)), 'share_capital');
+});
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);
