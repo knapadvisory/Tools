@@ -48,7 +48,7 @@ function msg(el, text, kind) {
 /* ---------- stepper ----------------------------------------------------- */
 function go(n) {
   if (n > S.maxStep) return;
-  for (let i = 1; i <= 6; i++) $('s' + i).classList.toggle('hidden', i !== n);
+  for (let i = 1; i <= 8; i++) $('s' + i).classList.toggle('hidden', i !== n);
   document.querySelectorAll('#stepper .step').forEach((el) => {
     const st = +el.dataset.step;
     el.classList.toggle('active', st === n);
@@ -78,7 +78,8 @@ async function openEngagement(id) {
   if (!S.eng) return;
   $('engPill').textContent = S.eng.client_name + ' · FY ' + S.eng.fy_end.slice(0, 4);
   $('pFrom').value = S.eng.fy_start; $('pTo').value = S.eng.fy_end;
-  reach(2); go(2);
+  reach(3); go(2);
+  await loadInputs();
   try { await refresh(); } catch { /* no snapshot yet — expected */ }
 }
 $('engNew').onclick = async () => {
@@ -149,7 +150,7 @@ $('pull').onclick = async () => {
       kpi(snap.ledgerCount, 'ledgers sealed into the snapshot') +
       kpi(inr(snap.controlTotals.current), 'trial balance total (must be nil)', snap.balanced ? 'good' : 'bad');
     msg('m2', snap.balanced ? 'Snapshot sealed and the books balance.' : snap.warning, snap.balanced ? 'ok' : 'bad');
-    await refresh(); reach(3); go(3);
+    await refresh(); reach(4); go(4);
   } catch (e) { msg('m2', 'Import failed: ' + e.message, 'bad'); }
 };
 const kpi = (v, t, cls = '') => `<div class="k ${cls}"><div class="v">${esc(v)}</div><div class="t">${esc(t)}</div></div>`;
@@ -160,7 +161,8 @@ async function refresh() {
   S.payload = j;
   S.heads = collectHeads(j);
   renderGrouping(); renderStatements(); renderChecks(); renderExport();
-  reach(4);
+  reach(5);
+  renderObservations();
 }
 function collectHeads(j) {
   const seen = new Map();
@@ -206,7 +208,7 @@ $('gSave').onclick = async () => {
     await api(`/engagements/${S.eng.id}/mappings`, { method: 'POST', body: JSON.stringify({ mappings }) });
     await refresh();
     msg('m3', `${mappings.length} mapping(s) approved and the statements rebuilt.`, 'ok');
-    go(4);
+    go(5);
   } catch (e) { msg('m3', e.message, 'bad'); }
 };
 
@@ -313,7 +315,7 @@ function renderChecks() {
     `<tr><td class="note">${d.note || ''}</td><td>${esc(d.caption)}</td><td>${esc(d.requirement)}</td>
      <td><span class="pill warn">${esc(d.status)}</span></td></tr>`).join('')
     : '<tr><td colspan="4" class="muted">Nothing outstanding.</td></tr>';
-  reach(5);
+  reach(6);
 }
 
 /* ---------- 6. export --------------------------------------------------- */
@@ -323,7 +325,7 @@ function renderExport() {
   $('exBanner').innerHTML = crit.length
     ? `<div class="banner bad">${crit.length} critical exception(s) outstanding — the workbook will be watermarked DRAFT — NOT FOR ISSUE and cannot be marked Final.</div>`
     : `<div class="banner ok">No critical exceptions. The workbook may be issued as a reviewed draft.</div>`;
-  reach(6);
+  reach(8);
 }
 $('exXlsx').onclick = async () => {
   if (!S.payload) return;
@@ -349,6 +351,122 @@ $('exFinal').onclick = async () => {
     msg('m6', 'Recorded as ' + j.status + ' (version ' + j.reportVersionId + ').', 'ok');
   } catch (e) { msg('m6', e.message, 'bad'); }
 };
+
+/* ---------- 2. supporting documents ------------------------------------- */
+const KIND_ICON = { prior_financials: '📄', gstr2b: '🧾', gstr1_3b: '📊', tds_conso: '🧮', other: '📎' };
+
+async function loadInputs() {
+  if (!S.eng) return;
+  const j = await api(`/engagements/${S.eng.id}/inputs`);
+  S.inputs = j;
+  renderKinds(j); renderCoverage(j); renderInputRows(j);
+}
+
+function renderKinds(j) {
+  $('inpKinds').innerHTML = j.kinds.map((k) => {
+    const n = j.coverage.counts[k.kind] || 0;
+    return `<div style="border:1px solid var(--rule);border-radius:10px;padding:12px 14px;margin-bottom:10px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <b>${KIND_ICON[k.kind] || ''} ${esc(k.label)}</b>
+        ${k.recommended ? '<span class="pill warn">recommended</span>' : ''}
+        <span class="pill ${n ? 'ok' : 'bad'}">${n} file${n === 1 ? '' : 's'}</span>
+        <span class="sp" style="margin-left:auto"></span>
+        ${k.perPeriod ? `<input type="date" id="pf_${k.kind}" title="period from" style="font-size:12px">
+           <input type="date" id="pt_${k.kind}" title="period to" style="font-size:12px">` : ''}
+        <input type="file" id="f_${k.kind}" accept="${esc(k.accepts)}" ${k.multiple ? 'multiple' : ''} style="font-size:12px">
+        <button class="btn sm" data-up="${k.kind}" type="button">Upload</button>
+      </div>
+      <div class="muted" style="margin-top:6px">${esc(k.purpose)}</div>
+      ${k.withoutIt ? `<div class="muted" style="margin-top:3px"><b>Without it:</b> ${esc(k.withoutIt)}</div>` : ''}
+      ${k.caution ? `<div class="chk REVIEW" style="margin-top:6px">${esc(k.caution)}</div>` : ''}
+    </div>`;
+  }).join('');
+  $('inpKinds').querySelectorAll('[data-up]').forEach((b) => b.onclick = () => uploadKind(b.dataset.up));
+}
+
+async function uploadKind(kind) {
+  const inp = $('f_' + kind);
+  if (!inp || !inp.files.length) return alert('Choose a file first.');
+  const fd = new FormData();
+  fd.append('kind', kind);
+  const pf = $('pf_' + kind), pt = $('pt_' + kind);
+  if (pf && pf.value) fd.append('periodFrom', pf.value);
+  if (pt && pt.value) fd.append('periodTo', pt.value || pf.value);
+  for (const f of inp.files) fd.append('files', f);
+  try {
+    const r = await fetch(API + `/engagements/${S.eng.id}/inputs`, { method: 'POST', body: fd });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error);
+    const dup = j.files.filter((f) => f.status === 'duplicate');
+    if (dup.length) alert(dup.map((d) => d.message).join('\n'));
+    inp.value = '';
+    await loadInputs();
+  } catch (e) { alert('Upload failed: ' + e.message); }
+}
+
+function renderCoverage(j) {
+  const per = j.coverage.perKind;
+  const keys = Object.keys(per);
+  if (!keys.length) return ($('inpCoverage').innerHTML = '<p class="muted">No period-based documents yet.</p>');
+  $('inpCoverage').innerHTML = keys.map((k) => {
+    const c = per[k];
+    const cells = c.months.map((m) =>
+      `<span title="${m.month}" style="display:inline-block;padding:3px 7px;margin:2px;border-radius:5px;font-size:11px;
+        background:${m.present ? 'var(--soft)' : 'var(--bad-soft)'};color:${m.present ? 'var(--ok)' : 'var(--bad)'}">
+        ${m.month.slice(5)}/${m.month.slice(2, 4)}</span>`).join('');
+    return `<div style="margin-bottom:10px"><b>${esc(c.label)}</b>
+      ${c.missing.length ? `<span class="pill bad">${c.missing.length} month(s) missing</span>`
+                         : '<span class="pill ok">complete</span>'}
+      <div style="margin-top:4px">${cells}</div>
+      ${c.filesWithoutPeriod ? `<div class="muted">${c.filesWithoutPeriod} file(s) have no period recorded — coverage cannot count them.</div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function renderInputRows(j) {
+  $('inpRows').innerHTML = j.files.length ? j.files.map((f) => `
+    <tr><td>${esc((j.kinds.find((k) => k.kind === f.kind) || {}).label || f.kind)}</td>
+      <td>${esc(f.filename)}</td>
+      <td class="muted">${f.period_from ? esc(f.period_from) + ' → ' + esc(f.period_to || f.period_from) : '—'}</td>
+      <td class="r">${(f.bytes / 1024).toFixed(0)} KB</td>
+      <td class="muted" style="font-family:monospace;font-size:11px">${esc(String(f.sha256).slice(0, 12))}</td>
+      <td><button class="btn ghost sm" data-del="${f.id}" type="button">Remove</button></td></tr>`).join('')
+    : '<tr><td colspan="6" class="muted">Nothing uploaded yet. You can continue without these — step 7 will list what could not be checked.</td></tr>';
+  $('inpRows').querySelectorAll('[data-del]').forEach((b) => b.onclick = async () => {
+    if (!confirm('Remove this document?')) return;
+    await fetch(API + `/engagements/${S.eng.id}/inputs/${b.dataset.del}`, { method: 'DELETE' });
+    await loadInputs();
+  });
+}
+$('inpNext').onclick = () => { reach(3); go(3); };
+
+/* ---------- 7. observations --------------------------------------------- */
+async function renderObservations() {
+  if (!S.eng) return;
+  try {
+    const j = await api(`/engagements/${S.eng.id}/observations`);
+    $('obsDisclaimer').textContent = j.disclaimer;
+    $('obsKpi').innerHTML =
+      kpi(j.summary.total, 'observations') +
+      kpi(j.summary.blocking, 'blocking', j.summary.blocking ? 'bad' : 'good') +
+      kpi(j.summary.high, 'high', j.summary.high ? 'bad' : 'good');
+    const cls = { Blocking: 'CRITICAL', High: 'HIGH', Medium: 'REVIEW', Low: 'INFO' };
+    let html = '';
+    for (const a of j.summary.byArea) {
+      html += `<h3 style="margin:16px 0 6px;font-size:13px;color:var(--green)">${esc(a.area)} <span class="muted">(${a.count})</span></h3>`;
+      for (const o of j.observations.filter((x) => x.area === a.area)) {
+        html += `<div class="chk ${cls[o.weight] || 'INFO'}">
+          <div><span class="pill ${o.weight === 'Blocking' ? 'bad' : o.weight === 'High' ? 'warn' : 'info'}">${esc(o.weight)}</span>
+            <b style="margin-left:6px">${esc(o.observation)}</b></div>
+          <div style="margin-top:5px"><i>Basis:</i> ${esc(o.basis)}</div>
+          <div style="margin-top:3px"><b>You must verify:</b> ${esc(o.verify)}</div>
+        </div>`;
+      }
+    }
+    $('obsList').innerHTML = html || '<div class="chk INFO">Nothing observed from the data available.</div>';
+    reach(7);
+  } catch (e) { $('obsList').innerHTML = `<div class="chk CRITICAL">Could not build observations: ${esc(e.message)}</div>`; }
+}
 
 /* ---------- boot -------------------------------------------------------- */
 loadEngagements();

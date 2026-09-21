@@ -16,6 +16,8 @@ import { captionFor } from '../../finprep/core/schedule3.js';
 import { presentationModel } from '../../finprep/core/notes.js';
 import { sectionOf as sectionOfLine } from '../../finprep/core/schedule3.js';
 import { assessAll, requiredFacts, RULE_DEFS } from '../../finprep/core/applicability.js';
+import { observe } from '../../finprep/core/observations.js';
+import { coverage } from './inputs.js';
 
 /** "2026-03-31" -> "31 March 2026" */
 function fmtDate(iso) {
@@ -279,6 +281,29 @@ router.post('/engagements/:id/release', (req, res) => {
       JSON.stringify({ pl: r.pl, bs: r.bs, cashFlow: cf, checks: r.checks.concat(cf.checks) }));
   log(ctx.eng.id, actor(req), 'report.released', { id, status: wanted });
   res.json({ ok: true, reportVersionId: id, status: wanted });
+});
+
+/* ---------- observations (for the preparer to verify) -------------------- */
+router.get('/engagements/:id/observations', (req, res) => {
+  const ctx = loadForBuild(req.params.id, req.query.snapshot);
+  if (ctx.error) return bad(res, ctx.error, 404);
+  const payload = buildPayload(ctx, {});
+  const r = payload._engine;
+  const cfRaw = buildCashFlow(r, {});
+
+  const files = db().prepare('SELECT * FROM input_files WHERE engagement_id=?').all(req.params.id);
+  const cov = coverage(files, ctx.eng);
+  const stored = db().prepare('SELECT * FROM rules').all();
+  let facts = {}; try { facts = JSON.parse(req.query.facts || '{}'); } catch { /* ignore */ }
+
+  const result = observe(r, cfRaw, {
+    inputs: cov,
+    disclosures: payload.disclosures,
+    applicability: assessAll(stored, facts, ctx.eng.fy_end),
+  });
+  res.json({ ok: true, ...result,
+    meta: payload.meta,
+    releasable: payload.releasable });
 });
 
 /* ---------- applicability (spec §12) ------------------------------------ */

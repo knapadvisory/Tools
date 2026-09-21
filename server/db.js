@@ -138,6 +138,51 @@ const MIGRATIONS = [
     CREATE INDEX idx_activity_eng ON activity(engagement_id, at);
     `,
   },
+  {
+    id: 2,
+    name: 'input_files',
+    up: `
+    -- Documents the engagement is built on (spec §2). Originals are retained
+    -- with their hash, so a re-upload is detected rather than silently doubled.
+    CREATE TABLE input_files (
+      id            TEXT PRIMARY KEY,
+      engagement_id TEXT NOT NULL REFERENCES engagements(id),
+      kind          TEXT NOT NULL,        -- prior_financials | gstr2b | gstr1_3b | tds_conso | other
+      label         TEXT,                 -- what the user called it
+      filename      TEXT NOT NULL,
+      mime          TEXT,
+      bytes         INTEGER NOT NULL,
+      sha256        TEXT NOT NULL,
+      stored_path   TEXT NOT NULL,
+      period_from   TEXT,                 -- coverage, so gaps can be shown
+      period_to     TEXT,
+      gstin         TEXT,
+      revised       INTEGER NOT NULL DEFAULT 0,
+      supersedes    TEXT,                 -- id of the file this replaces
+      status        TEXT NOT NULL DEFAULT 'received',  -- received | quarantined | superseded
+      quarantine_reason TEXT,
+      uploaded_by   TEXT,
+      uploaded_at   TEXT NOT NULL,
+      notes         TEXT
+    );
+    CREATE INDEX idx_input_eng ON input_files(engagement_id, kind);
+    CREATE UNIQUE INDEX idx_input_hash ON input_files(engagement_id, sha256);
+
+    -- Information requested from the client but not yet received (spec §2).
+    CREATE TABLE info_requests (
+      id            TEXT PRIMARY KEY,
+      engagement_id TEXT NOT NULL REFERENCES engagements(id),
+      item          TEXT NOT NULL,
+      purpose       TEXT,
+      affects       TEXT,                 -- which output is blocked without it
+      owner         TEXT,
+      status        TEXT NOT NULL DEFAULT 'open',   -- open | received | waived
+      created_at    TEXT NOT NULL,
+      closed_at     TEXT
+    );
+    CREATE INDEX idx_info_eng ON info_requests(engagement_id, status);
+    `,
+  },
 ];
 
 let db = null;

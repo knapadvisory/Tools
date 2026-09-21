@@ -207,6 +207,8 @@ try {
   console.log('[finprep2] database at ' + dbPath);
   const { router: finprep2 } = await import('./server/routes/finprep2.js');
   app.use('/api/fin2', finprep2);
+  const { router: inputsRouter } = await import('./server/routes/inputs.js');
+  app.use('/api/fin2', inputsRouter);
   console.log('[finprep2] engagement API mounted at /api/fin2');
 } catch (e) {
   console.error('[finprep2] NOT mounted:', e.message);

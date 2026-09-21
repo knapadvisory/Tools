@@ -72,11 +72,13 @@
 <main>
   <div id="stepper">
     <div class="step active" data-step="1"><span class="n">1</span> Engagement</div>
-    <div class="step" data-step="2"><span class="n">2</span> Import books</div>
-    <div class="step" data-step="3"><span class="n">3</span> Review grouping</div>
-    <div class="step" data-step="4"><span class="n">4</span> Statements</div>
-    <div class="step" data-step="5"><span class="n">5</span> Exceptions</div>
-    <div class="step" data-step="6"><span class="n">6</span> Export</div>
+    <div class="step" data-step="2"><span class="n">2</span> Provide inputs</div>
+    <div class="step" data-step="3"><span class="n">3</span> Import books</div>
+    <div class="step" data-step="4"><span class="n">4</span> Review grouping</div>
+    <div class="step" data-step="5"><span class="n">5</span> Statements</div>
+    <div class="step" data-step="6"><span class="n">6</span> Exceptions</div>
+    <div class="step" data-step="7"><span class="n">7</span> Observations</div>
+    <div class="step" data-step="8"><span class="n">8</span> Export</div>
   </div>
 
   <!-- 1 ENGAGEMENT -->
@@ -107,8 +109,29 @@
     </div>
   </section>
 
-  <!-- 2 IMPORT -->
+  <!-- 2 INPUTS -->
   <section id="s2" class="hidden">
+    <div class="card">
+      <h2>Provide the supporting documents</h2>
+      <p class="sub">These are the records the statements will be checked against. You can go on without them — the tool will simply tell you, in step 7, exactly which checks it could not perform. Originals are kept with their fingerprint, so the same file uploaded twice is recognised rather than counted twice.</p>
+      <div id="inpKinds"></div>
+    </div>
+    <div class="card">
+      <h2>Coverage</h2>
+      <p class="sub">A month with no return on file is shown as a <b>gap</b>. It is never assumed to be a nil return.</p>
+      <div id="inpCoverage"></div>
+    </div>
+    <div class="card">
+      <h2>Documents received</h2>
+      <div class="wrap" style="max-height:320px"><table class="fin"><thead><tr>
+        <th>Kind</th><th>File</th><th>Period</th><th class="r">Size</th><th>Fingerprint</th><th></th>
+      </tr></thead><tbody id="inpRows"></tbody></table></div>
+      <div class="row" style="margin-top:12px"><button class="btn" id="inpNext" type="button">Continue to import →</button></div>
+    </div>
+  </section>
+
+  <!-- 3 IMPORT -->
+  <section id="s3" class="hidden">
     <div class="card">
       <h2>Import the books from Tally</h2>
       <p class="sub">Run this on the PC where Tally is open. The extract is stored as a <b>sealed snapshot</b> — it is never edited afterwards; corrections are made by journal.</p>
@@ -128,7 +151,7 @@
   </section>
 
   <!-- 3 GROUPING -->
-  <section id="s3" class="hidden">
+  <section id="s4" class="hidden">
     <div class="card">
       <h2>Review the grouping</h2>
       <p class="sub">Every ledger and the Schedule III head it reached, with the reason. Change anything that is wrong, then approve. Approved decisions are remembered for this engagement.</p>
@@ -145,7 +168,7 @@
   </section>
 
   <!-- 4 STATEMENTS -->
-  <section id="s4" class="hidden">
+  <section id="s5" class="hidden">
     <div class="card">
       <h2>Statements</h2>
       <div id="stBanner"></div>
@@ -160,7 +183,7 @@
   </section>
 
   <!-- 5 EXCEPTIONS -->
-  <section id="s5" class="hidden">
+  <section id="s6" class="hidden">
     <div class="card">
       <h2>Exceptions</h2>
       <p class="sub">A <b>critical</b> exception blocks release. These are arithmetic and completeness failures, not opinions — none of them can be waived by the tool.</p>
@@ -173,8 +196,18 @@
     </div>
   </section>
 
-  <!-- 6 EXPORT -->
-  <section id="s6" class="hidden">
+  <!-- 7 OBSERVATIONS -->
+  <section id="s7" class="hidden">
+    <div class="card">
+      <h2>Observations</h2>
+      <div class="banner bad" id="obsDisclaimer" style="background:var(--warn-soft);border:1px solid #f0dcb4;color:#6f4410"></div>
+      <div class="kpi" id="obsKpi"></div>
+      <div id="obsList" style="margin-top:12px"></div>
+    </div>
+  </section>
+
+  <!-- 8 EXPORT -->
+  <section id="s8" class="hidden">
     <div class="card">
       <h2>Export</h2>
       <p class="sub">One workbook: Balance Sheet, Profit &amp; Loss, Cash Flow, Notes, Trial Balance, Disclosures and Review. The faces are formula-linked to the notes and the notes to the trial balance, so every figure is traceable inside the file.</p>
