@@ -253,15 +253,24 @@ function buildTrialBalance(ws, p) {
 
   if (r > first) {
     const last = r - 1;
-    put(ws, r, 1, 'Total (natural signs — debits and credits shown in their own column)',
-        { font: { bold: true, size: 9 }, border: TOP });
-    for (let c = 2; c <= 4; c++) put(ws, r, c, '', { border: TOP });
-    money(ws, r, 5, arr(p.trialBalance).reduce((t, x) => t + num(x.current), 0),
-          `SUM(E${first}:E${last})`, { font: { bold: true, size: 9 }, border: TOP });
-    money(ws, r, 6, arr(p.trialBalance).reduce((t, x) => t + num(x.prior), 0),
-          `SUM(F${first}:F${last})`, { font: { bold: true, size: 9 }, border: TOP });
-    put(ws, r, 7, '', { border: TOP });
-    r += 2;
+    // A control total, not an arithmetic one: debits and credits are both
+    // stated positive, so adding the column would mean nothing. Each side is
+    // totalled on its own and the two must agree.
+    const side = (s, key) => arr(p.trialBalance)
+      .filter((x) => txt(x.drcr) === s).reduce((t, x) => t + num(x[key]), 0);
+    for (const [label, s, bottom] of [['Total — debits', 'Dr', false], ['Total — credits', 'Cr', true]]) {
+      const b = bottom ? TOP_DOUBLE : TOP;
+      put(ws, r, 1, label, { font: { bold: true, size: 9 }, border: b });
+      for (let c = 2; c <= 4; c++) put(ws, r, c, '', { border: b });
+      money(ws, r, 5, side(s, 'current'), `SUMIF(D${first}:D${last},"${s}",E${first}:E${last})`,
+            { font: { bold: true, size: 9 }, border: b });
+      money(ws, r, 6, side(s, 'prior'), `SUMIF(D${first}:D${last},"${s}",F${first}:F${last})`,
+            { font: { bold: true, size: 9 }, border: b });
+      put(ws, r, 7, s === 'Cr' ? 'Debits and credits must agree' : '',
+          { font: { size: 8, italic: true, color: { argb: INK.muted } }, border: b });
+      r += 1;
+    }
+    r += 1;
     put(ws, r, 1, 'Amounts are stated positive in the nature of the balance; the Dr/Cr column carries the side. '
                 + 'Note sub-lines on the Notes sheet reference columns E and F of this sheet directly.',
         { font: { size: 8, italic: true, color: { argb: INK.muted } } });
@@ -411,8 +420,7 @@ function buildBalanceSheet(ws, p, noteTotals, link) {
     r = 3;
   }
 
-  // masthead, shifted below the banner when there is one
-  const shift = r - 1;
+  // masthead, written here rather than via masthead() so it can sit below the banner
   const L = 'D';
   ws.mergeCells(`A${r}:${L}${r}`);
   put(ws, r, 1, txt(meta.entity) || 'Entity', { font: { bold: true, size: 13, color: { argb: INK.title } } });
@@ -437,11 +445,14 @@ function buildBalanceSheet(ws, p, noteTotals, link) {
     { label: `As at ${meta.priorLabel}`, right: true },
   ]);
   frame(ws, [58, 8, 18, 18], headRow);
-  void shift;
 
   const faceRowByLine = new Map();
 
   const writeSection = (sec) => {
+    const tot0 = sec.total || {};
+    // A section with no line and a nil total is not presented: Schedule III
+    // requires the heads in use, not an empty heading with a nil total.
+    if (!arr(sec.rows).length && same(tot0.current, 0) && same(tot0.prior, 0)) return null;
     put(ws, r, 1, txt(sec.title), { font: { bold: true, size: 10, color: { argb: INK.title } } });
     r += 1;
     const first = r;
@@ -474,7 +485,7 @@ function buildBalanceSheet(ws, p, noteTotals, link) {
   put(ws, r, 3, '', { fill: INK.bandFill });
   put(ws, r, 4, '', { fill: INK.bandFill });
   r += 1;
-  const elRows = arr(bs.equityAndLiabilities).map(writeSection);
+  const elRows = arr(bs.equityAndLiabilities).map(writeSection).filter((x) => x != null);
 
   const tEL = bs.totalEquityAndLiabilities || {};
   put(ws, r, 1, 'TOTAL — EQUITY AND LIABILITIES', { font: { bold: true, size: 10 }, border: TOP_DOUBLE });
@@ -491,7 +502,7 @@ function buildBalanceSheet(ws, p, noteTotals, link) {
   put(ws, r, 3, '', { fill: INK.bandFill });
   put(ws, r, 4, '', { fill: INK.bandFill });
   r += 1;
-  const aRows = arr(bs.assets).map(writeSection);
+  const aRows = arr(bs.assets).map(writeSection).filter((x) => x != null);
 
   const tA = bs.totalAssets || {};
   put(ws, r, 1, 'TOTAL — ASSETS', { font: { bold: true, size: 10 }, border: TOP_DOUBLE });

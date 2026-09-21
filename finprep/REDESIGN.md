@@ -43,6 +43,9 @@ Tally connector (local, read-only)
 | `finprep/core/classify.js` | Ledger → line. Whole-word matching; rules carry an `altLine` so a balance on the abnormal side is reclassified rather than netted. |
 | `finprep/core/engine.js` | Original TB → journals → adjusted TB → lines → P&L/BS, integrity checks, disclosure gaps, release flag. |
 | `finprep/core/cashflow.js` | AS 3 / Ind AS 7 indirect cash flow, built bottom-up from PBT and reconciled to the balance sheet. No plug. |
+| `finprep/core/applicability.js` | Versioned, effective-date-aware rules for framework / CARO / MSME / tax audit / IFC. Ships with **no threshold**. |
+| `finprep/export/workbook.js` | Formula-linked Excel workbook: faces → notes → trial balance, one file, no external references. |
+| `finprep/v2.html` + `v2.js` | The redesigned six-step workflow. Computes nothing; renders the server's model. |
 | `server/db.js` | SQLite, versioned migrations, snapshot sealing, activity log. |
 | `server/routes/finprep2.js` | Engagement API at `/api/fin2`. |
 
@@ -80,21 +83,28 @@ supplied it is used; otherwise the net movement is presented and an **explicit
 assumption is recorded and returned** (`CF-FA`, `CF-BOR`, `CF-TAX`, `CF-INT`).
 Assumptions are surfaced, never silently applied.
 
+## The export's honesty rule
+
+A formula is written **only if it recalculates to the figure being shown**. If a
+note's linked trial-balance rows do not add back to the note line, or a face
+figure is not equal to its note total, the value is written plain and the
+shortfall is reported on the Review sheet as `EXP-LINK`. A formula that looks
+right but computes something else is worse than no formula.
+
 ## Not yet built
 
 Listed honestly; none of it is stubbed or faked.
 
-- **Notes/disclosure rendering and Excel/PDF/DOCX export** from the new engine.
-  The existing export still runs off the old path.
 - **Schedule III 2021 disclosures** — ageing schedules, promoter holdings, title
   deeds, struck-off entities, CSR, etc. The requirements are recorded per head
-  in `schedule3.js` and surface as `disclosureGaps`, but the schedules
-  themselves need bill-level data from the connector.
-- **Applicability engine** (CARO / MSME / tax audit / IFC) — `rules` table exists;
-  no rule is seeded, because no threshold has been verified against a primary
-  source.
+  in `schedule3.js` and surface as `disclosureGaps` and on the Disclosures
+  sheet, but the schedules themselves need bill-level data from the connector.
+- **Applicability thresholds** — the engine is built and tested, but every rule
+  is `unverified` and returns *Unable to determine*. Nothing will conclude until
+  a reviewer records the authority, provision, effective dates and operands.
+- **PDF and DOCX export** — only Excel is implemented.
 - **GST/TDS reconciliation**, **tax audit annexures**, **roles/tenant isolation**,
-  **background jobs**, **UI migration** to the new API.
+  **background jobs**.
 
 ## Migration and rollback
 

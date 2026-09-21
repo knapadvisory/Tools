@@ -48,6 +48,17 @@ export function buildNotes(r) {
       requires: def.requires || [],
     };
     for (const p of periods) note[p] = r.presented(def.id, p);
+
+    // Reserves: the ledger balance is the OPENING accumulated figure; the face
+    // shows opening + profit for the year. The note must show that movement and
+    // total to the same closing figure, or the note and the face disagree.
+    if (def.id === 'reserves_surplus') {
+      const profit = { name: 'Add: Profit for the year', reason: 'statement of profit and loss' };
+      let any = false;
+      for (const p of periods) { profit[p] = r.pl[p].pat; if (profit[p] !== 0) any = true; }
+      if (any) note.subLines = note.subLines.concat([profit]);
+      for (const p of periods) note[p] = r.bs[p].reserves;
+    }
     out.push(note);
   }
   return out;
