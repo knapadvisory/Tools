@@ -765,10 +765,29 @@ function prepare(){
   var investing=-(d(12)+d(13)+d(17)+d(15)+d(16));
   var operating=netCash-financing-investing;
   var netCashPri=byNote[20].pri;               // for a single-period read, prior net change ≈ opening cash
+  // --- Balance-Sheet difference diagnostics -------------------------------
+  // The face totals only add up notes whose face is EQ/NCL/CL/NCA/CA, so any
+  // ledger left in note 99 ("Unclassified") is dropped from BOTH sides and
+  // silently creates a difference. The other possible cause is the Tally trial
+  // balance itself not summing to nil. Proven identity:
+  //     difference = (trial-balance imbalance) − (unclassified total)
+  var tbSumCur=0,tbSumPri=0;
+  TB.ledgers.forEach(function(l){ tbSumCur+=(l.current||0); tbSumPri+=(l.prior||0); });
+  var unclCur=byNote[99].cur, unclPri=byNote[99].pri;
   prepared={byNote:byNote,depCur:depCur,depPri:depPri,incCur:incCur,incPri:incPri,expCur:expCur,expPri:expPri,
     pbtCur:pbtCur,pbtPri:pbtPri,resCur:resCur,resPri:resPri,eqLiabCur:eqLiabCur,eqLiabPri:eqLiabPri,
     assetsCur:assetsCur,assetsPri:assetsPri,diffCur:assetsCur-eqLiabCur,diffPri:assetsPri-eqLiabPri,
+    tbSumCur:tbSumCur,tbSumPri:tbSumPri,unclCur:unclCur,unclPri:unclPri,
     cf:{operating:operating,investing:investing,financing:financing,netCash:netCash,closeCash:byNote[20].cur,netCashPri:netCashPri}};
+}
+/* Explains the Balance-Sheet difference ledger by ledger. Returns the two
+   causes and the exact ledgers behind each, so it is never "unidentifiable". */
+function diffExplain(){
+  if(!prepared||!TB) return null;
+  var p=prepared;
+  var uncl=(p.byNote[99].lines||[]).slice().sort(function(a,b){return Math.abs(b.cur)-Math.abs(a.cur);});
+  return {diff:p.diffCur, tbImbalance:p.tbSumCur, unclassified:p.unclCur, lines:uncl,
+          explained:Math.abs(p.diffCur-(p.tbSumCur-p.unclCur))<0.01};
 }
 
 /* ================= STEP 2 : review & verify ================= */
@@ -1075,6 +1094,25 @@ document.getElementById('saveMapBtn').onclick=function(){
 };
 function bsRow(label,note,cur,pri){ var c=(cur<0?'r neg':'r'), pc=(pri<0?'r neg py':'r py'); return '<tr><td>'+label+'</td><td class="note">'+(note||'')+'</td><td class="'+c+'">'+acct(cur)+'</td><td class="'+pc+'">'+acct(pri)+'</td></tr>'; }
 function bsHdr(){ return '<table class="fin"><thead><tr><th>Particulars</th><th>Note</th><th class="r">As at '+asAtCur()+'</th><th class="r">As at '+asAtPri()+'</th></tr></thead><tbody>'; }
+/* Difference footer for the on-screen Balance Sheet: never let a difference sit
+   on the face unexplained — name the cause and the ledgers behind it. */
+function bsDiffRows(){
+  var p=prepared, x=diffExplain(); if(!x) return '';
+  if(Math.abs(p.diffCur)<1 && Math.abs(p.diffPri)<1 && !(p.byNote[99].lines||[]).length) return '';
+  var h='';
+  if((p.byNote[99].lines||[]).length){
+    h+='<tr class="subh2"><td colspan="4"><i>Not included above — assign these to a Schedule III head</i></td></tr>';
+    h+=bsRow('Unclassified ledgers (Note 99)',99,p.unclCur,p.unclPri);
+    var names=x.lines.slice(0,8).map(function(l){return esc(l.name)+' ('+acct(l.cur)+')';}).join(' · ');
+    h+='<tr><td colspan="4" style="font-size:12px;color:var(--mut)">'+names+(x.lines.length>8?(' · +'+(x.lines.length-8)+' more'):'')+'</td></tr>';
+  }
+  if(Math.abs(p.tbSumCur)>=1) h+=bsRow('Trial balance does not sum to nil (Tally)','',p.tbSumCur,p.tbSumPri);
+  if(Math.abs(p.diffCur)>=1 || Math.abs(p.diffPri)>=1){
+    h+='<tr class="grp" style="color:var(--bad)"><td>Difference (Assets − Equity &amp; Liabilities)</td><td></td><td class="r">'+acct(p.diffCur)+'</td><td class="r">'+acct(p.diffPri)+'</td></tr>';
+    h+='<tr><td colspan="4" style="font-size:12px;color:var(--mut)">Difference = trial-balance imbalance ('+acct(p.tbSumCur)+') − unclassified ('+acct(p.unclCur)+'). Assign the ledgers above in <b>Step 2 · Review</b> and the Balance Sheet will tally.</td></tr>';
+  }
+  return h;
+}
 function subHdr(t){ return '<tr class="subh2"><td colspan="4"><i>'+t+'</i></td></tr>'; }
 function renderBS(){ document.getElementById('bsWrap').innerHTML = framework==='INDAS' ? bsIndAS() : bsAS(); }
 function bsAS(){
@@ -1086,7 +1124,8 @@ function bsAS(){
   h+='<tr class="grp"><td>Total equity and liabilities</td><td></td><td class="r">'+acct(p.eqLiabCur)+'</td><td class="r">'+acct(p.eqLiabPri)+'</td></tr>';
   h+='<tr class="grp"><td colspan="4">ASSETS</td></tr>';
   [12,13,14,15,16,17,18,19,20,21,22].forEach(function(n){ h+=bsRow(NOTES[n].head,n,p.byNote[n].cur,p.byNote[n].pri); });
-  h+='<tr class="grp"><td>Total assets</td><td></td><td class="r">'+acct(p.assetsCur)+'</td><td class="r">'+acct(p.assetsPri)+'</td></tr></tbody></table>';
+  h+='<tr class="grp"><td>Total assets</td><td></td><td class="r">'+acct(p.assetsCur)+'</td><td class="r">'+acct(p.assetsPri)+'</td></tr>';
+  h+=bsDiffRows()+'</tbody></table>';
   return h;
 }
 function bsIndAS(){
@@ -1127,7 +1166,8 @@ function bsIndAS(){
   h+=row('Trade payables',9,B(9).cur,B(9).pri);
   h+=row('Other current liabilities',10,B(10).cur,B(10).pri);
   h+=row('Provisions',11,B(11).cur,B(11).pri);
-  h+='<tr class="grp"><td>Total equity and liabilities</td><td></td><td class="r">'+acct(p.eqLiabCur)+'</td><td class="r">'+acct(p.eqLiabPri)+'</td></tr></tbody></table>';
+  h+='<tr class="grp"><td>Total equity and liabilities</td><td></td><td class="r">'+acct(p.eqLiabCur)+'</td><td class="r">'+acct(p.eqLiabPri)+'</td></tr>';
+  h+=bsDiffRows()+'</tbody></table>';
   return h;
 }
 function renderPL(){
