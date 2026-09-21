@@ -207,13 +207,17 @@ function loadForBuild(engagementId, snapshotId) {
     ? Object.fromEntries(priorRows.map((x) => [x.line_id, toRupees(x.amount_paise)]))
     : null;
 
+  const subOverrides = Object.fromEntries(
+    d.prepare('SELECT ledger_key, label FROM sub_groups WHERE engagement_id=?').all(engagementId)
+      .map((x) => [x.ledger_key, x.label]));
+
   const jrows = d.prepare('SELECT * FROM journals WHERE engagement_id=? AND superseded=0').all(engagementId);
   const journals = jrows.map((j) => ({
     id: j.id, approved: !!j.approved, period: j.period, narration: j.narration,
     entries: d.prepare('SELECT * FROM journal_entries WHERE journal_id=?').all(j.id)
       .map((e) => ({ ledgerId: e.ledger_id, lineId: e.line_id, amount: toRupees(e.amount_paise) })),
   }));
-  return { eng, snap, ledgers, overrides, journals, priorOverrides };
+  return { eng, snap, ledgers, overrides, journals, priorOverrides, subOverrides };
 }
 
 router.get('/engagements/:id/statements', (req, res) => {
@@ -231,7 +235,7 @@ function buildPayload(ctx, schedules = {}) {
   const r = build({ ledgers: ctx.ledgers, journals: ctx.journals,
     division: ctx.eng.division, overrides: ctx.overrides, priorOverrides: ctx.priorOverrides });
   const cf = buildCashFlow(r, { schedules });
-  const model = presentationModel(r);
+  const model = presentationModel(r, { subOverrides: ctx.subOverrides || {} });
   const allChecks = r.checks.concat(cf.checks);
   const releasable = r.releasable && cf.reconciled;
 
@@ -249,6 +253,10 @@ function buildPayload(ctx, schedules = {}) {
       prior: toRupees(natural(pri.amount, pri.lineId)) / SCALE_DIV,
       lineId: cur.lineId, lineCaption: captionFor(cur.lineId, r.division),
       note: r.noteNumbers.get(cur.lineId) || null,
+      subGroup: (model.notes.find((n) => n.lineId === cur.lineId) || { subLines: [] })
+        .subLines.find((sl) => (sl.members || []).some((mm) => mm.name === l.name)) ?
+        (model.notes.find((n) => n.lineId === cur.lineId).subLines
+          .find((sl) => (sl.members || []).some((mm) => mm.name === l.name)).name) : null,
     };
   });
 
@@ -294,6 +302,30 @@ router.post('/engagements/:id/release', (req, res) => {
       JSON.stringify({ pl: r.pl, bs: r.bs, cashFlow: cf, checks: r.checks.concat(cf.checks) }));
   log(ctx.eng.id, actor(req), 'report.released', { id, status: wanted });
   res.json({ ok: true, reportVersionId: id, status: wanted });
+});
+
+/* ---------- note sub-groups --------------------------------------------- */
+/* Ledgers of the same nature share one note line. The tool proposes a caption;
+ * this records what the preparer decided, which always wins.               */
+router.post('/engagements/:id/subgroups', (req, res) => {
+  const { subgroups } = req.body || {};
+  if (!Array.isArray(subgroups)) return bad(res, 'subgroups[] is required');
+  const d = db();
+  const up = d.prepare(`INSERT INTO sub_groups (engagement_id,ledger_key,label,set_by,set_at)
+    VALUES (?,?,?,?,?) ON CONFLICT(engagement_id,ledger_key) DO UPDATE SET
+    label=excluded.label, set_by=excluded.set_by, set_at=excluded.set_at`);
+  const del = d.prepare('DELETE FROM sub_groups WHERE engagement_id=? AND ledger_key=?');
+  d.exec('BEGIN');
+  try {
+    for (const g of subgroups) {
+      if (!g || !g.ledgerKey) continue;
+      if (g.label && String(g.label).trim()) up.run(req.params.id, g.ledgerKey, String(g.label).trim(), actor(req), now());
+      else del.run(req.params.id, g.ledgerKey);   // blank = go back to the proposal
+    }
+    d.exec('COMMIT');
+  } catch (e) { d.exec('ROLLBACK'); return bad(res, e.message, 500); }
+  log(req.params.id, actor(req), 'subgroups.saved', { count: subgroups.length });
+  res.json({ ok: true, saved: subgroups.length });
 });
 
 /* ---------- prior-year import, once the preparer has confirmed it -------- */

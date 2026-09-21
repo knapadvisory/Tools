@@ -281,32 +281,54 @@ function buildTrialBalance(ws, p) {
 /* ----------------------------------------------------------- notes linkage */
 
 /**
- * Choose the trial-balance rows behind one note sub-line.
+ * Choose the trial-balance rows behind ONE name.
  *
  * Preference order, all of it deterministic:
  *   1. rows classified to this note's own head, not already consumed;
  *   2. any unconsumed row of that name;
  *   3. nothing — the line is then written as a value, never as a guess.
- *
- * Where a note has ONE sub-line of a name but several rows carry it (the
- * duplicate-name case), all of those rows are referenced and summed, so no row
- * is lost and none is double-counted. Where the note has SEVERAL sub-lines of
- * the same name, each takes its own row in turn.
  */
-function pickRows(index, leaf, lineId, consumed, leavesOfThisName) {
-  const cands = index.get(nameKey(leaf.name)) || [];
+function rowsForName(index, name, lineId, consumed, figures, oneOnly) {
+  const cands = index.get(nameKey(name)) || [];
   if (!cands.length) return [];
   const free = cands.filter((c) => !consumed.has(c.row));
   const mine = free.filter((c) => c.lineId && lineId && c.lineId === lineId);
   const pool = mine.length ? mine : free;
   if (!pool.length) return [];
 
-  if (leavesOfThisName > 1) {
-    // one row per sub-line: prefer the row whose figures are the sub-line's
-    const exact = pool.find((c) => same(c.current, leaf.current) && same(c.prior, leaf.prior));
+  if (oneOnly) {
+    // one row per unit: prefer the row whose figures are that unit's own
+    const exact = pool.find((c) => same(c.current, figures.current) && same(c.prior, figures.prior));
     return [exact || pool[0]];
   }
   return pool;
+}
+
+/**
+ * Choose the trial-balance rows behind one note sub-line.
+ *
+ * A sub-line may be an aggregate: three employees' salary-payable ledgers are
+ * presented as one line, "Salary payable", and the caption then matches no
+ * ledger at all. The sub-line carries its `members`, so the rows are resolved
+ * from THOSE names and summed — the note reads as a statement while every
+ * figure still points back at the ledgers it came from.
+ *
+ * Where several rows carry one name (the duplicate-name case), all of them are
+ * referenced and summed, so no row is lost and none is double-counted. Where a
+ * note holds several units of the same name, each takes its own row in turn.
+ */
+function pickRows(index, leaf, lineId, consumed, counts) {
+  const members = arr(leaf.members);
+  const units = members.length ? members : [leaf];
+  const seen = new Set();
+  const out = [];
+  for (const u of units) {
+    const oneOnly = (counts.get(nameKey(u.name)) || 1) > 1;
+    for (const row of rowsForName(index, u.name, lineId, consumed, u, oneOnly)) {
+      if (!seen.has(row.row)) { seen.add(row.row); out.push(row); }
+    }
+  }
+  return out.sort((a, b) => a.row - b.row);
 }
 
 function buildNotes(ws, p, tbIndex, link) {
@@ -328,13 +350,19 @@ function buildNotes(ws, p, tbIndex, link) {
     r += 1;
 
     const leaves = arr(note.subLines);
+    // counted over the LEDGERS behind the note, which is what the trial-balance
+    // index is keyed on — an aggregated caption is not a ledger name
     const counts = new Map();
-    for (const l of leaves) counts.set(nameKey(l.name), (counts.get(nameKey(l.name)) || 0) + 1);
+    for (const l of leaves) {
+      for (const u of (arr(l.members).length ? arr(l.members) : [l])) {
+        counts.set(nameKey(u.name), (counts.get(nameKey(u.name)) || 0) + 1);
+      }
+    }
 
     const firstLeaf = r;
     for (const leaf of leaves) {
       put(ws, r, 1, '    ' + txt(leaf.name), { font: { size: 9 } });
-      const rows = pickRows(tbIndex, leaf, note.lineId, consumed, counts.get(nameKey(leaf.name)) || 1);
+      const rows = pickRows(tbIndex, leaf, note.lineId, consumed, counts);
       // Only link when the referenced rows actually add back to the figure.
       const okCur = rows.length && same(rows.reduce((t, x) => t + x.current, 0), leaf.current);
       const okPri = rows.length && same(rows.reduce((t, x) => t + x.prior, 0), leaf.prior);
@@ -345,7 +373,9 @@ function buildNotes(ws, p, tbIndex, link) {
           : `SUM(${rows.map((x) => cellRef('Trial Balance', col, x.row)).join(',')})`);
         money(ws, r, 2, leaf.current, f('E'), { font: { size: 9 } });
         money(ws, r, 3, leaf.prior, f('F'), { font: { size: 9 } });
-        put(ws, r, 4, `Trial Balance row${rows.length > 1 ? 's' : ''} ${rows.map((x) => x.row).join(', ')}`
+        const mem = arr(leaf.members);
+        const ledgers = mem.length > 1 ? ` (${mem.map((x) => txt(x.name)).join('; ')})` : '';
+        put(ws, r, 4, `Trial Balance row${rows.length > 1 ? 's' : ''} ${rows.map((x) => x.row).join(', ')}${ledgers}`
                     + (leaf.reason ? ` — ${leaf.reason}` : ''),
             { font: { size: 8, color: { argb: INK.muted } } });
       } else {

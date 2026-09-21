@@ -231,6 +231,22 @@ const MIGRATIONS = [
     CREATE INDEX idx_sh_eng ON shareholders(engagement_id);
     `,
   },
+  {
+    id: 5,
+    name: 'sub_groups',
+    up: `
+    -- How ledgers of the same nature are captioned on a note line. The tool
+    -- proposes one; this table holds what the preparer decided.
+    CREATE TABLE sub_groups (
+      engagement_id TEXT NOT NULL REFERENCES engagements(id),
+      ledger_key    TEXT NOT NULL,
+      label         TEXT NOT NULL,
+      set_by        TEXT,
+      set_at        TEXT NOT NULL,
+      PRIMARY KEY (engagement_id, ledger_key)
+    );
+    `,
+  },
 ];
 
 let db = null;

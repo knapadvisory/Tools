@@ -210,7 +210,8 @@ function renderGrouping() {
       <td class="muted">${esc(r.group || '')}</td>
       <td class="r">${inr(r.current)} <span class="muted">${r.drcr}</span></td>
       <td><select class="assign" data-led="${esc(r.ledger)}">${opts(r.lineId)}</select></td>
-      <td class="muted">${esc((j.notes.find((n) => n.lineId === r.lineId) || {}).caption || '')}</td>
+      <td><input class="subg" data-led="${esc(r.ledger)}" value="${esc(r.subGroup || '')}"
+           placeholder="(own line)" style="width:100%;font-size:12px" title="The caption this ledger appears under on the note. Ledgers sharing a caption are shown as one line."></td>
     </tr>`).join('')
     : '<tr><td colspan="5" class="muted">Nothing to review under this filter.</td></tr>';
   $('m3').textContent = `${rows.length} shown of ${j.trialBalance.length} ledgers.`;
@@ -221,8 +222,14 @@ $('gSave').onclick = async () => {
   const mappings = [...document.querySelectorAll('#gRows select.assign')].map((s) => ({
     ledgerKey: s.dataset.led, lineId: s.value, approved: true, confidence: 'manual',
     reason: 'reviewer approved' }));
+  // Only send a sub-group the preparer actually changed; a caption left as the
+  // tool proposed it stays a proposal, so it keeps improving as rules improve.
+  const subgroups = [...document.querySelectorAll('#gRows input.subg')]
+    .filter((i) => i.value.trim() !== (i.defaultValue || '').trim())
+    .map((i) => ({ ledgerKey: i.dataset.led, label: i.value.trim() }));
   try {
     await api(`/engagements/${S.eng.id}/mappings`, { method: 'POST', body: JSON.stringify({ mappings }) });
+    if (subgroups.length) await api(`/engagements/${S.eng.id}/subgroups`, { method: 'POST', body: JSON.stringify({ subgroups }) });
     await refresh();
     msg('m3', `${mappings.length} mapping(s) approved and the statements rebuilt.`, 'ok');
     go(5);
@@ -310,7 +317,12 @@ function renderStatements() {
     for (const n of j.notes) {
       h += `<table class="fin" style="margin-bottom:14px"><thead><tr>
         <th>Note ${n.number} — ${esc(n.caption)}</th><th class="r">${esc(m.currentLabel)}</th><th class="r">${esc(m.priorLabel)}</th></tr></thead><tbody>`;
-      for (const s of n.subLines) h += `<tr><td>${esc(s.name)}</td><td class="r">${inr(s.current)}</td><td class="r">${inr(s.prior)}</td></tr>`;
+      for (const s of n.subLines) {
+        h += `<tr><td>${esc(s.name)}</td><td class="r">${inr(s.current)}</td><td class="r">${inr(s.prior)}</td></tr>`;
+        // the ledgers behind an aggregated line, so the figure stays traceable
+        if ((s.members || []).length > 1) h += `<tr><td colspan="3" class="muted" style="padding-left:22px">`
+          + s.members.map((m) => `${esc(m.name)} ${inr(m.current)}`).join(' · ') + '</td></tr>';
+      }
       h += `<tr class="grp"><td>Total</td><td class="r">${inr(n.current)}</td><td class="r">${inr(n.prior)}</td></tr>`;
       if (n.requires.length) h += `<tr><td colspan="3" class="muted">Still required: ${n.requires.map(esc).join(' · ')}</td></tr>`;
       h += '</tbody></table>';

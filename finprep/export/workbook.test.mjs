@@ -110,7 +110,8 @@ const notes = pm.notes.map((n) => {
   const out = {
     number: n.number, lineId: n.lineId, caption: n.caption,
     current: R(n.current), prior: R(n.prior),
-    subLines: n.subLines.map((s) => ({ name: s.name, current: R(s.current), prior: R(s.prior), reason: s.reason })),
+    subLines: n.subLines.map((s) => ({ name: s.name, current: R(s.current), prior: R(s.prior), reason: s.reason,
+      members: (s.members || []).map((m) => ({ name: m.name, current: R(m.current), prior: R(m.prior) })) })),
     requires: n.requires,
   };
   // Reserves close on the year's result, which is not a ledger balance: the note

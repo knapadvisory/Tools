@@ -13,10 +13,18 @@
 import { add, neg } from './money.js';
 import { linesFor, captionFor, sectionOf, sideOf, line as lineDef } from './schedule3.js';
 import { byLine as disclosuresForLine } from './disclosures.js';
+import { deriveSubGroups } from './subgroup.js';
 
-/** Aggregate a line's ledger contributions per period into note sub-lines. */
-function subLines(r, lineId, periods) {
+/**
+ * Aggregate a line's ledger contributions into note sub-lines.
+ *
+ * Ledgers of the same nature collapse onto ONE line — three employees' salary
+ * payable ledgers read as "Salary payable" — with the underlying ledgers kept
+ * in `members` so the figure stays traceable to the trial balance.
+ */
+function subLines(r, lineId, periods, subOverrides = {}) {
   const recs = r.trace.get(lineId) || [];
+  // per-ledger totals first
   const byName = new Map();
   for (const t of recs) {
     const k = t.name || 'Adjusting journal';
@@ -25,10 +33,27 @@ function subLines(r, lineId, periods) {
     byName.set(k, row);
   }
   const flip = sideOf(lineId) === 'Cr';
-  return [...byName.values()]
-    .map((row) => {
-      const out = { name: row.name, reason: row.reason };
-      for (const p of periods) out[p] = flip ? neg(row.amounts[p] || 0) : (row.amounts[p] || 0);
+  const sub = deriveSubGroups([...byName.keys()], subOverrides, lineId);
+
+  // then collapse onto the sub-group caption
+  const groups = new Map();
+  for (const [name, row] of byName) {
+    const g = sub.get(name) || { label: name, basis: 'kept on its own line' };
+    const cur = groups.get(g.label) || { name: g.label, basis: g.basis, members: [], amounts: {} };
+    const member = { name, reason: row.reason };
+    for (const p of periods) {
+      const v = flip ? neg(row.amounts[p] || 0) : (row.amounts[p] || 0);
+      member[p] = v;
+      cur.amounts[p] = add(cur.amounts[p] || 0, v);
+    }
+    cur.members.push(member);
+    groups.set(g.label, cur);
+  }
+
+  return [...groups.values()]
+    .map((g) => {
+      const out = { name: g.name, reason: g.basis, members: g.members };
+      for (const p of periods) out[p] = g.amounts[p] || 0;
       return out;
     })
     .filter((row) => periods.some((p) => row[p] !== 0))
@@ -36,7 +61,7 @@ function subLines(r, lineId, periods) {
 }
 
 /** The numbered notes, in Schedule III order, for the heads actually used. */
-export function buildNotes(r) {
+export function buildNotes(r, subOverrides = {}) {
   const { periods, division } = r;
   const out = [];
   for (const def of linesFor(division)) {
@@ -45,7 +70,7 @@ export function buildNotes(r) {
     if (!n) continue;
     const note = {
       number: n, lineId: def.id, caption: captionFor(def.id, division),
-      section: def.section, subLines: subLines(r, def.id, periods),
+      section: def.section, subLines: subLines(r, def.id, periods, subOverrides),
       requires: def.requires || [],
     };
     for (const p of periods) note[p] = r.presented(def.id, p);
@@ -207,7 +232,7 @@ export function presentationModel(r, opts = {}) {
     division: r.division, periods: r.periods,
     balanceSheet: balanceSheetFace(r),
     profitAndLoss: profitAndLossFace(r),
-    notes: buildNotes(r),
+    notes: buildNotes(r, opts.subOverrides || {}),
     disclosures: disclosureRegister(r, opts.answers),
     disclosureSources: disclosureSources(disclosureRegister(r, opts.answers)),
     checks: r.checks,
