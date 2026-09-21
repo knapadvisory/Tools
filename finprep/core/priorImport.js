@@ -220,19 +220,45 @@ export function extractParticulars(cells) {
 
 /* ---------- figures ------------------------------------------------------ */
 /** Find the header row of a face/note sheet and the amount columns. */
+/**
+ * Is this heading a period column? Templates vary: "As at 31 March 2025",
+ * "For the year ended", or just the date. A bare year counts, because plenty
+ * of sets put the words in a merged banner above and only the date in the
+ * column itself.
+ */
+const isPeriodHeader = (t) =>
+  /as at|year ended|period ended|for the year|for the period/i.test(t) || /\b(19|20)\d{2}\b/.test(t);
+
+/** The period columns on one row, ignoring a merged banner repeated across it. */
+function periodColumnsOn(ws, r, minCol) {
+  const row = ws.getRow(r);
+  const texts = [];
+  row.eachCell({ includeEmpty: false }, (c, cn) => texts.push([cn, (cellText(c) || '').trim()]));
+  const distinct = new Set(texts.map(([, t]) => t).filter(Boolean));
+  if (distinct.size <= 1) return [];                       // a merged title spanning the row
+  return texts.filter(([cn, t]) => t && cn > minCol && isPeriodHeader(t)).map(([cn]) => cn);
+}
+
 function findHeader(ws) {
   const max = Math.min(ws.rowCount || 40, 40);
   for (let r = 1; r <= max; r++) {
     const row = ws.getRow(r);
-    let note = null, cy = null, py = null, particulars = false;
+    let note = null, particulars = null;
     row.eachCell({ includeEmpty: false }, (c, cn) => {
       const t = cellText(c);
       if (!t) return;
-      if (/particular/i.test(t)) particulars = true;
+      if (/particular/i.test(t) && particulars == null) particulars = cn;
       if (/^notes?$/i.test(t)) note = cn;
-      if (/as at|year ended|for the year/i.test(t)) { if (cy == null) cy = cn; else if (py == null) py = cn; }
     });
-    if (particulars && cy != null) return { r, note, cy, py };
+    if (particulars == null) continue;
+
+    // The period columns usually sit on the same row. Where the template puts
+    // the wording above and the dates below, look either side before giving up.
+    for (const rr of [r, r + 1, r - 1, r + 2, r - 2]) {
+      if (rr < 1 || rr > (ws.rowCount || 0)) continue;
+      const cols = periodColumnsOn(ws, rr, particulars);
+      if (cols.length) return { r: Math.max(r, rr), note, cy: cols[0], py: cols[1] ?? null, particulars };
+    }
   }
   return null;
 }

@@ -188,8 +188,20 @@ export function build({ ledgers, journals = [], periods = ['current', 'prior'], 
       priorSet.add(lineId);
     }
     if (priorSet.size) {
+      const PL_SECTIONS = ['INCOME', 'EXPENSE', 'TAX', 'OCI'];
+      const onPL = [...priorSet].filter((id) => PL_SECTIONS.includes(sectionOf(id)));
       checks.push({ id: 'PRI-APPLIED', severity: SEV.INFO,
-        message: `${priorSet.size} comparative figure(s) taken from last year's signed financial statements rather than from Tally.` });
+        message: `${priorSet.size} comparative figure(s) taken from last year's signed financial statements `
+          + `rather than from Tally — ${priorSet.size - onPL.length} on the balance sheet, ${onPL.length} on the statement of profit and loss.` });
+      // Comparatives that stop at the balance sheet are the signature of a
+      // failed read of last year's P&L, and the P&L then quietly keeps Tally's
+      // prior column. Say so rather than letting the export look complete.
+      if (!onPL.length) {
+        checks.push({ id: 'PRI-NO-PL', severity: SEV.HIGH,
+          message: 'No comparative was imported for the statement of profit and loss, so its prior-year column is still whatever Tally holds '
+            + 'and will read as nil for a company whose last year is not in these books. Re-run the prior-year import and check the '
+            + '"from the statement of profit and loss" count, or key the comparatives in.' });
+      }
     }
   }
 

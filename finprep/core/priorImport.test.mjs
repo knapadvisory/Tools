@@ -103,4 +103,52 @@ t('figures are never taken from the cash flow statement', ()=>{
 t('totals are still never imported', ()=>{
   assert.ok(!plOut.figures.some(f => /^total/i.test(f.caption)));
 });
+
+/* Some firms put the wording in a banner and only the date in the column. */
+const hdr = new ExcelJS.Workbook();
+{
+  const ws = hdr.addWorksheet('P and L');
+  ws.addRow(['ABC Private Limited']);
+  ws.addRow(['Statement of Profit and Loss']);
+  ws.addRow([]);
+  ws.addRow(['Particulars', 'Note', '31 March 2025', '31 March 2024']);
+  ws.addRow(['Revenue from operations', 23, 5000, 4000]);
+  ws.addRow(['Other expenses', 28, 1500, 1200]);
+}
+const hdrOut = await readWorkbook(ExcelJS, await hdr.xlsx.writeBuffer());
+t('a period column headed only by a date is still recognised', ()=>{
+  const by = Object.fromEntries(hdrOut.figures.map(f => [f.lineId, f.amount]));
+  assert.equal(by.revenue_operations, 5000);
+  assert.equal(by.other_expenses, 1500);
+});
+
+const split = new ExcelJS.Workbook();
+{
+  const ws = split.addWorksheet('PL split header');
+  ws.addRow(['ABC Private Limited']);
+  ws.addRow([]);
+  ws.addRow(['Particulars', 'Note', 'For the year ended', 'For the year ended']);
+  ws.addRow(['', '', '31 March 2025', '31 March 2024']);
+  ws.addRow(['Revenue from operations', 23, 7000, 6000]);
+}
+const splitOut = await readWorkbook(ExcelJS, await split.xlsx.writeBuffer());
+t('a header split over two rows is still recognised', ()=>{
+  const by = Object.fromEntries(splitOut.figures.map(f => [f.lineId, f.amount]));
+  assert.equal(by.revenue_operations, 7000);
+});
+
+const banner = new ExcelJS.Workbook();
+{
+  const ws = banner.addWorksheet('BS');
+  // a merged title carrying "as at 31 March 2023" across every column
+  ws.addRow(['Balance Sheet as at 31 March 2023', 'Balance Sheet as at 31 March 2023',
+             'Balance Sheet as at 31 March 2023', 'Balance Sheet as at 31 March 2023']);
+  ws.addRow(['Particulars', 'Notes', 'As at 31 March 2023', 'As at 31 March 2022']);
+  ws.addRow(['Share capital', 1, 250000, 250000]);
+}
+const bannerOut = await readWorkbook(ExcelJS, await banner.xlsx.writeBuffer());
+t('a merged title row is not mistaken for the period columns', ()=>{
+  const by = Object.fromEntries(bannerOut.figures.map(f => [f.lineId, f.amount]));
+  assert.equal(by.share_capital, 250000, 'must read the 2023 column, not the title');
+});
 console.log(`\n${p} passed, ${f} failed\n`); process.exit(f?1:0);

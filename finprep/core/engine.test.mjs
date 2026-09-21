@@ -186,5 +186,18 @@ t('"Capital Account" still works', () => {
   assert.equal(ruleLine(L('Share Capital', ['Capital Account'], -1000000, 0)), 'share_capital');
 });
 
+t('comparatives that stop at the balance sheet are reported, not left to look complete', () => {
+  const led = [{ name: 'Share Capital', groupPath: ['Capital Account'], current: -1000000, prior: -1000000 },
+               { name: 'Sales', groupPath: ['Sales Accounts'], current: -500000, prior: 0, isRevenue: true }];
+  const bsOnly = build({ ledgers: led, division: 'AS', priorOverrides: { share_capital: 1000000 } });
+  const flag = bsOnly.checks.find((c) => c.id === 'PRI-NO-PL');
+  assert.ok(flag, 'a balance-sheet-only import must be flagged');
+  assert.equal(flag.severity, 'HIGH');
+
+  const both = build({ ledgers: led, division: 'AS',
+    priorOverrides: { share_capital: 1000000, revenue_operations: 900000 } });
+  assert.ok(!both.checks.some((c) => c.id === 'PRI-NO-PL'), 'must not fire once the P&L is imported');
+  assert.match(both.checks.find((c) => c.id === 'PRI-APPLIED').message, /1 on the statement of profit and loss/);
+});
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);
