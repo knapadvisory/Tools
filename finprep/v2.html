@@ -84,11 +84,17 @@
     <div class="card">
       <h2>Engagement</h2>
       <p class="sub">An engagement holds the client, the financial year and every snapshot, mapping and adjustment made for it. Everything is stored on the server, not in this browser.</p>
-      <div class="row">
-        <div style="flex:1;min-width:260px"><label>Existing engagements</label><select id="engList" style="width:100%"></select></div>
-        <button class="btn ghost sm" id="engOpen" type="button">Open</button>
+      <div id="engExisting" class="hidden">
+        <div class="row">
+          <div style="flex:1;min-width:260px"><label>Continue an engagement you have already started</label><select id="engList" style="width:100%"></select></div>
+          <button class="btn ghost sm" id="engOpen" type="button">Open</button>
+        </div>
+        <hr style="border:0;border-top:1px solid var(--rule);margin:16px 0">
       </div>
-      <hr style="border:0;border-top:1px solid var(--rule);margin:16px 0">
+      <div id="engFirst" class="banner ok hidden" style="margin-bottom:14px">
+        Nothing here yet — fill in the client below and press <b>Create</b> to start your first engagement.
+      </div>
+      <h3 style="margin:0 0 10px;font-size:13px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em">Start a new engagement</h3>
       <div class="row">
         <div style="flex:1;min-width:240px"><label>Client legal name</label><input id="cName" placeholder="ABC Private Limited" style="width:100%"></div>
         <div><label>CIN</label><input id="cCin" placeholder="U74999XX2019PTC000000"></div>

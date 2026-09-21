@@ -58,9 +58,11 @@ document.querySelectorAll('#stepper .step').forEach((el) =>
 async function loadEngagements() {
   try {
     const { engagements } = await api('/engagements');
-    $('engList').innerHTML = engagements.length
-      ? engagements.map((e) => `<option value="${e.id}">${esc(e.client_name)} — FY ${esc(e.fy_start)} to ${esc(e.fy_end)} (${e.division})</option>`).join('')
-      : '<option value="">— none yet —</option>';
+    // Only offer the "continue" picker once there is something to continue.
+    $('engExisting').classList.toggle('hidden', engagements.length === 0);
+    $('engFirst').classList.toggle('hidden', engagements.length > 0);
+    $('engList').innerHTML = engagements.map((e) =>
+      `<option value="${e.id}">${esc(e.client_name)} — FY ${esc(e.fy_start)} to ${esc(e.fy_end)} (${e.division})</option>`).join('');
   } catch (e) { msg('m1', 'Could not reach the server: ' + e.message, 'bad'); }
 }
 async function openEngagement(id) {
