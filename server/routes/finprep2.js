@@ -17,6 +17,7 @@ import { presentationModel } from '../../finprep/core/notes.js';
 import { sectionOf as sectionOfLine, linesFor, SECTIONS } from '../../finprep/core/schedule3.js';
 import { assessAll, requiredFacts, RULE_DEFS } from '../../finprep/core/applicability.js';
 import { observe } from '../../finprep/core/observations.js';
+import { subGroupOf } from '../../finprep/core/subgroup.js';
 import { coverage } from './inputs.js';
 
 /** "2026-03-31" -> "31 March 2026" */
@@ -240,6 +241,14 @@ function buildPayload(ctx, schedules = {}) {
   const releasable = r.releasable && cf.reconciled;
 
   // trial balance rows, natural sign, with the head each ledger reached
+  // The caption each ledger ends up on, looked up once rather than per row.
+  const lineOfLedger = new Map();   // ledger name -> {noteLine, source}
+  for (const n of model.notes) {
+    for (const sl of n.subLines) {
+      for (const mm of (sl.members || [])) lineOfLedger.set(mm.name, { noteLine: sl.name, source: sl.source });
+    }
+  }
+
   const trialBalance = r.ledgers.map((l) => {
     const cur = l.perPeriod.current, pri = l.perPeriod.prior;
     const natural = (v, id) => {
@@ -253,10 +262,10 @@ function buildPayload(ctx, schedules = {}) {
       prior: toRupees(natural(pri.amount, pri.lineId)) / SCALE_DIV,
       lineId: cur.lineId, lineCaption: captionFor(cur.lineId, r.division),
       note: r.noteNumbers.get(cur.lineId) || null,
-      subGroup: (model.notes.find((n) => n.lineId === cur.lineId) || { subLines: [] })
-        .subLines.find((sl) => (sl.members || []).some((mm) => mm.name === l.name)) ?
-        (model.notes.find((n) => n.lineId === cur.lineId).subLines
-          .find((sl) => (sl.members || []).some((mm) => mm.name === l.name)).name) : null,
+      // Grouping ▸ Sub-grouping ▸ Ledger, as Tally holds it
+      tallySubGroup: subGroupOf(l),
+      subGroup: (lineOfLedger.get(l.name) || {}).noteLine || null,
+      subGroupSource: (lineOfLedger.get(l.name) || {}).source || null,
     };
   });
 

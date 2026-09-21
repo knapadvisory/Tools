@@ -22,6 +22,7 @@
 import { toPaise, add, sub, neg, format } from './money.js';
 import { line, sectionOf, sideOf, linesFor, captionFor, assignNoteNumbers, SECTIONS } from './schedule3.js';
 import { classifyLedger, lineForBalance } from './classify.js';
+import { subGroupOf } from './subgroup.js';
 
 const SEV = { CRITICAL: 'CRITICAL', HIGH: 'HIGH', REVIEW: 'REVIEW', INFO: 'INFO' };
 
@@ -133,7 +134,8 @@ export function build({ ledgers, journals = [], periods = ['current', 'prior'], 
       const { line: lineId, flipped } = lineForBalance(rule, bal);
       perPeriod[p] = { lineId, flipped, amount: bal };
       bump(lineId, p, bal);
-      if (bal !== 0) push(lineId, { ledgerId: l.id, name: l.name, period: p, amount: bal, reason: rule.reason });
+      if (bal !== 0) push(lineId, { ledgerId: l.id, name: l.name, period: p, amount: bal,
+        reason: rule.reason, subGroup: subGroupOf(l) });
     }
     // a head that changes between periods is a regrouping and must be disclosed
     const distinct = new Set(periods.map((p) => perPeriod[p].lineId));

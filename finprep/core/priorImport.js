@@ -238,6 +238,47 @@ function findHeader(ws) {
 }
 
 /**
+ * The caption on a row, which is NOT simply the first non-empty cell.
+ *
+ * A statement of profit and loss numbers its sections in column 1 —
+ * "I | Revenue from operations | 23" — so taking the first non-empty cell
+ * reads the caption as "I" and the whole P&L imports as nothing. Serial
+ * numbers, roman numerals, list letters and the note reference are skipped;
+ * the first cell that is actually wording is the caption.
+ */
+const INDEX_CELL = /^\(?\s*(?:[ivxlcdm]+|[a-z]|\d{1,3})\s*[.)]?\s*$/i;
+function labelOf(row, H) {
+  const upto = Math.max(1, (H.cy || 2) - 1);
+  let longest = '';
+  for (let c = 1; c <= upto; c++) {
+    if (H.note && c === H.note) continue;               // the note reference, not a caption
+    const t = (cellText(row.getCell(c)) || '').trim();
+    if (!t || INDEX_CELL.test(t)) continue;
+    if (t.length > longest.length) longest = t;
+    return t;
+  }
+  return longest;
+}
+
+/**
+ * A cash flow statement holds MOVEMENTS, not balances. "Trade receivables" on
+ * it is the change for the year, and importing that as a comparative would put
+ * a movement where a balance belongs. Figures are never read from one.
+ */
+function isCashFlowSheet(ws) {
+  if (/cash\s*flow|^cfs$/i.test(ws.name || '')) return true;
+  for (let r = 1; r <= Math.min(6, ws.rowCount || 0); r++) {
+    const row = ws.getRow(r);
+    let hit = false;
+    row.eachCell({ includeEmpty: false }, (c) => {
+      if (/cash\s*flow\s*statement|statement of cash flows/i.test(cellText(c) || '')) hit = true;
+    });
+    if (hit) return true;
+  }
+  return false;
+}
+
+/**
  * Prior-year figures, keyed by OUR line id.
  * Last year's CURRENT column becomes this year's comparative.
  */
@@ -250,13 +291,15 @@ export function extractFigures(wb, division = 'AS') {
     found.set(id, { amount, source, caption });
   };
 
+  const skipped = [];
   for (const ws of wb.worksheets) {
+    if (isCashFlowSheet(ws)) { skipped.push({ sheet: ws.name, why: 'cash flow statement — holds movements, not balances' }); continue; }
     const H = findHeader(ws);
-    if (!H) continue;
+    if (!H) { skipped.push({ sheet: ws.name, why: 'no "Particulars" heading with a period column was found' }); continue; }
     const last = ws.rowCount || 0;
     for (let r = H.r + 1; r <= last; r++) {
       const row = ws.getRow(r);
-      const label = cellText(row.getCell(1)) || cellText(row.getCell(2)) || cellText(row.getCell(3));
+      const label = labelOf(row, H);
       if (!label) continue;
       if (/^total\b/i.test(label)) continue;          // totals are derived, never imported
       const amount = cellNum(row.getCell(H.cy));
@@ -269,6 +312,7 @@ export function extractFigures(wb, division = 'AS') {
   return {
     figures: [...found.entries()].map(([lineId, v]) => ({ lineId, ...v })),
     unmatched: unmatched.slice(0, 40),
+    skippedSheets: skipped,
   };
 }
 

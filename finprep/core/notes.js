@@ -18,9 +18,10 @@ import { deriveSubGroups } from './subgroup.js';
 /**
  * Aggregate a line's ledger contributions into note sub-lines.
  *
- * Ledgers of the same nature collapse onto ONE line — three employees' salary
- * payable ledgers read as "Salary payable" — with the underlying ledgers kept
- * in `members` so the figure stays traceable to the trial balance.
+ * The trial balance is read as Tally holds it — Grouping ▸ Sub-grouping ▸
+ * Ledger. The grouping decides the head; the note shows the SUB-GROUPING as
+ * one figure, with the ledgers behind it kept in `members` so it stays
+ * traceable. A ledger with no sub-grouping is shown on its own line.
  */
 function subLines(r, lineId, periods, subOverrides = {}) {
   const recs = r.trace.get(lineId) || [];
@@ -28,19 +29,22 @@ function subLines(r, lineId, periods, subOverrides = {}) {
   const byName = new Map();
   for (const t of recs) {
     const k = t.name || 'Adjusting journal';
-    const row = byName.get(k) || { name: k, amounts: {}, reason: t.reason };
+    const row = byName.get(k) || { name: k, amounts: {}, reason: t.reason, subGroup: t.subGroup || null };
+    if (!row.subGroup && t.subGroup) row.subGroup = t.subGroup;
     row.amounts[t.period] = add(row.amounts[t.period] || 0, t.amount);
     byName.set(k, row);
   }
   const flip = sideOf(lineId) === 'Cr';
-  const sub = deriveSubGroups([...byName.keys()], subOverrides, lineId);
+  const sub = deriveSubGroups(
+    [...byName.values()].map((x) => ({ name: x.name, subGroup: x.subGroup })), subOverrides, lineId);
 
-  // then collapse onto the sub-group caption
+  // then collapse onto the sub-grouping
   const groups = new Map();
   for (const [name, row] of byName) {
-    const g = sub.get(name) || { label: name, basis: 'kept on its own line' };
-    const cur = groups.get(g.label) || { name: g.label, basis: g.basis, members: [], amounts: {} };
-    const member = { name, reason: row.reason };
+    const g = sub.get(name) || { label: name, basis: 'shown on its own line', source: 'ledger' };
+    const cur = groups.get(g.label)
+      || { name: g.label, basis: g.basis, source: g.source, members: [], amounts: {} };
+    const member = { name, reason: row.reason, subGroup: row.subGroup || null };
     for (const p of periods) {
       const v = flip ? neg(row.amounts[p] || 0) : (row.amounts[p] || 0);
       member[p] = v;
@@ -52,7 +56,7 @@ function subLines(r, lineId, periods, subOverrides = {}) {
 
   return [...groups.values()]
     .map((g) => {
-      const out = { name: g.name, reason: g.basis, members: g.members };
+      const out = { name: g.name, reason: g.basis, source: g.source, members: g.members };
       for (const p of periods) out[p] = g.amounts[p] || 0;
       return out;
     })

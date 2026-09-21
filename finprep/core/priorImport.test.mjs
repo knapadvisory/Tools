@@ -54,4 +54,53 @@ t('figures map to OUR line ids, not last year’s note numbers', ()=>{
 t('totals are never imported', ()=>{
   assert.ok(!out.figures.some(f=>/^total/i.test(f.caption)));
 });
+
+console.log('\n── the statement of profit and loss ──');
+/* A signed P&L numbers its sections in column 1 — "I | Revenue from operations"
+   — and the cash flow statement repeats many of the same captions as MOVEMENTS.
+   Both were silently costing the whole P&L its comparatives. */
+const pl = new ExcelJS.Workbook();
+{
+  const ws = pl.addWorksheet('Profit & loss');
+  ws.addRow(['ABC Private Limited']);
+  ws.addRow(['Statement of Profit and Loss for the year ended 31 March 2025']);
+  ws.addRow([]);
+  ws.addRow(['Particulars', '', 'Notes', 'For the year ended  31 March 2025', 'For the year ended  31 March 2024']);
+  ws.addRow(['I', 'Revenue from operations', 23, 26268459, 100]);
+  ws.addRow(['II', 'Other Income', 24, 558550, 200]);
+  ws.addRow(['III', 'Total income (I+II)', '', 26827009, 300]);
+  ws.addRow(['IV', 'Expenses', '', '', '']);
+  ws.addRow(['', '(a) Employee benefits expense', 25, 13921714, 400]);
+  ws.addRow(['', '(b) Finance costs', 26, 182, 500]);
+  ws.addRow(['', '(c) Depreciation and amortisation expense', 27, 1917474, 600]);
+  ws.addRow(['', '(d) Other expenses', 28, 13922381, 700]);
+  ws.addRow(['V', 'Total expenses', '', 28038430, 800]);
+  const cf = pl.addWorksheet('CFS');
+  cf.addRow(['ABC Private Limited']);
+  cf.addRow(['Cash Flow Statement For The Year Ended March 31, 2025']);
+  cf.addRow([]);
+  cf.addRow(['S. No.', 'Particulars', '', '', 'For the year ended March 31, 2025']);
+  cf.addRow(['A.', 'Cash Flow From Operating Activities', '', '', '']);
+  cf.addRow(['', 'Depreciation and amortisation expense', '', '', 9999999]);
+  cf.addRow(['', 'Trade receivables', '', '', -8888888]);
+}
+const plOut = await readWorkbook(ExcelJS, await pl.xlsx.writeBuffer());
+const plBy = Object.fromEntries(plOut.figures.map(f => [f.lineId, f.amount]));
+
+t('a P&L numbered I, II, III in column 1 still imports every line', ()=>{
+  assert.equal(plBy.revenue_operations, 26268459, 'revenue from operations');
+  assert.equal(plBy.other_income, 558550);
+  assert.equal(plBy.employee_benefits, 13921714);
+  assert.equal(plBy.finance_costs, 182);
+  assert.equal(plBy.depreciation_amortisation, 1917474);
+  assert.equal(plBy.other_expenses, 13922381);
+});
+t('figures are never taken from the cash flow statement', ()=>{
+  assert.notEqual(plBy.depreciation_amortisation, 9999999, 'took a movement off the cash flow');
+  assert.equal(plBy.trade_receivables, undefined, 'imported a movement as a balance');
+  assert.ok(plOut.skippedSheets.some(s => /cash flow/i.test(s.why)), 'the cash flow sheet must be reported as skipped');
+});
+t('totals are still never imported', ()=>{
+  assert.ok(!plOut.figures.some(f => /^total/i.test(f.caption)));
+});
 console.log(`\n${p} passed, ${f} failed\n`); process.exit(f?1:0);

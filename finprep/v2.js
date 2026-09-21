@@ -204,18 +204,36 @@ function renderGrouping() {
     return true;
   });
   const opts = (sel) => headOptions(sel);
+  const fromTally = rows.filter((x) => x.subGroupSource === 'tally').length;
+  const proposed = rows.filter((x) => x.subGroupSource === 'proposed').length;
   $('gRows').innerHTML = rows.length ? rows.map((r) => `
     <tr${r.lineId === 'unclassified' ? ' style="background:var(--bad-soft)"' : ''}>
       <td>${esc(r.ledger)}</td>
-      <td class="muted">${esc(r.group || '')}</td>
+      <td class="muted">${esc(r.group || '')}${r.tallySubGroup
+          ? ` <span style="color:var(--ok)">▸ ${esc(r.tallySubGroup)}</span>` : ''}</td>
       <td class="r">${inr(r.current)} <span class="muted">${r.drcr}</span></td>
       <td><select class="assign" data-led="${esc(r.ledger)}">${opts(r.lineId)}</select></td>
       <td><input class="subg" data-led="${esc(r.ledger)}" value="${esc(r.subGroup || '')}"
-           placeholder="(own line)" style="width:100%;font-size:12px" title="The caption this ledger appears under on the note. Ledgers sharing a caption are shown as one line."></td>
+           placeholder="(own line)" style="width:100%;font-size:12px;${SRC_STYLE[r.subGroupSource] || ''}"
+           title="${esc(SRC_HINT[r.subGroupSource] || 'The caption this ledger appears under on the note.')}"></td>
     </tr>`).join('')
     : '<tr><td colspan="5" class="muted">Nothing to review under this filter.</td></tr>';
-  $('m3').textContent = `${rows.length} shown of ${j.trialBalance.length} ledgers.`;
+  $('m3').textContent = `${rows.length} shown of ${j.trialBalance.length} ledgers.`
+    + (fromTally ? ` ${fromTally} sub-grouped in Tally.` : '')
+    + (proposed ? ` ${proposed} caption(s) proposed by the tool — check these.` : '');
 }
+/* Where a note caption came from, so a proposal is never mistaken for a fact. */
+const SRC_STYLE = {
+  tally: 'border-color:var(--ok)',
+  preparer: 'border-color:var(--ok);font-weight:600',
+  proposed: 'border-color:var(--warn);background:var(--warn-soft)',
+};
+const SRC_HINT = {
+  tally: 'Taken from the sub-group this ledger sits under in Tally. Ledgers sharing it are shown as one note line.',
+  preparer: 'You set this caption. It overrides Tally.',
+  proposed: 'PROPOSED by the tool from the ledger’s wording — this ledger is not sub-grouped in Tally. Check it, or sub-group it in Tally.',
+  ledger: 'Not sub-grouped in Tally, so the ledger is shown on its own line under its own name.',
+};
 $('gFilter').onchange = renderGrouping;
 $('gSearch').oninput = renderGrouping;
 $('gSave').onclick = async () => {
@@ -319,8 +337,9 @@ function renderStatements() {
         <th>Note ${n.number} — ${esc(n.caption)}</th><th class="r">${esc(m.currentLabel)}</th><th class="r">${esc(m.priorLabel)}</th></tr></thead><tbody>`;
       for (const s of n.subLines) {
         h += `<tr><td>${esc(s.name)}</td><td class="r">${inr(s.current)}</td><td class="r">${inr(s.prior)}</td></tr>`;
-        // the ledgers behind an aggregated line, so the figure stays traceable
+        // the ledgers behind a sub-grouped line, so the figure stays traceable
         if ((s.members || []).length > 1) h += `<tr><td colspan="3" class="muted" style="padding-left:22px">`
+          + (s.source === 'proposed' ? '<b>proposed grouping — not sub-grouped in Tally:</b> ' : '')
           + s.members.map((m) => `${esc(m.name)} ${inr(m.current)}`).join(' · ') + '</td></tr>';
       }
       h += `<tr class="grp"><td>Total</td><td class="r">${inr(n.current)}</td><td class="r">${inr(n.prior)}</td></tr>`;
@@ -513,7 +532,18 @@ function renderPriorPreview(x) {
         <td style="text-align:center"><input type="checkbox" data-pfu="${i}" checked></td></tr>`).join('')
     + '</tbody></table>' : '<p class="muted">No particulars could be read.</p>';
 
+  // Split by statement, so a P&L that imported as nothing is obvious instead of
+  // being buried in a long list of balance-sheet lines.
+  const secOf = (id) => ((S.heads.find((hh) => hh.lineId === id) || {}).section || '');
+  const PL_SECS = ['INCOME', 'EXPENSE', 'TAX', 'OCI'];
+  const nPL = fig.filter((x2) => PL_SECS.includes(secOf(x2.lineId))).length;
+  const nBS = fig.length - nPL;
   h += '<h4 style="margin:14px 0 4px;font-size:12px;color:var(--mut)">COMPARATIVE FIGURES</h4>';
+  h += `<div class="chk ${nPL ? 'INFO' : 'REVIEW'}" style="margin-bottom:8px">
+      ${nBS} from the balance sheet \u00b7 ${nPL} from the statement of profit and loss.
+      ${nPL ? '' : ' No profit-and-loss comparative was read \u2014 check that the P&amp;L sheet has a \u201cParticulars\u201d heading with a period column.'}</div>`;
+  if ((x.skippedSheets || []).length) h += '<div class="chk INFO" style="margin-bottom:8px">Sheets not read for figures: '
+    + x.skippedSheets.map((s2) => `<b>${esc(s2.sheet)}</b> (${esc(s2.why)})`).join(' \u00b7 ') + '</div>';
   h += fig.length ? `<div class="wrap" style="max-height:280px"><table class="fin"><thead><tr><th>Head</th><th>Caption in the document</th><th class="r">Amount</th><th>Source</th><th>Use?</th></tr></thead><tbody>`
     + fig.map((x2, i) => `<tr><td>${esc((S.heads.find((hh) => hh.lineId === x2.lineId) || {}).caption || x2.lineId)}</td>
         <td class="muted">${esc(x2.caption)}</td>
