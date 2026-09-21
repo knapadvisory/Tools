@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 const ExcelJS = createRequire('/tmp/x.js')('/tmp/xl.cjs');
-const { readWorkbook, lineFromCaption, cellNum } = await import('./priorImport.js');
+const { readWorkbook, lineFromCaption, cellNum, yearOf } = await import('./priorImport.js');
 let p=0,f=0; const t=(n,fn)=>{try{fn();p++;console.log('  PASS  '+n)}catch(e){f++;console.log('  FAIL  '+n+'\n        '+e.message)}};
 
 console.log('\n── caption matching ──');
@@ -150,5 +150,70 @@ const bannerOut = await readWorkbook(ExcelJS, await banner.xlsx.writeBuffer());
 t('a merged title row is not mistaken for the period columns', ()=>{
   const by = Object.fromEntries(bannerOut.figures.map(f => [f.lineId, f.amount]));
   assert.equal(by.share_capital, 250000, 'must read the 2023 column, not the title');
+});
+
+console.log('\n── a working file for THIS year, stated in thousands ──');
+/* The real shape that broke: a draft for FY 2025-26 whose FIRST period column
+   is 2026 and whose comparative is 2025, with every figure in '000. Taking
+   "the first period column" imports the wrong year; ignoring the units note
+   understates every figure a thousandfold. */
+const thisYear = new ExcelJS.Workbook();
+{
+  const bs = thisYear.addWorksheet('BS');
+  bs.addRow(['TAG STRATEGIC ADVISORY SERVICES PRIVATE LIMITED']);
+  bs.addRow(['Balance Sheet as at March 31, 2026']);
+  bs.addRow(["(All amounts in '000 unless otherwise stated)"]);
+  bs.addRow(['Particulars', 'Note No.', 'As at\nMarch 31, 2026', 'As at\nMarch 31, 2025']);
+  bs.addRow(['Share capital', 2, 87304.54, 87304.54]);
+  bs.addRow(['Reserves and surplus', 3, 44586.188796916234, 58911.30885942262]);
+  const pl = thisYear.addWorksheet('PL');
+  pl.addRow(['TAG STRATEGIC ADVISORY SERVICES PRIVATE LIMITED']);
+  pl.addRow(['Statement of Profit and Loss account for the year ended March 31, 2026']);
+  pl.addRow(["(All amounts in '000 unless otherwise stated)"]);
+  pl.addRow(['Particulars', 'Note No.', 'For the year ended\nMarch 31, 2026', 'For the year ended\nMarch 31, 2025']);
+  pl.addRow(['Revenue from operations', 17, 263468.96348, 274080.86624]);
+  pl.addRow(['Employee benefit expenses', 20, 139217.14005, 100992.3349]);
+  pl.addRow(['Finance costs', 21, 407.58, 472.20764]);
+  // a sheet for a different year entirely, which must not contribute
+  const old = thisYear.addWorksheet('TB (23-24)');
+  old.addRow(['Particulars', '', '1-Apr-2023 to 31-Mar-2024']);
+  old.addRow(['Trade Receivables', '', 999999]);
+}
+const ty = await readWorkbook(ExcelJS, await thisYear.xlsx.writeBuffer(), 'AS', { priorYear: 2025 });
+const tyBy = Object.fromEntries(ty.figures.map(f => [f.lineId, f.amount]));
+
+t('the comparative column is chosen by the year in its heading, not by position', ()=>{
+  assert.equal(Math.round(tyBy.reserves_surplus * 100), 5891130886, 'took the 2026 column');
+  const bs = ty.columns.find(c => c.sheet === 'BS');
+  assert.match(bs.chosen.text, /March 31, 2025/);
+  assert.match(bs.because, /2025/);
+});
+t("amounts stated in '000 are brought to rupees", ()=>{
+  assert.equal(tyBy.share_capital, 87304540);
+  // the float tail of x1000 is immaterial: toPaise rounds it to the paisa
+  assert.equal(Math.round(tyBy.revenue_operations * 100), 27408086624);
+  const u = ty.units.find(x => x.sheet === 'PL');
+  assert.equal(u.factor, 1000);
+  assert.match(u.source, /All amounts in/);
+});
+t('the P&L of a working file imports in full', ()=>{
+  assert.equal(Math.round(tyBy.employee_benefits * 100), 10099233490, 'plural/singular wording must still match');
+  assert.equal(Math.round(tyBy.finance_costs * 100) / 100, 472207.64);
+});
+t('a sheet for another year is skipped, not read as the comparative', ()=>{
+  assert.notEqual(tyBy.trade_receivables, 999999);
+  assert.ok(ty.skippedSheets.some(s => s.sheet === 'TB (23-24)' && /no column is headed 2025/.test(s.why)));
+});
+const asRupees = await readWorkbook(ExcelJS, await thisYear.xlsx.writeBuffer(), 'AS',
+  { priorYear: 2025, unitsFactor: 1 });
+t('the preparer can override the scale the document states', ()=>{
+  const by = Object.fromEntries(asRupees.figures.map(f => [f.lineId, f.amount]));
+  assert.equal(by.share_capital, 87304.54);
+});
+t('"FY 2025-26" is the year ended 2026, not 2025', ()=>{
+  assert.equal(yearOf('FY 2025-26'), 2026);
+  assert.equal(yearOf('2024-25'), 2025);
+  assert.equal(yearOf('As at March 31, 2025'), 2025);
+  assert.equal(yearOf('Year ended'), null);
 });
 console.log(`\n${p} passed, ${f} failed\n`); process.exit(f?1:0);

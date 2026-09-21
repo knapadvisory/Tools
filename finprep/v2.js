@@ -557,10 +557,18 @@ $('inpNext').onclick = () => { reach(3); go(3); };
 /* Parsed HERE, in the browser, where the file already is. Nothing is applied
  * until the preparer confirms it — spec §4 requires value, source, confidence
  * and review status for every extracted field.                              */
-async function extractPrior(file) {
-  const buf = await file.arrayBuffer();
+/** The comparative year this engagement needs: the year before its FY end. */
+function priorYear() {
+  const y = Number(String((S.eng && S.eng.fy_end) || '').slice(0, 4));
+  return Number.isFinite(y) && y > 1900 ? y - 1 : null;
+}
+
+async function extractPrior(file, opts = {}) {
+  if (file) { S.priorBuf = await file.arrayBuffer(); S.priorName = file.name; }
+  const buf = S.priorBuf;
+  if (!buf) throw new Error('no document is loaded');
   const mod = await import('./core/priorImport.js');
-  if (/\.pdf$/i.test(file.name)) {
+  if (/\.pdf$/i.test(S.priorName || '')) {
     if (!window.pdfjsLib) {
       await new Promise((ok, err) => {
         const sc = document.createElement('script');
@@ -572,7 +580,24 @@ async function extractPrior(file) {
     return mod.readPdf(window.pdfjsLib, buf);
   }
   if (!window.ExcelJS) throw new Error('the Excel library is still loading — try again in a moment');
-  return mod.readWorkbook(window.ExcelJS, buf, (S.eng && S.eng.division) || 'AS');
+  return mod.readWorkbook(window.ExcelJS, buf, (S.eng && S.eng.division) || 'AS', {
+    priorYear: opts.year !== undefined ? opts.year : priorYear(),
+    unitsFactor: opts.unitsFactor,
+  });
+}
+
+/** Re-read the document already in hand with a different year or scale. */
+async function reReadPrior() {
+  if (!S.priorBuf) return;
+  const y = ($('priorYearPick') || {}).value;
+  const u = ($('priorUnitPick') || {}).value;
+  $('priorPreview').innerHTML = '<p class="muted">Re-reading the document…</p>';
+  try {
+    renderPriorPreview(await extractPrior(null, {
+      year: y ? Number(y) : undefined,
+      unitsFactor: u ? Number(u) : undefined,
+    }));
+  } catch (e) { $('priorPreview').innerHTML = `<div class="chk CRITICAL">Could not re-read it: ${esc(e.message)}</div>`; }
 }
 
 function renderPriorPreview(x) {
@@ -582,6 +607,35 @@ function renderPriorPreview(x) {
     <b>Read from last year's financial statements</b>
     <div class="muted" style="margin:4px 0 10px">Nothing below has been applied. Check each value against the signed accounts, correct anything wrong, then confirm.</div>`;
   if (x.note) h += `<div class="chk REVIEW">${esc(x.note)}</div>`;
+
+  // WHICH COLUMN and WHAT SCALE. Both are decisions, not facts, and a wrong
+  // one is invisible in the numbers -- a working file for THIS year shows this
+  // year first, and "(All amounts in '000)" is a thousandfold error. So both
+  // are stated, and both can be changed without uploading the file again.
+  const yr = priorYear();
+  const cols = x.columns || [], units = x.units || [];
+  const years = [...new Set(cols.flatMap((c) => c.all.map((a) => a.year)).filter(Boolean))].sort((a, b) => b - a);
+  const UNIT_OPTS = [['', 'as stated in the document'], ['1', 'rupees'], ['1000', "thousands ('000)"],
+                     ['100000', 'lakhs'], ['1000000', 'millions'], ['10000000', 'crores']];
+  const unitNow = units.length ? String(units[0].applied) : '';
+  h += `<div style="border:1px solid var(--rule);border-radius:8px;padding:10px 12px;margin:10px 0;background:#fff">
+    <div class="row" style="gap:14px;align-items:flex-end">
+      <div><label>Comparative year to take</label>
+        <select id="priorYearPick">${[yr, ...years.filter((y) => y !== yr)].filter(Boolean)
+          .map((y) => `<option value="${y}"${y === yr ? ' selected' : ''}>year ended ${y}</option>`).join('')}</select></div>
+      <div><label>Amounts in the document are in</label>
+        <select id="priorUnitPick">${UNIT_OPTS.map(([v, lbl]) =>
+          `<option value="${v}"${v === unitNow && v !== '' ? ' selected' : ''}>${esc(lbl)}</option>`).join('')}</select></div>
+      <button class="btn ghost sm" id="priorReread" type="button">Re-read with these</button>
+    </div>
+    <div class="muted" style="margin-top:8px">`
+    + (cols.length
+        ? cols.map((c) => `<div>${esc(c.sheet)} → column <b>${esc(c.chosen.text)}</b> <span style="opacity:.75">(${esc(c.because)})</span></div>`).join('')
+        : '<div>No sheet yielded a period column.</div>')
+    + (units.length
+        ? units.map((u) => `<div>${esc(u.sheet)} → read as <b>${esc(u.label)}</b>, multiplied by ${u.applied.toLocaleString('en-IN')} — from ${esc(u.source || 'your choice above')}</div>`).join('')
+        : '<div>No units note found; amounts are taken as rupees.</div>')
+    + '</div></div>';
 
   h += '<h4 style="margin:12px 0 4px;font-size:12px;color:var(--mut)">PARTICULARS</h4>';
   h += f.length ? `<table class="fin"><thead><tr><th>Field</th><th>Value read</th><th>Where it was found</th><th>Use?</th></tr></thead><tbody>`
@@ -624,6 +678,7 @@ function renderPriorPreview(x) {
   h += `<div style="margin-top:12px"><button class="btn" id="priorConfirm" type="button">Confirm and use these</button>
         <button class="btn ghost" id="priorDiscard" type="button">Discard</button></div></div>`;
   $('priorPreview').innerHTML = h;
+  if ($('priorReread')) $('priorReread').onclick = reReadPrior;
   $('priorConfirm').onclick = confirmPrior;
   $('priorDiscard').onclick = () => { $('priorPreview').innerHTML = ''; S.prior = null; };
 }

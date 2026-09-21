@@ -55,8 +55,15 @@ export function cellNum(cell) {
 }
 
 /* ---------- caption → line id ------------------------------------------- */
+/**
+ * Captions are compared word by word with plurals folded away, because signed
+ * statements vary the number freely — "Employee benefit expenses" against our
+ * "Employee benefits expense" is the same line, and an exact match misses it.
+ */
+const singular = (w) => (/(ss|us|is)$/.test(w) ? w : w.replace(/ies$/, 'y').replace(/s$/, ''));
 const norm = (s) => ' ' + String(s == null ? '' : s).toLowerCase()
-  .replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim() + ' ';
+  .replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim()
+  .split(' ').map(singular).join(' ') + ' ';
 
 /** Extra wordings commonly seen on signed statements, beyond our own captions. */
 const CAPTION_ALIASES = {
@@ -65,7 +72,8 @@ const CAPTION_ALIASES = {
   share_warrants: ['money received against share warrants'],
   share_application_money: ['share application money pending allotment'],
   lt_borrowings: ['long term borrowings', 'long-term borrowings'],
-  deferred_tax_liability: ['deferred tax liabilities net', 'deferred tax liability net', 'deferred tax liabilities'],
+  deferred_tax_liability: ['deferred tax liabilities net', 'deferred tax liability net',
+    'deferred tax liabilities', 'deferred tax liability'],
   other_lt_liabilities: ['other long term liabilities', 'other long-term liabilities'],
   lt_provisions: ['long term provisions', 'long-term provisions'],
   st_borrowings: ['short term borrowings', 'short-term borrowings'],
@@ -81,7 +89,8 @@ const CAPTION_ALIASES = {
   intangibles: ['intangible assets', 'other intangible assets'],
   intangibles_under_dev: ['intangible assets under development'],
   nc_investments: ['non current investments', 'non-current investments'],
-  deferred_tax_asset: ['deferred tax assets net', 'deferred tax asset net', 'deferred tax assets'],
+  deferred_tax_asset: ['deferred tax assets net', 'deferred tax asset net',
+    'deferred tax assets', 'deferred tax asset'],
   lt_loans_advances: ['long term loans and advances', 'long-term loans and advances'],
   other_nc_assets: ['other non current assets', 'other non-current assets'],
   current_investments: ['current investments'],
@@ -236,7 +245,55 @@ function periodColumnsOn(ws, r, minCol) {
   row.eachCell({ includeEmpty: false }, (c, cn) => texts.push([cn, (cellText(c) || '').trim()]));
   const distinct = new Set(texts.map(([, t]) => t).filter(Boolean));
   if (distinct.size <= 1) return [];                       // a merged title spanning the row
-  return texts.filter(([cn, t]) => t && cn > minCol && isPeriodHeader(t)).map(([cn]) => cn);
+  return texts.filter(([cn, t]) => t && cn > minCol && isPeriodHeader(t))
+    .map(([cn, t]) => ({ c: cn, text: t.replace(/\s+/g, ' ').trim(), year: yearOf(t) }));
+}
+
+/**
+ * The financial year a column heading refers to. "As at March 31, 2025" and
+ * "FY 2024-25" both mean the year ended in 2025, so the LATER year in the
+ * heading is the one that counts.
+ */
+export function yearOf(text) {
+  const s = String(text == null ? '' : text);
+  // "FY 2025-26" and "2025-26" mean the year ENDING in 2026, which the plain
+  // four-digit scan would read as 2025.
+  const span = s.match(/\b(19|20)(\d{2})\s*[-–—/]\s*(\d{2})\b/);
+  if (span) {
+    const start = Number(span[1] + span[2]);
+    const end = Number(span[1] + span[3]) < start ? start + 1 : Number(span[1] + span[3]);
+    return end;
+  }
+  const ys = s.match(/\b(?:19|20)\d{2}\b/g);
+  return ys ? Math.max(...ys.map(Number)) : null;
+}
+
+/**
+ * The units a sheet is stated in.
+ *
+ * "(All amounts in '000 unless otherwise stated)" means 87304.54 on the face
+ * is ₹8,73,04,540. Importing that figure as rupees understates the comparative
+ * a thousandfold, so the units are read, applied, and reported — never assumed.
+ */
+export const UNIT_RULES = [
+  [/\bin\s*(?:rs\.?\s*)?['’]?\s*000\s*(?:'s)?\b|\bin\s*thousands?\b|\bthousands?\s+(?:of\s+)?rupees\b|\brupees\s+in\s+thousands?\b/i, 1000, 'thousands'],
+  [/\bin\s*(?:rs\.?\s*)?lakhs?\b|\bin\s*(?:rs\.?\s*)?lacs?\b|\brupees\s+in\s+lakhs?\b/i, 100000, 'lakhs'],
+  [/\bin\s*(?:rs\.?\s*)?millions?\b|\brupees\s+in\s+millions?\b/i, 1000000, 'millions'],
+  [/\bin\s*(?:rs\.?\s*)?crores?\b|\brupees\s+in\s+crores?\b/i, 10000000, 'crores'],
+];
+export function unitsOf(ws, scanRows = 10) {
+  for (let r = 1; r <= Math.min(scanRows, ws.rowCount || 0); r++) {
+    let found = null;
+    ws.getRow(r).eachCell({ includeEmpty: false }, (c) => {
+      if (found) return;
+      const t = cellText(c) || '';
+      for (const [rx, factor, label] of UNIT_RULES) {
+        if (rx.test(t)) { found = { factor, label, source: `${ws.name}!row ${r}: “${t.trim().slice(0, 64)}”` }; return; }
+      }
+    });
+    if (found) return found;
+  }
+  return { factor: 1, label: 'rupees', source: null };
 }
 
 function findHeader(ws) {
@@ -257,7 +314,8 @@ function findHeader(ws) {
     for (const rr of [r, r + 1, r - 1, r + 2, r - 2]) {
       if (rr < 1 || rr > (ws.rowCount || 0)) continue;
       const cols = periodColumnsOn(ws, rr, particulars);
-      if (cols.length) return { r: Math.max(r, rr), note, cy: cols[0], py: cols[1] ?? null, particulars };
+      if (cols.length) return { r: Math.max(r, rr), note, particulars, cols,
+        cy: cols[0].c, py: cols[1] ? cols[1].c : null };
     }
   }
   return null;
@@ -306,9 +364,22 @@ function isCashFlowSheet(ws) {
 
 /**
  * Prior-year figures, keyed by OUR line id.
- * Last year's CURRENT column becomes this year's comparative.
+ *
+ * WHICH COLUMN. A set of signed accounts for last year shows last year in its
+ * current column; a working file for THIS year shows this year first and the
+ * comparative beside it. Guessing "the first period column" is right for one
+ * and silently wrong for the other, so the column is chosen by the year in its
+ * heading: the one ending in `priorYear`. Where no heading carries a year, the
+ * first column is used and the choice is reported so it can be corrected.
+ *
+ * WHAT SCALE. "(All amounts in '000 unless otherwise stated)" means 87304.54
+ * on the face is ₹8,73,04,540. The units are read from the sheet and applied.
+ *
+ * @param opts.priorYear     the comparative year wanted, e.g. 2025
+ * @param opts.columnByYear  { [sheetName]: year } — the preparer's own choice
+ * @param opts.unitsFactor   overrides the units read from the sheet
  */
-export function extractFigures(wb, division = 'AS') {
+export function extractFigures(wb, division = 'AS', opts = {}) {
   const found = new Map();   // lineId -> {amount, source, caption}
   const unmatched = [];
   const take = (id, amount, source, caption) => {
@@ -318,20 +389,50 @@ export function extractFigures(wb, division = 'AS') {
   };
 
   const skipped = [];
+  const columns = [];
+  const unitsSeen = [];
   for (const ws of wb.worksheets) {
     if (isCashFlowSheet(ws)) { skipped.push({ sheet: ws.name, why: 'cash flow statement — holds movements, not balances' }); continue; }
     const H = findHeader(ws);
     if (!H) { skipped.push({ sheet: ws.name, why: 'no "Particulars" heading with a period column was found' }); continue; }
+
+    // --- which period column ---------------------------------------------
+    const wanted = (opts.columnByYear && opts.columnByYear[ws.name]) || opts.priorYear || null;
+    let pick = wanted ? H.cols.find((c) => c.year === Number(wanted)) : null;
+    let because = pick ? `heading names ${wanted}` : null;
+    if (!pick) {
+      // A working file holds sheets for other years too — a 2023-24 trial
+      // balance, a prior fixed-asset register. Reading "the first period
+      // column" off those would import a figure from the wrong year without
+      // saying so, so the sheet is skipped and named instead.
+      if (wanted) {
+        const seen = H.cols.map((c) => c.text).join('”, “');
+        skipped.push({ sheet: ws.name, why: `no column is headed ${wanted} — its period columns are “${seen}”` });
+        continue;
+      }
+      pick = H.cols[0];
+      because = 'the first period column was used';
+    }
+    columns.push({ sheet: ws.name, chosen: pick, because,
+      all: H.cols.map((c) => ({ c: c.c, text: c.text, year: c.year })) });
+
+    // --- what scale -------------------------------------------------------
+    const u = unitsOf(ws);
+    const factor = opts.unitsFactor != null ? Number(opts.unitsFactor) : u.factor;
+    if (u.factor !== 1 || opts.unitsFactor != null) unitsSeen.push({ sheet: ws.name, ...u, applied: factor });
+
     const last = ws.rowCount || 0;
     for (let r = H.r + 1; r <= last; r++) {
       const row = ws.getRow(r);
       const label = labelOf(row, H);
       if (!label) continue;
       if (/^total\b/i.test(label)) continue;          // totals are derived, never imported
-      const amount = cellNum(row.getCell(H.cy));
-      if (amount == null) continue;
+      const raw = cellNum(row.getCell(pick.c));
+      if (raw == null) continue;
+      const amount = raw * factor;
       const id = lineFromCaption(label, division);
-      if (id) take(id, amount, `${ws.name}!row ${r}`, label);
+      const src = `${ws.name}!row ${r}, column “${pick.text}”${factor !== 1 ? ` (${u.label} × ${factor.toLocaleString('en-IN')})` : ''}`;
+      if (id) take(id, amount, src, label);
       else if (Math.abs(amount) > 0) unmatched.push({ sheet: ws.name, row: r, label, amount });
     }
   }
@@ -339,19 +440,21 @@ export function extractFigures(wb, division = 'AS') {
     figures: [...found.entries()].map(([lineId, v]) => ({ lineId, ...v })),
     unmatched: unmatched.slice(0, 40),
     skippedSheets: skipped,
+    columns,
+    units: unitsSeen,
   };
 }
 
 /* ---------- entry points ------------------------------------------------- */
 /** Read an .xlsx. `ExcelJS` is injected so this stays environment-agnostic. */
-export async function readWorkbook(ExcelJS, arrayBuffer, division = 'AS') {
+export async function readWorkbook(ExcelJS, arrayBuffer, division = 'AS', opts = {}) {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(arrayBuffer);
   const cells = [];
   wb.worksheets.forEach((ws) => ws.eachRow((row, r) =>
     row.eachCell((c, cn) => { const v = cellText(c); if (v) cells.push({ sheet: ws.name, r, c: cn, v }); })));
   const particulars = extractParticulars(cells);
-  const fig = extractFigures(wb, division);
+  const fig = extractFigures(wb, division, opts);
   return { kind: 'xlsx', ...particulars, ...fig };
 }
 
