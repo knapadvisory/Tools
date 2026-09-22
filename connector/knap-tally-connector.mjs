@@ -2216,6 +2216,7 @@ const dcDenseSet = new Set();
 async function readVouchersRamp(url, from, to, onXml, prog, opts = {}) {
   const attemptMs = opts.attemptMs || 120000;
   const failFast = !!opts.failFast;
+  const maxWin = opts.maxWin || 31;              // invoice-level reads want smaller windows
   let win = opts.firstWin || 5;                  // days
   let cursor = from.getTime();
   const toMs = to.getTime();
@@ -2227,10 +2228,12 @@ async function readVouchersRamp(url, from, to, onXml, prog, opts = {}) {
       const t0 = Date.now();
       try {
         const xml = await tallyFetch(url, dcVoucherRequest(new Date(cursor), new Date(end)), attemptMs);
-        onXml(xml);
+        // awaited, so a parser that yields between vouchers keeps the connector's
+        // own HTTP server answering /api/dc/progress while it works
+        await onXml(xml);
         done = true;
         const ms = Date.now() - t0;
-        if (ms < 8000) win = Math.min(win * 2, 31);                 // fast → read bigger next
+        if (ms < 8000) win = Math.min(win * 2, maxWin);             // fast → read bigger next
         else if (ms > 45000) win = Math.max(Math.floor(win / 2), 2); // slow → back off
       } catch (e) {
         const msg = String((e && e.message) || e);
@@ -2807,8 +2810,22 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
     // dedup is sufficient.
     const seen = new Set();
     dcProgress.phase = `ITC register — vouchers ${from.toISOString().slice(0, 10)} → ${to.toISOString().slice(0, 10)}…`;
-    await readVouchersRamp(url, from, to, (xml) => {
+    // Day-based progress, as the debtor/creditor read does. Without this the
+    // caller has no idea whether a long read is working or dead.
+    const totalDays = Math.max(1, Math.round((to.getTime() - from.getTime()) / DAY_MS) + 1);
+    dcProgress.monthsTotal = totalDays; dcProgress.monthsDone = 0;
+    dcProgress.sub = 'reading…';
+    let scanned = 0;
+    await readVouchersRamp(url, from, to, async (xml) => {
       for (const block of xml.match(/<VOUCHER[\s>][\s\S]*?<\/VOUCHER>/gi) || []) {
+        // A dense window holds tens of thousands of vouchers; parsing them in
+        // one unbroken run blocks this process, and the progress endpoint stops
+        // answering, which is what makes a working read look like a hung one.
+        if ((++scanned % 400) === 0) {
+          dcProgress.sub = `${scanned.toLocaleString('en-IN')} vouchers read · ${rows.length.toLocaleString('en-IN')} with input GST`;
+          await new Promise((r) => setImmediate(r));
+          if (dcCancel) throw new Error('released by user');
+        }
         if (/(^|>)\s*Yes\s*<\/ISCANCELLED>/i.test(block.match(/<ISCANCELLED>[\s\S]*?<\/ISCANCELLED>/i)?.[0] ?? '')) continue;
         if (/<ISOPTIONAL>\s*Yes/i.test(block)) continue;
         let key = tag(block, 'GUID');
@@ -2864,7 +2881,12 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
           rcm: rcmAbs > 0.005,
         });
       }
-    }, null, { firstWin: 3, attemptMs: 90000, failFast: true });
+    }, (endDate) => {
+      dcProgress.monthsDone = Math.min(totalDays, Math.round((endDate.getTime() - from.getTime()) / DAY_MS) + 1);
+      dcProgress.sub = `to ${endDate.toISOString().slice(0, 10)} \u00b7 ${rows.length.toLocaleString('en-IN')} invoice(s) with input GST`;
+      // An invoice-level read carries far more per day than a balance read, so
+      // the window is capped short: a month of a busy company will not come back.
+    }, { firstWin: 3, attemptMs: 90000, failFast: true, maxWin: 15 });
     rows.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
     return { rows };
   } finally { state.settings.company = saved; }
@@ -4167,7 +4189,9 @@ const server = http.createServer(async (req, res) => {
       const pct = dcProgress.total ? Math.min(100, Math.round(100 * (dcProgress.done + frac) / dcProgress.total)) : 0;
       const elapsed = dcProgress.startedAt ? (Date.now() - dcProgress.startedAt) / 1000 : 0;
       const etaSec = (dcProgress.active && pct > 2 && pct < 100) ? Math.round(elapsed * (100 - pct) / pct) : null;
-      json(res, 200, { ...dcProgress, pct, etaSec });
+      // elapsedSec is the proof of life a caller needs when the fraction is not
+      // yet knowable: a clock that keeps counting means the read is running.
+      json(res, 200, { ...dcProgress, pct, etaSec, elapsedSec: Math.round(elapsed) });
       return;
     }
     // Learned aliases — confirmed groupings remembered across runs.
@@ -4605,7 +4629,11 @@ const server = http.createServer(async (req, res) => {
       if (!taxLedgers.length) { json(res, 400, { ok: false, error: 'Select at least one input-GST ledger.' }); return; }
       dcCancel = false;
       dcProgress.active = true; dcProgress.done = 0; dcProgress.total = 1; dcProgress.phase = 'Starting…'; dcProgress.sub = ''; dcProgress.startedAt = Date.now();
+      // Clear the day counters too. Left over from a previous read they make the
+      // bar show that run's position, which looks like a read frozen part-way.
+      dcProgress.monthsDone = 0; dcProgress.monthsTotal = 0;
       try {
+        dcProgress.phase = 'Reading ledger masters from Tally…';
         const one = await readItcRegister(String(body.url || state.settings.tallyUrl), String(body.company || ''), from, to, taxLedgers);
         dcProgress.active = false;
         // Distinct own-registrations seen in this company's vouchers, so the

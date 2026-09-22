@@ -127,6 +127,8 @@
   .prog{height:10px;background:var(--surface-3);border-radius:999px;overflow:hidden;margin-top:12px} .prog>i{display:block;height:100%;background:var(--green);width:0;transition:width .4s}
   .prog-line{font-size:12px;color:var(--muted);margin-top:6px;font-family:var(--mono)}
   footer{max-width:1520px;margin:20px auto 0;padding:0 22px 30px;color:var(--faint);font-size:12px}
+  .indet{background-image:repeating-linear-gradient(45deg,rgba(255,255,255,.35) 0 10px,transparent 10px 20px);animation:indet 1s linear infinite}
+  @keyframes indet{from{background-position:0 0}to{background-position:28px 0}}
 </style>
 </head>
 <body>
@@ -423,7 +425,35 @@ function fetchItc(){
       }).catch(function(e){errs.push((c.company||'company')+': '+e.message);next();});
   })();
 }
-function pollFetch(){POLL=setInterval(function(){fetch(API+'/api/dc/progress').then(function(r){return r.json();}).then(function(p){if(p&&p.phase){$('fetchLine').textContent=(p.phase||'')+' '+(p.sub||'');var pc=p.monthsTotal?Math.min(95,Math.round(p.monthsDone/p.monthsTotal*90)+10):40;$('fetchBar').style.width=pc+'%';}}).catch(function(){});},700);}
+/* Progress while Tally is read. A bar that cannot know how far along it is
+   must say so rather than parking at an invented percentage — that is what
+   made a working read look like a hung one. The elapsed clock is the proof
+   of life: if it keeps counting, the connector is alive. */
+var POLL_MISSES=0;
+function pollFetch(){
+  POLL_MISSES=0;
+  POLL=setInterval(function(){
+    fetch(API+'/api/dc/progress').then(function(r){return r.json();}).then(function(p){
+      POLL_MISSES=0;
+      if(!p||!p.phase) return;
+      var el=Math.max(0,Math.round(p.elapsedSec||0));
+      var mm=Math.floor(el/60), ss=el%60;
+      var clock=(mm?mm+'m ':'')+ss+'s';
+      var known=p.monthsTotal>0;
+      var pc=known?Math.min(97,Math.round(p.monthsDone/p.monthsTotal*90)+8):0;
+      var bar=$('fetchBar');
+      bar.classList.toggle('indet',!known);
+      bar.style.width=known?pc+'%':'100%';
+      $('fetchLine').textContent=(p.phase||'')+' '+(p.sub||'')
+        +'  \u00b7 '+clock+(known?' \u00b7 '+pc+'%':'')
+        +(p.etaSec?' \u00b7 about '+Math.ceil(p.etaSec/60)+'m left':'');
+    }).catch(function(){
+      /* The connector is single-threaded: if it stops answering for a long
+         while it is busy or gone, and the user should be told which. */
+      if(++POLL_MISSES===12) $('fetchLine').textContent='The connector has not answered for 8 seconds \u2014 it may be busy parsing a large batch. Press "Release Tally" if this does not clear.';
+    });
+  },700);
+}
 function tsum(r){return r.igst+r.cgst+r.sgst+(r.rcmIgst||0)+(r.rcmCgst||0)+(r.rcmSgst||0);}
 var lastBooksMeta={from:'',to:''};
 function showBooks(j){
