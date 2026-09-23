@@ -86,6 +86,7 @@
     <button data-v="org" type="button">Organise</button>
     <button data-v="topng" type="button">PDF → JPG</button>
     <button data-v="frompng" type="button">JPG → PDF</button>
+    <button data-v="compress" type="button">Compress</button>
   </div>
 </div>
 
@@ -188,6 +189,60 @@
       </div>
       <div class="bar" id="iBar"><div></div></div>
       <div class="row"><button class="btn" id="iGo" type="button" disabled>⬇ Create PDF</button><span class="muted" id="iStat"></span></div>
+    </div>
+  </div>
+
+  <!-- COMPRESS -->
+  <div id="v_compress" class="view hide">
+    <div class="card">
+      <h2>Compress PDF</h2>
+      <p class="sub">Make a PDF smaller — by a quality level, or down to a size you name (for portals that cap uploads). Runs in your browser; the file is never sent anywhere.</p>
+      <div class="drop" id="cDrop">Drop a PDF here, or click to choose <input type="file" id="cFile" accept="application/pdf" hidden></div>
+      <div id="cInfo" class="muted" style="margin-top:10px"></div>
+
+      <div id="cPanel" class="hide">
+        <div class="seg" id="cMode" style="margin-top:16px">
+          <button data-m="level" class="on" type="button">By quality level</button>
+          <button data-m="target" type="button">To a size I choose</button>
+        </div>
+
+        <div id="cLevelPane" class="subpane">
+          <div class="row">
+            <div><label>How hard to compress</label>
+              <select id="cLevel">
+                <option value="light">Light — least visible change</option>
+                <option value="balanced" selected>Balanced — recommended</option>
+                <option value="strong">Strong — noticeably softer</option>
+                <option value="max">Maximum — smallest file</option>
+              </select></div>
+          </div>
+        </div>
+
+        <div id="cTargetPane" class="subpane hide">
+          <div class="row">
+            <div><label>Target size</label><input id="cTargetN" type="number" min="1" step="1" value="500" style="width:110px"></div>
+            <div><label>Unit</label><select id="cTargetU"><option value="1024" selected>KB</option><option value="1048576">MB</option></select></div>
+          </div>
+          <div class="muted" style="margin-top:8px">The tool tries the best quality that fits under this size. If even the lowest setting cannot reach it, it says so and gives you the smallest it managed — it will not pretend to have hit a size it did not.</div>
+        </div>
+
+        <div class="row" style="margin-top:16px">
+          <div style="min-width:300px;flex:1"><label>Method</label>
+            <select id="cMethod">
+              <option value="image" selected>Rebuild pages as images — large reduction, text stops being selectable</option>
+              <option value="structure">Tidy the file structure only — keeps text selectable, modest reduction</option>
+            </select></div>
+        </div>
+        <label class="chk"><input type="checkbox" id="cGrey"> Convert to greyscale — much smaller for scans, and colour is lost</label>
+        <div class="hint" id="cHint"></div>
+      </div>
+
+      <div class="bar" id="cBar"><div></div></div>
+      <div class="row"><button class="btn" id="cGo" type="button" disabled>Compress</button><span class="muted" id="cStat"></span></div>
+      <div id="cResult" class="hide" style="margin-top:16px;border:1px solid var(--rule);border-radius:10px;padding:14px 16px;background:#fafbfa">
+        <div id="cResultText"></div>
+        <div class="row"><button class="btn" id="cDl" type="button">⬇ Download the compressed PDF</button></div>
+      </div>
     </div>
   </div>
 </main>
