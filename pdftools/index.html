@@ -87,6 +87,7 @@
     <button data-v="topng" type="button">PDF → JPG</button>
     <button data-v="frompng" type="button">JPG → PDF</button>
     <button data-v="compress" type="button">Compress</button>
+    <button data-v="xls" type="button">Excel → PDF</button>
   </div>
 </div>
 
@@ -196,9 +197,11 @@
   <div id="v_compress" class="view hide">
     <div class="card">
       <h2>Compress PDF</h2>
-      <p class="sub">Make a PDF smaller — by a quality level, or down to a size you name (for portals that cap uploads). Runs in your browser; the file is never sent anywhere.</p>
-      <div class="drop" id="cDrop">Drop a PDF here, or click to choose <input type="file" id="cFile" accept="application/pdf" hidden></div>
+      <p class="sub">Make PDFs smaller — by a quality level, or down to a size you name for portals that cap uploads. Add as many files as you like; each is compressed on its own and they come back as a ZIP. Runs in your browser, so nothing is uploaded.</p>
+      <div class="drop" id="cDrop">Drop PDFs here, or click to choose <input type="file" id="cFile" accept="application/pdf" multiple hidden></div>
+      <ul class="files" id="cList"></ul>
       <div id="cInfo" class="muted" style="margin-top:10px"></div>
+      <div id="cBig" class="hide" style="margin-top:10px;font-size:13px;color:#6f4410;background:var(--warn-soft);border:1px solid #f0dcb4;border-radius:8px;padding:9px 12px"></div>
 
       <div id="cPanel" class="hide">
         <div class="seg" id="cMode" style="margin-top:16px">
@@ -223,7 +226,7 @@
             <div><label>Target size</label><input id="cTargetN" type="number" min="1" step="1" value="500" style="width:110px"></div>
             <div><label>Unit</label><select id="cTargetU"><option value="1024" selected>KB</option><option value="1048576">MB</option></select></div>
           </div>
-          <div class="muted" style="margin-top:8px">The tool tries the best quality that fits under this size. If even the lowest setting cannot reach it, it says so and gives you the smallest it managed — it will not pretend to have hit a size it did not.</div>
+          <div class="muted" style="margin-top:8px">Applied to <b>each file separately</b>. The tool tries the best quality that fits under this size. If even the lowest setting cannot reach it, it says so and gives you the smallest it managed — it will not pretend to have hit a size it did not.</div>
         </div>
 
         <div class="row" style="margin-top:16px">
@@ -238,13 +241,57 @@
       </div>
 
       <div class="bar" id="cBar"><div></div></div>
-      <div class="row"><button class="btn" id="cGo" type="button" disabled>Compress</button><span class="muted" id="cStat"></span></div>
+      <div class="row">
+        <button class="btn" id="cGo" type="button" disabled>Compress</button>
+        <button class="btn ghost" id="cStop" type="button" style="display:none">Stop</button>
+        <span class="muted" id="cStat"></span>
+      </div>
       <div id="cResult" class="hide" style="margin-top:16px;border:1px solid var(--rule);border-radius:10px;padding:14px 16px;background:#fafbfa">
         <div id="cResultText"></div>
-        <div class="row"><button class="btn" id="cDl" type="button">⬇ Download the compressed PDF</button></div>
+        <div class="row"><button class="btn" id="cDl" type="button">⬇ Download</button></div>
       </div>
     </div>
   </div>
+
+  <!-- EXCEL -> PDF -->
+  <div id="v_xls" class="view hide">
+    <div class="card">
+      <h2>Excel → PDF</h2>
+      <p class="sub">Turn a workbook into a clean, printable PDF — one table per sheet, with column widths, merged cells, number and date formats, and the header row repeated on every page. Runs in your browser.</p>
+      <div class="drop" id="xDrop">Drop an .xlsx or .csv here, or click to choose <input type="file" id="xFile" accept=".xlsx,.xlsm,.csv,text/csv" hidden></div>
+      <div id="xInfo" class="muted" style="margin-top:10px"></div>
+
+      <div id="xPanel" class="hide">
+        <div style="margin-top:14px">
+          <label>Sheets to include</label>
+          <div id="xSheets" style="display:flex;flex-wrap:wrap;gap:10px 18px;margin-top:4px"></div>
+        </div>
+        <div class="row">
+          <div><label>Paper</label><select id="xPaper">
+            <option value="a4" selected>A4</option><option value="a3">A3</option><option value="letter">Letter</option><option value="legal">Legal</option>
+          </select></div>
+          <div><label>Orientation</label><select id="xOrient">
+            <option value="auto" selected>Automatic</option><option value="portrait">Portrait</option><option value="landscape">Landscape</option>
+          </select></div>
+          <div><label>Wide sheets</label><select id="xFit">
+            <option value="width" selected>Shrink to fit the page width</option>
+            <option value="spill">Keep the size, continue on further pages</option>
+          </select></div>
+          <div><label>Font size</label><select id="xFont">
+            <option value="7">7 pt</option><option value="8" selected>8 pt</option><option value="9">9 pt</option><option value="10">10 pt</option>
+          </select></div>
+        </div>
+        <label class="chk"><input type="checkbox" id="xGrid" checked> Draw gridlines</label>
+        <label class="chk"><input type="checkbox" id="xHead" checked> Repeat the first row of each sheet as a header on every page</label>
+        <label class="chk"><input type="checkbox" id="xTitle" checked> Print the sheet name and page numbers</label>
+        <div class="hint" id="xHint">Cell <b>values</b> are laid out as a table — widths, merges, number and date formats, bold, and alignment. It is not a pixel copy of Excel: charts, images, conditional formatting, colours and exact fonts are not reproduced. A formula shows the result Excel last saved with it; a workbook saved without calculating shows those cells blank, and the tool says so.</div>
+      </div>
+
+      <div class="bar" id="xBar"><div></div></div>
+      <div class="row"><button class="btn" id="xGo" type="button" disabled>⬇ Create PDF</button><span class="muted" id="xStat"></span></div>
+    </div>
+  </div>
+
 </main>
 
 <script src="pdf-lib.min.js"></script>
