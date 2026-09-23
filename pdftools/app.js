@@ -489,9 +489,17 @@ async function cSearch(pdf,sample,target,grey,onPct){
   }
   return chosen;
 }
+/* Pages sampled to judge a setting. Sampling costs a handful of renders;
+   getting the estimate wrong costs a whole extra pass over the document, so a
+   long document is sampled more widely — it is much the cheaper trade. */
 function cSamplePages(n){
-  if(n<=4){ var all=[]; for(var i=1;i<=n;i++) all.push(i); return all; }
-  return [1, Math.round(n*0.35)||1, Math.round(n*0.7)||1, n];
+  if(n<=6){ var all=[]; for(var i=1;i<=n;i++) all.push(i); return all; }
+  var k = n>120 ? 8 : (n>40 ? 6 : 4), out=[], seen={};
+  for(var j=0;j<k;j++){
+    var pg=Math.max(1,Math.min(n, Math.round(1 + j*(n-1)/(k-1))));
+    if(!seen[pg]){ seen[pg]=1; out.push(pg); }
+  }
+  return out;
 }
 
 /* ---- the queue ---- */
@@ -589,7 +597,11 @@ async function cCompressOne(it,opts,onPct,onStat){
     onStat('Compressing…');
     var best=await cBuild(pdf,chosen.scale,chosen.q,opts.grey,function(p){onPct(25+Math.round(p*0.45));});
 
-    for(var pass=0; pass<2; pass++){
+    /* Each correcting pass re-encodes the WHOLE document. On a long document
+       that is minutes, and the wider sample above makes the first estimate
+       good enough that a second correction rarely earns its cost. */
+    var maxPasses = pdf.numPages>150 ? 1 : 2;
+    for(var pass=0; pass<maxPasses; pass++){
       var over = best.length > target;
       var wasteful = best.length < target*0.72;        // quality given away for nothing
       if(!over && !wasteful) break;
