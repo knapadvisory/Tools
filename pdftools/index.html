@@ -266,6 +266,8 @@
           <label>Sheets to include</label>
           <div id="xSheets" style="display:flex;flex-wrap:wrap;gap:10px 18px;margin-top:4px"></div>
         </div>
+        <label class="chk" style="margin-top:14px"><input type="checkbox" id="xOwn" checked> <b>Use each sheet’s own print setup from Excel</b> — print area, paper, orientation, margins, scale, repeating rows</label>
+        <div id="xManual" class="hide">
         <div class="row">
           <div><label>Paper</label><select id="xPaper">
             <option value="a4" selected>A4</option><option value="a3">A3</option><option value="letter">Letter</option><option value="legal">Legal</option>
@@ -281,8 +283,9 @@
             <option value="7">7 pt</option><option value="8" selected>8 pt</option><option value="9">9 pt</option><option value="10">10 pt</option>
           </select></div>
         </div>
-        <label class="chk"><input type="checkbox" id="xGrid" checked> Draw gridlines</label>
         <label class="chk"><input type="checkbox" id="xHead" checked> Repeat the first row of each sheet as a header on every page</label>
+        </div>
+        <label class="chk"><input type="checkbox" id="xGrid" checked> Draw gridlines</label>
         <label class="chk"><input type="checkbox" id="xTitle" checked> Print the sheet name and page numbers</label>
         <div class="hint" id="xHint">Cell <b>values</b> are laid out as a table — widths, merges, number and date formats, bold, and alignment. It is not a pixel copy of Excel: charts, images, conditional formatting, colours and exact fonts are not reproduced. A formula shows the result Excel last saved with it; a workbook saved without calculating shows those cells blank, and the tool says so.</div>
       </div>

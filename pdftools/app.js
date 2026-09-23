@@ -715,17 +715,30 @@ $('#cGo').addEventListener('click',function(){
 
 $('#cDl').addEventListener('click',function(){ if(cOut) dl(cOut,cOutName); });
 
-/* ---------------- EXCEL → PDF ----------------
-   A workbook holds values, widths, merges and formats. This lays those out as
-   a printable table — it does NOT try to be a picture of Excel. Charts, images,
-   conditional formatting, fills and exact fonts are not reproduced, and the
-   page says so rather than letting the output imply otherwise.
 
-   ExcelJS is ~1 MB, so it is fetched only when this tab is actually used. */
+/* ---------------- EXCEL → PDF ----------------
+   A workbook that has been set up for printing already answers every question
+   this tool would otherwise have to guess at: which range to print, at what
+   scale, on which paper, which way round, with what margins, and which sheets
+   are working papers that must not appear at all. So the sheet's own print
+   setup is what gets used — print area, orientation, paper size, margins,
+   scale or fit-to-width, repeating title rows, row heights, hidden rows and
+   columns, and hidden sheets.
+
+   That is the whole difference between a statement set that prints the way its
+   preparer intended and forty pages that spill working columns full of #REF!
+   across the paper.
+
+   It still does NOT claim to be a picture of Excel: charts, images, cell fills,
+   conditional formatting and exact fonts are not reproduced, and the page says
+   so. ExcelJS is ~1 MB, so it is fetched only when this tab is used. */
 
 var xWb=null, xName='', xSheets=[];
-var X_PAPER={ a4:[595.28,841.89], a3:[841.89,1190.55], letter:[612,792], legal:[612,1008] };
-var X_MARGIN=28;
+var esc2=function(t){ return String(t).replace(/[&<>]/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[ch];}); };
+var X_PAPER={ a4:[595.28,841.89], a3:[841.89,1190.55], a5:[419.53,595.28], letter:[612,792], legal:[612,1008] };
+/* Excel's numeric paper codes, the handful that matter here. */
+var X_PAPER_CODE={ 1:'letter', 5:'legal', 8:'a3', 9:'a4', 11:'a5' };
+var X_DEFAULT_FONT=11;              // Excel's own default point size
 
 function xLoadExcelJs(){
   if(window.ExcelJS) return Promise.resolve();
@@ -735,11 +748,81 @@ function xLoadExcelJs(){
     document.head.appendChild(sc);
   });
 }
-
+/* "BC12" → 55 */
+function xColOf(addr){
+  var m=String(addr).match(/([A-Z]+)/i); if(!m) return 1;
+  var t=m[1].toUpperCase(), n=0;
+  for(var i=0;i<t.length;i++) n=n*26+(t.charCodeAt(i)-64);
+  return n;
+}
+function xRowOf(addr){ var m=String(addr).match(/(\d+)/); return m?parseInt(m[1],10):1; }
+/** "A1:E57" (or "A1") → {r1,c1,r2,c2} */
+function xRangeOf(a1){
+  var t=String(a1).replace(/[$'"]/g,'').split('!').pop().split(':');
+  var c1=xColOf(t[0]), r1=xRowOf(t[0]);
+  var c2=t[1]?xColOf(t[1]):c1, r2=t[1]?xRowOf(t[1]):r1;
+  return { r1:Math.min(r1,r2), c1:Math.min(c1,c2), r2:Math.max(r1,r2), c2:Math.max(c1,c2) };
+}
 /* Excel's column width is measured in characters of the default font; the
    usual conversion is px = chars*7 + 5, and PDF points are px*72/96. */
-function xColPoints(w){ return ((w==null?10:w)*7+5)*0.75; }
+function xColPoints(w){ return ((w==null?8.43:w)*7+5)*0.75; }
 
+/** What the sheet itself says about printing. */
+function xSetup(ws){
+  var ps=ws.pageSetup||{}, m=ps.margins||{};
+  var fit = ps.fitToPage===true;
+  return {
+    paper: X_PAPER_CODE[ps.paperSize] || 'a4',
+    landscape: ps.orientation==='landscape',
+    ml:(m.left==null?0.7:m.left)*72,  mr:(m.right==null?0.7:m.right)*72,
+    mt:(m.top==null?0.75:m.top)*72,   mb:(m.bottom==null?0.75:m.bottom)*72,
+    scale: (!fit && ps.scale) ? ps.scale/100 : 1,
+    fitWidth: fit && (ps.fitToWidth==null || ps.fitToWidth>=1),
+    areas: ps.printArea ? String(ps.printArea).split(/[,;]/).filter(Boolean).map(xRangeOf) : null,
+    titles: ps.printTitlesRow ? String(ps.printTitlesRow).replace(/\$/g,'').split(':').map(Number) : null,
+    hCenter: !!ps.horizontalCentered
+  };
+}
+
+/* A formula cell whose result Excel never cached, where the formula is NOTHING
+   BUT a reference to one other cell — "+'3-9'!D243". Following that reference
+   is not evaluation: there is no arithmetic and no function, so the figure is
+   the one Excel would show, exactly. Anything with an operator in it is left
+   blank and counted, because a guessed figure in a financial statement is far
+   worse than an obvious gap.                                               */
+var X_REF_ONLY=/^\s*\+?\s*(?:(?:'([^']+)'|([A-Za-z0-9_.\- ]+))!)?\$?([A-Z]{1,3})\$?(\d{1,7})\s*$/;
+function xDeref(wb,ws,v,depth){
+  depth=depth||0;
+  if(depth>4 || !v || typeof v!=='object' || v.formula==null || ('result' in v)) return v;
+  var m=X_REF_ONLY.exec(String(v.formula));
+  if(!m) return v;
+  var tgt = (m[1]||m[2]) ? wb.getWorksheet(m[1]||m[2]) : ws;
+  if(!tgt) return v;
+  var cell;
+  try{ cell=tgt.getRow(Number(m[4])).getCell(xColOf(m[3])); }catch(_){ return v; }
+  if(!cell) return v;
+  return xDeref(wb,tgt,cell.value,depth+1);
+}
+/* The section of a number format that applies to this value: positive,
+   negative, zero, or the first section when the format has only one. The split
+   must ignore a semicolon inside quotes or escaped, or a format carrying one as
+   a literal would be cut in half. */
+function xSection(fmt,n){
+  var f=String(fmt||''); if(!f) return null;
+  var parts=[], cur='', q=false;
+  for(var i=0;i<f.length;i++){
+    var ch=f[i];
+    if(ch==='\\'){ cur+=ch+(f[++i]||''); continue; }
+    if(ch==='"'){ q=!q; cur+=ch; continue; }
+    if(ch===';' && !q){ parts.push(cur); cur=''; continue; }
+    cur+=ch;
+  }
+  parts.push(cur);
+  if(parts.length===1) return parts[0];
+  if(n>0) return parts[0];
+  if(n<0) return parts[1]!==undefined?parts[1]:parts[0];
+  return parts[2]!==undefined?parts[2]:parts[0];
+}
 /* Enough of Excel's number formats to print a schedule correctly: dates, and
    numbers with the thousands separator and decimal places the sheet asks for.
    Anything else is printed as the value reads — never invented. */
@@ -759,19 +842,66 @@ function xFormat(v,numFmt){
   }
   if(typeof v==='number'){
     var f=String(numFmt||'');
-    if(/[dmy]/i.test(f) && /[dmy]{2}/i.test(f)){              // a date serial
+    if(/[dmy]{2}/i.test(f) && !/[#0]/.test(f.replace(/\[[^\]]*\]/g,''))){   // a date serial
       var ms=Date.UTC(1899,11,30)+Math.round(v*86400000);
       return xFormat(new Date(ms),null);
     }
-    var dec=0, m=f.match(/\.(0+)/); if(m) dec=m[1].length;
-    var pct=/%/.test(f);
+    /* A number format has up to four sections — positive; negative; zero; text
+       — and the section that applies decides everything. The accounting format
+       every statement in India is built on,
+           _(* #,##0.00_);_(* (#,##0.00);_(* "-"??_);_(@_)
+       puts a literal dash in its ZERO section, which is why a nil line prints
+       as "-" and not as "0.00". Reading only the first section, as this used
+       to, gets every nil figure in a statement wrong. */
+    var sec=xSection(f, v);
+    if(sec!=null && !/[#0]/.test(sec.replace(/"[^"]*"/g,'').replace(/\\./g,''))){
+      // no digit placeholder left: the section is a literal, e.g. "-"
+      var lit=(sec.match(/"([^"]*)"/g)||[]).map(function(q){return q.slice(1,-1);}).join('');
+      if(!lit) lit=sec.replace(/[_*\\]./g,'').replace(/[()]/g,'').trim();
+      return lit;
+    }
+    var body = sec==null ? f : sec;
+    var dec=0, m=body.match(/\.(0+)/); if(m) dec=m[1].length;
+    var pct=/%/.test(body);
     var n=pct? v*100 : v;
-    var out=n.toLocaleString('en-IN',{minimumFractionDigits:dec,maximumFractionDigits:dec});
-    if(/\(#|\(0/.test(f) && n<0) out='('+out.replace('-','')+')';
+    var out=Math.abs(n).toLocaleString('en-IN',{minimumFractionDigits:dec,maximumFractionDigits:dec});
+    // Excel shows a negative in brackets when ITS OWN section says so
+    if(n<0) out = /\(/.test(body) ? '('+out+')' : '-'+out;
     return pct? out+'%' : out;
   }
   if(typeof v==='boolean') return v?'TRUE':'FALSE';
   return String(v);
+}
+/* pdf-lib's standard fonts are WinAnsi: a rupee sign or a smart quote throws.
+   Substitute rather than fail the whole document over one glyph. */
+function xSafe(t){
+  return String(t)
+    .replace(/₹/g,'Rs.').replace(/[‘’]/g,"'").replace(/[“”]/g,'"')
+    .replace(/[–—]/g,'-').replace(/…/g,'...').replace(/ /g,' ')
+    .replace(/\r\n?/g,'\n').replace(/\t/g,' ')    // a line break inside a cell stays a break
+    .replace(/[^\n\x20-\xff]/g,'?');              // everything else must be printable
+}
+/* A cell's text as the lines it will occupy: its own Alt+Enter breaks first,
+   then wrapping within each of those. drawText cannot take a newline, and a
+   width measured across one is meaningless. */
+function xLines(text,font,size,maxW,wrap){
+  var parts=String(text).split('\n'), out=[];
+  for(var i=0;i<parts.length;i++){
+    if(!wrap){ out.push(parts[i]); continue; }
+    var ls=xWrap(parts[i],font,size,maxW);
+    for(var j=0;j<ls.length;j++) out.push(ls[j]);
+  }
+  return out.length?out:[''];
+}
+/* The widest of a cell's own lines — never the string with breaks still in it. */
+function xNaturalW(text,font,size){
+  var parts=String(text).split('\n'), w=0;
+  for(var i=0;i<parts.length;i++){
+    var t;
+    try{ t=font.widthOfTextAtSize(parts[i],size); }catch(_){ t=parts[i].length*size*0.5; }
+    if(t>w) w=t;
+  }
+  return w;
 }
 /* Break a string to fit a width, on spaces where possible and mid-word when a
    single token is longer than the column. */
@@ -780,9 +910,7 @@ function xWrap(text,font,size,maxW){
   var W=function(t){ try{ return font.widthOfTextAtSize(t,size); }catch(_){ return t.length*size*0.5; } };
   function pushLong(w){
     var s='';
-    for(var i=0;i<w.length;i++){
-      if(W(s+w[i])>maxW && s){ lines.push(s); s=w[i]; } else s+=w[i];
-    }
+    for(var i=0;i<w.length;i++){ if(W(s+w[i])>maxW && s){ lines.push(s); s=w[i]; } else s+=w[i]; }
     cur=s;
   }
   for(var i=0;i<words.length;i++){
@@ -794,14 +922,6 @@ function xWrap(text,font,size,maxW){
   }
   if(cur) lines.push(cur);
   return lines.length?lines:[''];
-}
-/* pdf-lib's standard fonts are WinAnsi: a rupee sign or a smart quote throws.
-   Substitute rather than fail the whole document over one glyph. */
-function xSafe(t){
-  return String(t)
-    .replace(/₹/g,'Rs.').replace(/[‘’]/g,"'").replace(/[“”]/g,'"')
-    .replace(/[–—]/g,'-').replace(/…/g,'...').replace(/ /g,' ')
-    .replace(/[^\x09\x0a\x0d\x20-\xff]/g,'?');
 }
 
 setupDrop('#xDrop','#xFile',function(fs){
@@ -815,8 +935,7 @@ setupDrop('#xDrop','#xFile',function(fs){
       var ws=wb.addWorksheet(f.name.replace(/\.csv$/i,'').slice(0,28)||'Sheet1');
       text.split(/\r?\n/).forEach(function(line){
         if(line==='') return;
-        // split on commas outside quotes
-        var cells=[], cur='', q=false;
+        var cells=[], cur='', q=false;                      // commas inside quotes are data
         for(var i=0;i<line.length;i++){
           var ch=line[i];
           if(ch==='"'){ if(q&&line[i+1]==='"'){cur+='"';i++;} else q=!q; }
@@ -830,18 +949,27 @@ setupDrop('#xDrop','#xFile',function(fs){
       await wb.xlsx.load(buf);
     }
     xWb=wb; xSheets=[];
-    wb.eachSheet(function(ws){ xSheets.push({ name:ws.name, rows:ws.actualRowCount||ws.rowCount||0, on:true }); });
+    wb.eachSheet(function(ws){
+      var st=xSetup(ws);
+      var hidden = ws.state==='hidden' || ws.state==='veryHidden';
+      xSheets.push({ name:ws.name, rows:ws.actualRowCount||ws.rowCount||0, hidden:hidden,
+                     area:st.areas?st.areas.map(function(a){return a;}):null, on:!hidden });
+    });
     if(!xSheets.length) throw new Error('this workbook has no sheets');
+    var anyHidden=xSheets.some(function(s){return s.hidden;});
     $('#xSheets').innerHTML=xSheets.map(function(s,i){
-      return '<label class="chk" style="margin:0"><input type="checkbox" data-xs="'+i+'" checked> '
-        +s.name.replace(/[&<>]/g,'')+' <span class="muted">('+s.rows+' rows)</span></label>';
+      var note = s.hidden ? ' <span class="pill warn">hidden in Excel</span>'
+               : (s.area ? ' <span class="muted">print area set</span>' : '');
+      return '<label class="chk" style="margin:0"><input type="checkbox" data-xs="'+i+'"'+(s.on?' checked':'')+'> '
+        +s.name.replace(/[&<>]/g,'')+' <span class="muted">('+s.rows+' rows)</span>'+note+'</label>';
     }).join('');
     $('#xSheets').querySelectorAll('[data-xs]').forEach(function(cb){
       cb.addEventListener('change',function(){ xSheets[+cb.dataset.xs].on=cb.checked;
         $('#xGo').disabled=!xSheets.some(function(s){return s.on;}); });
     });
-    $('#xInfo').innerHTML='<b>'+f.name+'</b> — '+xSheets.length+' sheet(s), '+fmtSize(f.size);
-    $('#xPanel').classList.remove('hide'); $('#xGo').disabled=false;
+    $('#xInfo').innerHTML='<b>'+f.name+'</b> — '+xSheets.length+' sheet(s), '+fmtSize(f.size)
+      + (anyHidden ? ' · sheets hidden in Excel are left unticked' : '');
+    $('#xPanel').classList.remove('hide'); $('#xGo').disabled=false; xUpdateHint();
   }).catch(function(e){
     var msg=e.message||String(e);
     if(/\.xls$/i.test(f.name)) msg='this is a legacy .xls file, which cannot be read here — open it in Excel and save as .xlsx';
@@ -850,148 +978,200 @@ setupDrop('#xDrop','#xFile',function(fs){
   });
 });
 
+var xOwn=function(){ var el=$('#xOwn'); return !el || el.checked; };
+function xUpdateHint(){
+  $('#xManual').classList.toggle('hide', xOwn());
+  var h=$('#xHint');
+  h.innerHTML = xOwn()
+    ? 'Using each sheet’s own print setup from Excel — print area, paper, orientation, margins, scale or fit-to-width, repeating title rows, row heights, and hidden rows and columns. '
+      +'This is what Excel itself would print. It is still not a picture of Excel: charts, images, cell fills, conditional formatting and exact fonts are not reproduced.'
+    : 'Ignoring the sheets’ print setup and using the settings above instead. The whole used range of each sheet is printed, including any working columns the print area was there to exclude.';
+}
+['#xOwn','#xPaper','#xOrient','#xFit','#xFont','#xGrid','#xHead','#xTitle'].forEach(function(sel){
+  var el=$(sel); if(el) el.addEventListener('change',xUpdateHint);
+});
+
 $('#xGo').addEventListener('click',function(){
   if(!xWb) return;
   $('#xStat').textContent='Building…'; bar('xBar',0); $('#xGo').disabled=true;
   (async function(){
-    var paper=X_PAPER[$('#xPaper').value]||X_PAPER.a4;
-    var orient=$('#xOrient').value, fitMode=$('#xFit').value;
-    var size=+$('#xFont').value||8, grid=$('#xGrid').checked, repHead=$('#xHead').checked, titles=$('#xTitle').checked;
+    var useOwn=xOwn();
+    var manPaper=X_PAPER[$('#xPaper').value]||X_PAPER.a4, manOrient=$('#xOrient').value;
+    var manFit=$('#xFit').value, manSize=+$('#xFont').value||8;
+    var grid=$('#xGrid').checked, repHead=$('#xHead').checked, titles=$('#xTitle').checked;
 
     var out=await PDFDocument.create();
-    var font=await out.embedFont(PDFLib.StandardFonts.Helvetica);
-    var bold=await out.embedFont(PDFLib.StandardFonts.HelveticaBold);
+    var F={ n:await out.embedFont(PDFLib.StandardFonts.Helvetica),
+            b:await out.embedFont(PDFLib.StandardFonts.HelveticaBold),
+            i:await out.embedFont(PDFLib.StandardFonts.HelveticaOblique),
+            bi:await out.embedFont(PDFLib.StandardFonts.HelveticaBoldOblique) };
+    var pickFont=function(bold,ital){ return bold?(ital?F.bi:F.b):(ital?F.i:F.n); };
     var wanted=xSheets.filter(function(s){return s.on;});
-    var uncalculated=0, pagesMade=0;
+    var uncalculated=0, pagesMade=0, uncalcWhere=[];
 
     for(var si=0; si<wanted.length; si++){
-      var ws=xWb.getWorksheet(wanted[si].name);
-      if(!ws) continue;
+      var ws=xWb.getWorksheet(wanted[si].name); if(!ws) continue;
+      var st=xSetup(ws);
 
-      /* ---- read the sheet into a grid of {text,bold,align,span} ---- */
-      var lastCol=Math.max(1, ws.actualColumnCount||ws.columnCount||1);
-      var explicit=[]; for(var c=1;c<=lastCol;c++) explicit.push((ws.getColumn(c)||{}).width);
-      var skip={};                                   // "r,c" covered by a merge
-      var rows=[];
-      ws.eachRow({includeEmpty:true},function(row,rn){
-        var cells=[];
-        for(var c=1;c<=lastCol;c++){
-          if(skip[rn+','+c]){ cells.push(null); continue; }
-          var cell=row.getCell(c);
-          var span=1;
-          if(cell.isMerged && cell.master && cell.master.address===cell.address){
-            // a merged block: find how far right it runs, and mask the rest
-            var m=(ws.model.merges||[]).find(function(x){ return x.split(':')[0]===cell.address; });
-            if(m){
-              var a=m.split(':'), c2=xColOf(a[1]), r2=parseInt(a[1].replace(/[A-Z]+/gi,''),10);
-              span=Math.max(1,c2-c+1);
-              for(var rr=rn;rr<=r2;rr++) for(var cc=c;cc<=c2;cc++) if(!(rr===rn&&cc===c)) skip[rr+','+cc]=1;
-            }
-          } else if(cell.isMerged){ cells.push(null); continue; }
-          var raw=cell.value;
-          if(raw && typeof raw==='object' && raw.formula!=null && !('result' in raw)) uncalculated++;
-          var txt=xSafe(xFormat(raw,cell.numFmt));
-          var al=(cell.alignment&&cell.alignment.horizontal)||null;
-          cells.push({ text:txt, bold:!!(cell.font&&cell.font.bold), span:span,
-                       align: al || (typeof raw==='number' ? 'right' : 'left') });
-        }
-        rows.push(cells);
+      /* ---- what to print ---- */
+      var usedR=ws.actualRowCount||ws.rowCount||0, usedC=ws.actualColumnCount||ws.columnCount||1;
+      var areas = (useOwn && st.areas && st.areas.length) ? st.areas
+                : [{ r1:1, c1:1, r2:Math.max(1,usedR), c2:Math.max(1,usedC) }];
+
+      /* ---- merges, once per sheet ---- */
+      var mergeAt={}, covered={};
+      (ws.model.merges||[]).forEach(function(mm){
+        var R=xRangeOf(mm);
+        mergeAt[R.r1+','+R.c1]=R;
+        for(var r=R.r1;r<=R.r2;r++) for(var c=R.c1;c<=R.c2;c++) if(!(r===R.r1&&c===R.c1)) covered[r+','+c]=1;
       });
-      // drop trailing empty rows
-      while(rows.length && rows[rows.length-1].every(function(x){return !x||!x.text;})) rows.pop();
-      if(!rows.length) continue;
 
-      /* A column the sheet never sized — every column of a CSV — is measured
-         from what is actually in it. Excel's own widths still win where they
-         are set. A merged title is ignored: it spans the table and would make
-         the first column absurdly wide. */
-      var widths=[];
-      for(var ci2=0; ci2<lastCol; ci2++){
-        if(explicit[ci2]!=null){ widths.push(xColPoints(explicit[ci2])); continue; }
-        var maxW=0, looked=0;
-        for(var ri2=0; ri2<rows.length && looked<400; ri2++){
-          var cl=rows[ri2][ci2];
-          if(!cl||!cl.text||cl.span>1) continue;
-          looked++;
-          var w2=(cl.bold?bold:font).widthOfTextAtSize(cl.text,size);
-          if(w2>maxW) maxW=w2;
+      var paper = useOwn ? (X_PAPER[st.paper]||X_PAPER.a4) : manPaper;
+      var defRowH = (ws.properties&&ws.properties.defaultRowHeight) || 15;
+      var defFont = (ws.properties&&ws.properties.defaultFontSize) || X_DEFAULT_FONT;
+
+      for(var ai=0; ai<areas.length; ai++){
+        var A=areas[ai];
+        A={ r1:A.r1, c1:A.c1, r2:Math.min(A.r2, Math.max(A.r1, usedR||A.r2)), c2:A.c2 };
+
+        /* ---- columns ---- */
+        var cols=[];
+        for(var c=A.c1;c<=A.c2;c++){
+          var col=ws.getColumn(c)||{};
+          cols.push({ idx:c, w: col.hidden ? 0 : xColPoints(col.width) });
         }
-        widths.push(Math.min(Math.max(maxW+10, 30), 300));   // floor ~0.4in, ceiling ~4in
-      }
 
-      /* ---- page geometry ---- */
-      var totalW=widths.reduce(function(a,b){return a+b;},0);
-      var land = orient==='landscape' || (orient==='auto' && totalW > paper[0]-2*X_MARGIN);
-      var pw = land? paper[1] : paper[0], ph = land? paper[0] : paper[1];
-      var availW = pw-2*X_MARGIN;
-      var colW = widths.slice(), scale=1;
-      if(fitMode==='width' && totalW>availW){ scale=availW/totalW; colW=widths.map(function(w){return w*scale;}); }
-      var fsize=Math.max(5, size*(scale<1?Math.max(0.7,scale):1));
-
-      /* columns are cut into bands that each fit a page when not shrinking */
-      var bands=[];
-      if(fitMode==='width'){ bands=[{from:0,to:colW.length-1}]; }
-      else {
-        var b={from:0,to:0}, acc=0;
-        for(var ci=0;ci<colW.length;ci++){
-          if(acc+colW[ci]>availW && ci>b.from){ b.to=ci-1; bands.push(b); b={from:ci,to:ci}; acc=0; }
-          acc+=colW[ci]; b.to=ci;
-        }
-        bands.push(b);
-      }
-
-      var lineH=fsize*1.35, pad=3;
-      for(var bi=0; bi<bands.length; bi++){
-        var band=bands[bi], page=null, y=0, pageNo=0;
-        var headerRow = repHead? rows[0] : null;
-
-        var newPage=function(){
-          page=out.addPage([pw,ph]); pagesMade++; pageNo++;
-          y=ph-X_MARGIN;
-          if(titles){
-            var t=wanted[si].name+(bands.length>1?(' — columns '+(band.from+1)+'–'+(band.to+1)):'');
-            page.drawText(xSafe(t),{x:X_MARGIN,y:y-9,size:9,font:bold,color:PDFLib.rgb(0.09,0.25,0.16)});
-            var lbl='Page '+pageNo;
-            page.drawText(lbl,{x:pw-X_MARGIN-font.widthOfTextAtSize(lbl,8),y:y-9,size:8,font:font,color:PDFLib.rgb(0.45,0.45,0.45)});
-            y-=20;
-          }
-        };
-        var drawRow=function(cells,isHead){
-          // height first, so a wrapped cell does not overrun the page
-          var h=lineH, laid=[];
-          var x=X_MARGIN;
-          for(var ci=band.from; ci<=band.to; ci++){
-            var cell=cells[ci];
-            var w=colW[ci];
-            if(cell && cell.span>1){ for(var k=1;k<cell.span && ci+k<=band.to;k++) w+=colW[ci+k]; }
-            if(cell && cell.text){
-              var ls=xWrap(cell.text,cell.bold?bold:font,fsize,Math.max(6,w-2*pad));
-              h=Math.max(h,ls.length*lineH);
-              laid.push({x:x,w:w,lines:ls,bold:cell.bold,align:cell.align});
-            } else laid.push({x:x,w:w,lines:[],align:'left'});
-            x+=w;
-            if(cell && cell.span>1) ci+=cell.span-1;
-          }
-          if(y-h < X_MARGIN){ newPage(); if(headerRow && !isHead) drawRow(headerRow,true); }
-          for(var li=0; li<laid.length; li++){
-            var L=laid[li];
-            for(var j=0;j<L.lines.length;j++){
-              var f2=(isHead||L.bold)?bold:font, txt=L.lines[j];
-              var tw=f2.widthOfTextAtSize(txt,fsize);
-              var tx = L.align==='right' ? L.x+L.w-pad-tw : (L.align==='center' ? L.x+(L.w-tw)/2 : L.x+pad);
-              page.drawText(txt,{x:tx,y:y-lineH+3-(j*lineH),size:fsize,font:f2,color:PDFLib.rgb(0.1,0.12,0.15)});
+        /* ---- rows ---- */
+        var rows=[];
+        for(var r=A.r1;r<=A.r2;r++){
+          var row=ws.getRow(r);
+          if(row && row.hidden) continue;
+          var cells=[], any=false;
+          for(var k=0;k<cols.length;k++){
+            var cc=cols[k].idx;
+            if(covered[r+','+cc]){ cells.push(null); continue; }
+            var cell=row.getCell(cc);
+            var raw=cell.value;
+            if(raw && typeof raw==='object' && raw.formula!=null && !('result' in raw)){
+              raw=xDeref(xWb,ws,raw,0);                     // a plain reference can be followed
+              if(raw && typeof raw==='object' && raw.formula!=null && !('result' in raw)){
+                uncalculated++;
+                if(uncalcWhere.length<6) uncalcWhere.push(ws.name+'!'+cell.address);
+              }
             }
-            if(grid) page.drawRectangle({x:L.x,y:y-h,width:L.w,height:h,borderWidth:0.4,
-              borderColor:PDFLib.rgb(0.80,0.83,0.80),color:isHead?PDFLib.rgb(0.93,0.96,0.94):undefined,opacity:isHead?1:0});
+            var txt=xSafe(xFormat(raw,cell.numFmt));
+            if(txt) any=true;
+            var fo=cell.font||{}, al=cell.alignment||{};
+            var mr=mergeAt[r+','+cc];
+            cells.push({ text:txt, bold:!!fo.bold, ital:!!fo.italic,
+                         size:(fo.size||defFont),
+                         align: al.horizontal || (typeof raw==='number' ? 'right' : 'left'),
+                         wrap: al.wrapText===true,
+                         span: mr ? Math.min(mr.c2, A.c2)-cc+1 : 1 });
           }
-          y-=h;
-        };
+          rows.push({ n:r, cells:cells, h:(row&&row.height)||defRowH, any:any });
+        }
+        while(rows.length && !rows[rows.length-1].any) rows.pop();
+        if(!rows.length) continue;
 
-        newPage();
-        if(headerRow) drawRow(headerRow,true);
-        for(var ri=(headerRow?1:0); ri<rows.length; ri++){
-          drawRow(rows[ri],false);
-          if((ri%40)===0){ bar('xBar',Math.round(((si+ (bi+ri/rows.length)/bands.length)/wanted.length)*100)); await cYield(); }
+        /* ---- scale ---- */
+        var ml = useOwn? st.ml : 28, mr2 = useOwn? st.mr : 28,
+            mt = useOwn? st.mt : 28, mb2 = useOwn? st.mb : 28;
+        var land = useOwn ? st.landscape
+                 : (manOrient==='landscape' || (manOrient==='auto' && cols.reduce(function(a,b){return a+b.w;},0) > paper[0]-56));
+        var pw = land? paper[1] : paper[0], ph = land? paper[0] : paper[1];
+        var availW = pw-ml-mr2;
+        var totalW = cols.reduce(function(a,b){return a+b.w;},0);
+        var sc = useOwn ? st.scale : 1;
+        if((useOwn? st.fitWidth : manFit==='width') && totalW*sc>availW) sc = availW/totalW;
+        var colW = cols.map(function(x){return x.w*sc;});
+        var baseSize = useOwn ? sc : (manSize/X_DEFAULT_FONT);   // manual mode sets a flat size
+
+        /* columns are cut into bands only when we are NOT shrinking to fit */
+        var bands=[];
+        if(sc*totalW<=availW){ bands=[{from:0,to:colW.length-1}]; }
+        else {
+          var bd={from:0,to:0}, acc=0;
+          for(var ci=0;ci<colW.length;ci++){
+            if(acc+colW[ci]>availW && ci>bd.from){ bd.to=ci-1; bands.push(bd); bd={from:ci,to:ci}; acc=0; }
+            acc+=colW[ci]; bd.to=ci;
+          }
+          bands.push(bd);
+        }
+
+        /* rows repeated at the top of every page */
+        /* Excel repeats only the rows a sheet nominates, so a sheet that HAS
+           been set up for printing and nominates none gets none. A sheet with
+           no print setup at all has nothing to honour, so the first row is
+           repeated — which is what anyone asking a tool to make a long list
+           printable expects. */
+        var titleRows=[];
+        if(useOwn && st.titles){
+          titleRows=rows.filter(function(x){ return x.n>=st.titles[0] && x.n<=(st.titles[1]||st.titles[0]); });
+        } else if(useOwn && !st.areas && repHead && rows.length){ titleRows=[rows[0]]; }
+        else if(!useOwn && repHead && rows.length){ titleRows=[rows[0]]; }
+
+        for(var bi=0; bi<bands.length; bi++){
+          var band=bands[bi], page=null, y=0, pageNo=0;
+          var bandW=0; for(var q=band.from;q<=band.to;q++) bandW+=colW[q];
+          var x0 = (useOwn&&st.hCenter) ? ml+Math.max(0,(availW-bandW)/2) : ml;
+
+          var newPage=function(){
+            page=out.addPage([pw,ph]); pagesMade++; pageNo++;
+            y=ph-mt;
+            if(titles){
+              var t=wanted[si].name+(bands.length>1?(' — columns '+(cols[band.from].idx)+'–'+(cols[band.to].idx)):'');
+              page.drawText(xSafe(t),{x:ml,y:ph-mt+6,size:7.5,font:F.n,color:PDFLib.rgb(0.55,0.57,0.55)});
+              var lbl='Page '+pageNo;
+              page.drawText(lbl,{x:pw-mr2-F.n.widthOfTextAtSize(lbl,7.5),y:ph-mt+6,size:7.5,font:F.n,color:PDFLib.rgb(0.55,0.57,0.55)});
+            }
+          };
+          var drawRow=function(rw,isTitle){
+            var h=Math.max(6, rw.h*sc), laid=[], x=x0;
+            for(var ci=band.from; ci<=band.to; ci++){
+              var cell=rw.cells[ci], w=colW[ci];
+              if(cell && cell.span>1){ for(var k2=1;k2<cell.span && ci+k2<=band.to;k2++) w+=colW[ci+k2]; }
+              if(cell && cell.text){
+                var fs=Math.max(4, cell.size*(useOwn?sc:baseSize));
+                var fnt=pickFont(cell.bold,cell.ital);
+                var avail=Math.max(6,w-4);
+                var tw=xNaturalW(cell.text,fnt,fs);
+                var ls;
+                if(cell.wrap && tw>avail){ ls=xLines(cell.text,fnt,fs,avail,true); }
+                else if(tw>avail && cell.span===1){
+                  /* Excel spills a long unwrapped label across the empty cells
+                     beside it rather than clipping or wrapping it. */
+                  var spill=w, j=ci+1;
+                  while(j<=band.to && (!rw.cells[j] || !rw.cells[j].text) && spill<tw+4){ spill+=colW[j]; j++; }
+                  ls=xLines(cell.text,fnt,fs,avail,false); avail=spill-4;
+                } else ls=xLines(cell.text,fnt,fs,avail,false);
+                h=Math.max(h, ls.length*fs*1.22);
+                laid.push({x:x,w:w,aw:avail,lines:ls,fnt:fnt,fs:fs,align:cell.align});
+              } else laid.push({x:x,w:w,lines:[]});
+              x+=w;
+              if(cell && cell.span>1) ci+=cell.span-1;
+            }
+            if(y-h < mb2){ newPage(); if(titleRows.length && !isTitle) titleRows.forEach(function(t){drawRow(t,true);}); }
+            for(var li=0; li<laid.length; li++){
+              var L=laid[li];
+              if(grid && L.w>0) page.drawRectangle({x:L.x,y:y-h,width:L.w,height:h,borderWidth:0.35,borderColor:PDFLib.rgb(0.82,0.84,0.82)});
+              for(var j2=0;j2<L.lines.length;j2++){
+                var txt=L.lines[j2], tw2=L.fnt.widthOfTextAtSize(txt,L.fs);
+                var tx = L.align==='right' ? L.x+L.w-2-tw2
+                       : (L.align==='center' ? L.x+(L.w-tw2)/2 : L.x+2);
+                page.drawText(txt,{x:tx,y:y-L.fs*1.02-(j2*L.fs*1.22),size:L.fs,font:L.fnt,color:PDFLib.rgb(0.07,0.09,0.12)});
+              }
+            }
+            y-=h;
+          };
+
+          newPage();
+          if(titleRows.length) titleRows.forEach(function(t){drawRow(t,true);});
+          var startIdx = titleRows.length ? rows.indexOf(titleRows[titleRows.length-1])+1 : 0;
+          for(var ri=startIdx; ri<rows.length; ri++){
+            drawRow(rows[ri],false);
+            if((ri%40)===0){ bar('xBar',Math.round(((si+(bi+ri/rows.length)/bands.length)/wanted.length)*100)); await cYield(); }
+          }
         }
       }
     }
@@ -1001,15 +1181,10 @@ $('#xGo').addEventListener('click',function(){
     dl(new Blob([bytes],{type:'application/pdf'}), xName.replace(/\.(xlsx|xlsm|csv)$/i,'')+'.pdf');
     hideBar('xBar'); $('#xGo').disabled=false;
     $('#xStat').innerHTML=pagesMade+' page(s) created.'
-      +(uncalculated? ' <span style="color:#b42318">'+uncalculated+' formula cell(s) were blank because the workbook was saved without calculating — open it in Excel, press F9, save, and try again.</span>' : '');
+      +(uncalculated? ' <span style="color:#b42318">'+uncalculated+' cell(s) printed blank: the workbook holds a formula there but no saved result ('
+        +uncalcWhere.slice(0,4).map(esc2).join(', ')+(uncalculated>4?', …':'')
+        +'). Open it in Excel, press F9 to calculate, save, and run this again.</span>' : '');
   })().catch(function(e){
     hideBar('xBar'); $('#xGo').disabled=false; $('#xStat').textContent='Error: '+e.message;
   });
 });
-/* "BC12" → 55 */
-function xColOf(addr){
-  var m=String(addr).match(/^([A-Z]+)/i); if(!m) return 1;
-  var s=m[1].toUpperCase(), n=0;
-  for(var i=0;i<s.length;i++) n=n*26+(s.charCodeAt(i)-64);
-  return n;
-}

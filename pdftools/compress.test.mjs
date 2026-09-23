@@ -347,12 +347,15 @@ async function buildXls() {
     const buf = await window.__dl.blob.arrayBuffer();
     const size = buf.byteLength;              // read BEFORE pdf.js detaches it
     const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buf) }).promise;
-    const pages = [];
+    const pages = [], dims = [];
     for (let i = 1; i <= pdf.numPages; i++) {
-      const tc = await (await pdf.getPage(i)).getTextContent();
+      const pg = await pdf.getPage(i);
+      const vp = pg.getViewport({ scale: 1 });
+      dims.push({ w: Math.round(vp.width), h: Math.round(vp.height) });
+      const tc = await pg.getTextContent();
       pages.push(tc.items.map((x) => x.str).join(' ').replace(/\s+/g, ' '));
     }
-    return { name: window.__dl.name, size, numPages: pdf.numPages, pages, stat: document.querySelector('#xStat').innerText };
+    return { name: window.__dl.name, size, numPages: pdf.numPages, pages, dims, stat: document.querySelector('#xStat').innerText };
   });
 }
 
@@ -415,6 +418,83 @@ await t('a CSV is accepted too', async () => {
   assert(out.name === 'parties.pdf', 'bad name: ' + out.name);
   assert(/Alpha Traders, Delhi/.test(all), 'a quoted comma broke the row, or the column was too narrow: ' + all);
   assert(/Beta Supplies/.test(all), 'a row is missing');
+});
+
+
+console.log('\n── Excel: the sheet\'s own print setup ──');
+/* A workbook set up for printing, as a firm's statement file is: a print area
+   that deliberately excludes the working columns beside it, a scale, portrait
+   and landscape on different sheets, and a working sheet hidden in Excel. */
+await page.evaluate(async () => {
+  const wb = new ExcelJS.Workbook();
+  const bs = wb.addWorksheet('Balance Sheet');
+  bs.columns = [{ width: 40 }, { width: 14 }, { width: 14 }, { width: 20 }, { width: 20 }];
+  bs.addRow(['Particulars', 'As at 31 Mar 2026', 'As at 31 Mar 2025', 'WORKING ONLY', 'CHECK']);
+  bs.addRow(['Share capital', 100, 100, '#REF!', 'do-not-print-A']);
+  bs.addRow(['Reserves and surplus', -22530.63, -55849.43, -5584943, 'do-not-print-B']);
+  bs.addRow(['Nil line', 0, 0, 999, 'do-not-print-C']);
+  bs.getColumn(2).numFmt = '_(* #,##0.00_);_(* (#,##0.00);_(* "-"??_);_(@_)';
+  bs.getColumn(3).numFmt = '_(* #,##0.00_);_(* (#,##0.00);_(* "-"??_);_(@_)';
+  bs.pageSetup = { printArea: 'A1:C4', orientation: 'portrait', paperSize: 9, scale: 80, fitToPage: false };
+
+  const far = wb.addWorksheet('PPE');
+  far.columns = new Array(9).fill(0).map(() => ({ width: 18 }));
+  far.addRow(['Block', 'Open', 'Add', 'Del', 'Close', 'ODep', 'Dep', 'CDep', 'WDV']);
+  for (let i = 1; i <= 6; i++) far.addRow(['Asset ' + i, 100, 10, 0, 110, 20, 5, 25, 85]);
+  far.pageSetup = { printArea: 'A1:I7', orientation: 'landscape', paperSize: 9, fitToPage: true, fitToWidth: 1 };
+
+  const tb = wb.addWorksheet('TB working');
+  tb.addRow(['this is a working paper', 1]);
+  tb.state = 'hidden';
+
+  window.__xlsx = await wb.xlsx.writeBuffer();
+});
+await page.evaluate(() => {
+  const f = new File([window.__xlsx], 'statements.xlsx',
+    { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const dt = new DataTransfer(); dt.items.add(f);
+  const el = document.querySelector('#xFile');
+  el.files = dt.files;
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+});
+await page.waitForFunction(() => /statements\.xlsx/.test(document.querySelector('#xInfo').innerText), { timeout: 20000 });
+
+await t('a sheet hidden in Excel is listed but left unticked', async () => {
+  const txt = await page.textContent('#xSheets');
+  assert(/TB working/.test(txt) && /hidden in Excel/.test(txt), 'hidden sheet not flagged: ' + txt);
+  const ticked = await page.evaluate(() => [...document.querySelectorAll('#xSheets [data-xs]')].map((c) => c.checked));
+  assert(ticked[0] && ticked[1] && !ticked[2], 'the hidden sheet must start unticked: ' + ticked.join(','));
+});
+
+let own;
+await t('the print area is honoured — working columns never reach the paper', async () => {
+  own = await buildXls();
+  const all = own.pages.join(' ');
+  assert(/Share capital/.test(all), 'the statement itself is missing');
+  assert(!/#REF!/.test(all), 'a #REF! from outside the print area was printed');
+  assert(!/do-not-print/.test(all), 'a column outside the print area was printed');
+  assert(!/working paper/.test(all), 'the hidden sheet was printed');
+});
+await t('each sheet gets the orientation and paper it asks for', async () => {
+  const sizes = own.dims.map((d, i) => `${d.w > d.h ? 'landscape' : 'portrait'}(${own.pages[i].slice(0, 24).trim()})`);
+  assert(sizes.some((x) => x.startsWith('portrait')), 'the portrait sheet is missing: ' + sizes.join(' | '));
+  assert(sizes.some((x) => x.startsWith('landscape')), 'the landscape sheet is missing: ' + sizes.join(' | '));
+  const a4 = own.dims.every((d) => Math.abs(Math.max(d.w, d.h) - 842) < 2);
+  assert(a4, 'not A4: ' + own.dims.map((d) => d.w + 'x' + d.h).join(', '));
+});
+await t("a nil figure prints as the accounting format's dash, not as 0.00", async () => {
+  const all = own.pages.join(' ');
+  assert(/Nil line - -/.test(all) || /Nil line -/.test(all), 'zero should print as a dash: ' + all.slice(0, 300));
+  assert(/\(22,530\.63\)/.test(all), 'a negative should print in brackets: ' + all.slice(0, 300));
+});
+await t('turning the switch off prints everything, and says so', async () => {
+  await page.uncheck('#xOwn');
+  const raw = await buildXls();
+  const all = raw.pages.join(' ');
+  assert(/do-not-print/.test(all), 'with the switch off the whole used range should print');
+  const hint = await page.textContent('#xHint');
+  assert(/Ignoring/.test(hint), 'the hint should say the setup is being ignored: ' + hint);
+  await page.check('#xOwn');
 });
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
