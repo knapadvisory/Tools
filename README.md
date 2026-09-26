@@ -18,6 +18,7 @@ Sibling sites: [teamhub.knapadvisory.com](https://teamhub.knapadvisory.com) ·
 | GSTR-2B ⇄ Tally Poster | **Hosted here** at `/gstr2b/` + local connector | This repo — page `gstr2b/`, engine `connector/knap-tally-connector.mjs` (ported from `Dashboard` branch `claude/gstr2b-tally-posting-mqt7zn` v1.7) |
 | GSTR-1 Excel Summary | **Hosted here** at `/gstr1/` | This repo — page `gstr1/`, engine `gstr1-engine/` run unmodified as an internal child process, proxied at `/gstr1-api` (from `Dashboard` branch `claude/pdf-excel-extraction-tool-izu1zp`) |
 | Debtor / Creditor Consolidation | **Hosted here** at `/debtor-creditor/` + local connector | This repo — page `debtor-creditor/`, engine in `connector/knap-tally-connector.mjs` (`/api/dc/*`). Balances = the closing balance of every ledger under Sundry Debtors / Creditors as on the date, read in one light group-scoped request (ties to Tally's Group Summary; does not hang on big companies). Ageing / bill-wise read the vouchers (FIFO, with reimbursement pass-throughs netted). A company too dense to age voucher-by-voucher (a marketplace book with millions of vouchers) is aged **month-level** instead — Tally's monthly group summaries FIFO'd into buckets (fast, never freezes, still ties to the balance). Reports: consolidated matrix, 80/20 Pareto, ageing, bill-wise summary, party master; master workbook bundles all. |
+| GSTR-2B vs Books (ITC reconciliation) | **Hosted here** at `/itc-reco/` + local connector | This repo — page `itc-reco/`, ITC register read by `connector/knap-tally-connector.mjs` (`/api/itc/*`). Reads the input-tax ledgers for a period, takes the 2B JSON/CSV, asks which tax heads to reconcile, and reports booked / amount mismatch / wrong registration / not booked, with credit notes and ITC-blocked documents separated. **`itc-reco/MATCHING.md` is the calibration of the matcher** — every rule there was written after a real run got something wrong, and each is pinned by a test. Read it before changing `findMatch` or `buildRec`. Tests: `node itc-reco/reco.test.mjs`, `node itc-reco/datepicker.test.mjs` (both need `playwright-core`), `node connector/itc-register.test.mjs`. |
 **Connector versions — bump on EVERY change, however small.** A build that
 ships without a bump is never offered to any connector in the field: every
 Tally PC keeps running the old file, and the symptom looks like "the fix did
@@ -60,6 +61,8 @@ pdftools/             the hosted PDF Toolkit — merge / split / organise /
                       PDF <-> JPG / compress / Excel -> PDF, entirely in the
                       browser. compress.test.mjs drives the real page in
                       headless Chromium (npm i --no-save playwright-core)
+itc-reco/             the hosted GSTR-2B vs Books ITC reconciliation page;
+                      MATCHING.md holds the matching rules and why each exists
 connector/            KNAP Tally Connector: gstr2b engine + supervised audit
                       engine + installer, served OPEN at /connector/
                       (self-update needs no key)
