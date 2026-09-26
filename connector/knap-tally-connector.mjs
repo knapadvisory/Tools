@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.62';
+const VERSION = '4.63';
 // Bumped WITH connector/version.json — the two are compared to decide a
 // self-update, so a mismatch either loops every connector in the field or
 // hides the build. connector/version.test.mjs fails the pair apart.
@@ -3080,6 +3080,11 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
         const dk = dateKey(tag(block, 'DATE'));
         if (dk < fromKey || dk > toKey) continue;
         const vno = tag(block, 'VOUCHERNUMBER');
+        // What kind of voucher it is. A supplier's credit note is recorded here
+        // as a DEBIT NOTE (purchase return / rate difference) crediting the
+        // input-tax ledger, so the reconciliation can name the voucher that
+        // answers a 2A/2B credit note instead of showing a bare number.
+        const vtypeName = decodeXml(tag(block, 'VOUCHERTYPENAME')).trim();
         const party = tag(block, 'PARTYLEDGERNAME') || '';
         const entryBlocks = block.match(/<ALLLEDGERENTRIES\.LIST>[\s\S]*?<\/ALLLEDGERENTRIES\.LIST>/gi) || block.match(/<LEDGERENTRIES\.LIST>[\s\S]*?<\/LEDGERENTRIES\.LIST>/gi) || [];
         const tax = { igst: 0, cgst: 0, sgst: 0, rcm_igst: 0, rcm_cgst: 0, rcm_sgst: 0 };
@@ -3139,7 +3144,7 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
         const rcmAbs = Math.abs(tax.rcm_igst) + Math.abs(tax.rcm_cgst) + Math.abs(tax.rcm_sgst);
         rows.push({
           date: vd ? vd.toISOString().slice(0, 10) : null,
-          voucherNo: vno || '', supplierInvNo: supInv, ref,
+          voucherNo: vno || '', voucherType: vtypeName, supplierInvNo: supInv, ref,
           party, gstin, ownGstin, ownRegnName, taxable: r2(taxable),
           igst: r2(tax.igst), cgst: r2(tax.cgst), sgst: r2(tax.sgst),
           rcmIgst: r2(tax.rcm_igst), rcmCgst: r2(tax.rcm_cgst), rcmSgst: r2(tax.rcm_sgst),

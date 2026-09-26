@@ -166,7 +166,7 @@
 
 <main>
   <h1>GSTR-2B vs Books ITC Reconciliation</h1>
-  <p class="lede">Reads your <b>input-GST ledgers straight from Tally</b> (invoice-wise), matches them to your downloaded <b>GSTR-2B</b>, and shows what’s matched, mismatched, only in 2B, or only in your books. Everything runs on this computer — books flow browser ↔ connector ↔ Tally; only the report you export is saved.</p>
+  <p class="lede">Reads your <b>input-GST ledgers straight from Tally</b> (invoice-wise), matches them to your downloaded <b>GSTR-2B</b> — and <b>GSTR-2A</b> too, if you add it — and shows what’s matched, mismatched, only in the return, or only in your books. Supplier <b>credit notes</b> are checked against the reversals in your books. Everything runs on this computer — books flow browser ↔ connector ↔ Tally; only the report you export is saved.</p>
 
   <div class="stepper" id="stepper">
     <div class="step active" data-s="1"><span class="num">1</span><span class="lbl">Connect Tally</span></div>
@@ -246,13 +246,13 @@
 
   <!-- STEP 4 -->
   <div class="card hidden" id="card4">
-    <h2>4 · Add your GSTR-2B</h2>
-    <div class="sub">Upload the <b>GSTR-2B JSON</b>(s) from the GST portal — you can add <b>several months</b> — or a filled CSV template. Nothing is uploaded anywhere; parsed in your browser.</div>
+    <h2>4 · Add your GSTR-2B (and GSTR-2A, if you have it)</h2>
+    <div class="sub">Upload the <b>GSTR-2B JSON</b>(s) from the GST portal — you can add <b>several months</b> — or a filled CSV template. <b>GSTR-2A JSON works too</b>: drop both and each file is recognised on its own. Nothing is uploaded anywhere; parsed in your browser.</div>
     <div class="row" style="margin-bottom:10px">
       <button class="btn ghost sm" onclick="downloadTemplate()">⬇ CSV template</button>
       <span class="lbl">Reverse-charge invoices in 2B are matched against your RCM ledgers.</span>
     </div>
-    <div class="drop" id="drop">Drop your GSTR-2B <b>.json</b> file(s) or template <b>.csv</b> here, or click to choose. Add as many months as you need.
+    <div class="drop" id="drop">Drop your GSTR-2B / GSTR-2A <b>.json</b> file(s) or template <b>.csv</b> here, or click to choose. Add as many months as you need.
       <input type="file" id="file2b" accept=".json,.csv" multiple style="display:none">
     </div>
     <div id="filesLoaded" class="picked" style="margin-top:10px"></div>
@@ -575,7 +575,7 @@ function downloadBooks(){
 
 /* ============================ step 4: GSTR-2B input ============================ */
 var twoBRows=[], loadedFiles=[];
-var DROP_HTML='Drop your GSTR-2B <b>.json</b> file(s) or template <b>.csv</b> here, or click to choose. Add as many months as you need.';
+var DROP_HTML='Drop your GSTR-2B / GSTR-2A <b>.json</b> file(s) or template <b>.csv</b> here, or click to choose. Add as many months as you need.';
 $('drop').addEventListener('click',function(){$('file2b').click();});
 $('drop').addEventListener('dragover',function(e){e.preventDefault();$('drop').classList.add('has');});
 $('drop').addEventListener('dragleave',function(){if(!loadedFiles.length)$('drop').classList.remove('has');});
@@ -589,24 +589,75 @@ function handleFiles(files){
     var file=arr[i++],fr=new FileReader();
     fr.onload=function(){
       try{
-        var rows=/\.json$/i.test(file.name)?parse2bJson(JSON.parse(fr.result)):parseCsv(fr.result);
-        loadedFiles.push({name:file.name,count:rows.length,rows:rows});
+        var rows,src='2B';
+        if(/\.json$/i.test(file.name)){
+          var j=JSON.parse(fr.result);
+          src=srcOfJson(j,file.name);
+          rows=parseGstJson(j,src,file.name);
+        }else{ rows=parseCsv(fr.result); src=(rows[0]&&rows[0].src)||'2B'; }
+        loadedFiles.push({name:file.name,count:rows.length,rows:rows,src:src});
       }catch(err){loadedFiles.push({name:file.name,count:0,rows:[],error:err.message});}
       next();
     };
     fr.readAsText(file);
   })();
 }
-function rebuild2b(){twoBRows=[];loadedFiles.forEach(function(f){if(f.rows)twoBRows=twoBRows.concat(f.rows);});}
+/* One document, wherever it came from. A supplier's invoice is unique by his
+   GSTIN and his invoice number (the law requires it), so that is the identity —
+   plus whether it is a note rather than an invoice, and whether it is an
+   amendment, because an amendment is a second document about the same one. */
+function docKey(r){return normGstin(r.gstin)+'|'+normInv(r.invNo)+'|'+(r.isCN?'C':'I')+(r.isAmend?'|A':'');}
+var mergeStats={only2a:0,common:0,dupDropped:0,has2a:false,has2b:false};
+/* 2B first, then 2A. A document present in both is kept EXACTLY as 2B gave it —
+   2B is the statutory basis of the credit, so nothing about a common document
+   changes because a 2A was also loaded. What is left from 2A is 2A-only, and
+   that is a finding in its own right: the supplier has reported it but not in
+   any 2B in hand, so the credit is not yet available under Sec 16(2)(aa). */
+function rebuild2b(){
+  twoBRows=[];mergeStats={only2a:0,common:0,dupDropped:0,has2a:false,has2b:false};
+  var seen={};
+  ['2B','2A'].forEach(function(src){
+    loadedFiles.forEach(function(f){
+      if(!f.rows||!f.rows.length)return;
+      if((f.src||'2B')!==src)return;
+      if(src==='2A')mergeStats.has2a=true;else mergeStats.has2b=true;
+      f.rows.forEach(function(r){
+        var k=docKey(r);
+        // Seen already: from 2B if this row is a 2A copy of a common document
+        // (kept as 2B, counted), or the same document twice inside 2B itself
+        // (two months' files overlapping — a real duplicate, and left in it
+        // would come back as "not in books" once its voucher was taken).
+        if(seen[k]){ if(src==='2A')mergeStats.common++; else mergeStats.dupDropped++; return; }
+        seen[k]=1;
+        r.src=src;r._only2a=(src==='2A');
+        if(r._only2a)mergeStats.only2a++;
+        twoBRows.push(r);
+      });
+    });
+  });
+}
+function setFileSrc(idx,src){var f=loadedFiles[idx];if(!f)return;f.src=src;(f.rows||[]).forEach(function(r){r.src=src;});renderFiles();}
 function renderFiles(){
   rebuild2b();
   var c=$('filesLoaded');
-  c.innerHTML=loadedFiles.map(function(f,idx){return '<span class="pchip">'+(f.error?'⚠ ':'✓ ')+esc(f.name)+' <span class="k">'+(f.error?'error':(f.count+' inv'))+'</span> <a href="#" onclick="removeFile('+idx+');return false" style="margin-left:5px;color:var(--bad)">✕</a></span>';}).join('');
+  c.innerHTML=loadedFiles.map(function(f,idx){
+    var src=f.src||'2B',other=(src==='2A'?'2B':'2A');
+    // The source decides how the document is treated, so it is shown on the
+    // chip and can be corrected in one click — never silently assumed.
+    var srcChip=f.error?'':' <a href="#" onclick="setFileSrc('+idx+',\''+other+'\');return false" title="Read as GSTR-'+other+' instead" class="k" style="text-decoration:none;border-bottom:1px dotted currentColor">'+src+'</a>';
+    return '<span class="pchip">'+(f.error?'⚠ ':'✓ ')+esc(f.name)+srcChip+' <span class="k">'+(f.error?'error':(f.count+' inv'))+'</span> <a href="#" onclick="removeFile('+idx+');return false" style="margin-left:5px;color:var(--bad)">✕</a></span>';}).join('');
   var tot=twoBRows.reduce(function(a,r){return a+r.igst+r.cgst+r.sgst;},0);
   if(loadedFiles.length){
     $('drop').classList.add('has');
-    $('drop').innerHTML=loadedFiles.length+' file(s) · '+twoBRows.length+' invoices · ITC '+inr(tot)+' <div class="lbl" style="margin-top:4px">click to add more months</div>';
-    setMsg('msg2b','Loaded '+twoBRows.length+' 2B invoices across '+loadedFiles.length+' file(s).', twoBRows.length?'ok':'warn');
+    $('drop').innerHTML=loadedFiles.length+' file(s) · '+twoBRows.length+' documents · ITC '+inr(tot)+' <div class="lbl" style="margin-top:4px">click to add more months</div>';
+    var bits=['Loaded '+twoBRows.length+' documents across '+loadedFiles.length+' file(s).'];
+    if(mergeStats.has2a&&mergeStats.has2b){
+      bits.push('<b>'+mergeStats.common+'</b> appear in both 2A and 2B (kept exactly as 2B reports them), and <b>'+mergeStats.only2a+'</b> are in <b>2A only</b> — those are reconciled against the books too and tagged “in 2A only”.');
+    }else if(mergeStats.has2a){
+      bits.push('<b>These are 2A files only.</b> ITC is claimable through 2B — load the 2B months as well, or every document will read “in 2A only”.');
+    }
+    if(mergeStats.dupDropped)bits.push(mergeStats.dupDropped+' duplicate document(s) within the same return were dropped (the same GSTIN and document number twice).');
+    setMsg('msg2b',bits.join(' '), twoBRows.length?'ok':'warn');
   }else{ $('drop').classList.remove('has'); $('drop').innerHTML=DROP_HTML; setMsg('msg2b','',''); }
   $('btnReco').disabled=twoBRows.length===0;
   $('btnClear2b').style.display=loadedFiles.length?'':'none';
@@ -642,9 +693,10 @@ function renderHeadPick(){
   box.classList.remove('hide');
   var n={IGST:0,INTRA:0,NIL:0};
   twoBRows.forEach(function(r){ n[headOf2b(r)]++; });
-  $('cIGST').textContent='· '+n.IGST+' in 2B';
-  $('cINTRA').textContent='· '+n.INTRA+' in 2B';
-  $('cNIL').textContent='· '+n.NIL+' in 2B';
+  var where=(mergeStats.has2a&&mergeStats.has2b)?'in 2B/2A':(mergeStats.has2a?'in 2A':'in 2B');
+  $('cIGST').textContent='· '+n.IGST+' '+where;
+  $('cINTRA').textContent='· '+n.INTRA+' '+where;
+  $('cNIL').textContent='· '+n.NIL+' '+where;
   // First time through, tick to match what the books side can answer for.
   if(!headPickTouched){
     var bh=booksHeads();
@@ -668,29 +720,76 @@ function selectedHeads(){
 function removeFile(idx){loadedFiles.splice(idx,1);renderFiles();}
 function clear2b(){loadedFiles=[];renderFiles();}
 function num(x){var n=parseFloat(String(x==null?0:x).replace(/[, ]/g,''));return isNaN(n)?0:n;}
-function parse2bJson(j){
-  var out=[];
+/* ---------------------------------------------------------------------------
+   GSTR-2A and GSTR-2B are the same tables in two dialects.
+
+   2B  : {data:{docdata:{b2b:[{ctin,trdnm,inv:[{inum,dt,val,txval,igst,cgst,
+         sgst,itcavl,rsn,...}]}], b2ba, cdnr, cdnra}}, rtnprd}
+   2A  : {gstin,fp, b2b:[{ctin,trdnm,cfs,inv:[{inum,idt,val,
+         itms:[{itm_det:{txval,iamt,camt,samt,csamt}}]}]}], cdnr, ...}
+
+   So the differences that matter are: the tax keys (igst/cgst/sgst vs
+   iamt/camt/samt), the invoice date key (dt vs idt), the tax figures sitting
+   one level down inside itms[].itm_det, and 2A having no itcavl at all. All of
+   those are handled here, in one parser, rather than in two that drift apart.
+--------------------------------------------------------------------------- */
+function docTables(j){
   var top=(j&&j.data)?j.data:(j||{});
-  var d=top.docdata||(j&&j.docdata)||top;
+  return {top:top,d:top.docdata||(j&&j.docdata)||top};
+}
+/* Which return a file is, decided from its shape rather than its name (portal
+   downloads, offline-utility exports and the GSTN API all name them
+   differently). `itcavl` exists only in 2B; `iamt` only in 2A. */
+function srcOfJson(j,fileName){
+  var t=docTables(j),top=t.top,d=t.d;
+  if(top.docdata||top.rtnprd)return '2B';
+  var first=null;
+  ['b2b','b2ba'].forEach(function(k){if(!first&&d[k]&&d[k][0]&&d[k][0].inv&&d[k][0].inv[0])first=d[k][0].inv[0];});
+  ['cdnr','cdnra'].forEach(function(k){if(!first&&d[k]&&d[k][0]&&d[k][0].nt&&d[k][0].nt[0])first=d[k][0].nt[0];});
+  if(first){
+    if(first.itcavl!=null||first.itc_avl!=null)return '2B';
+    var it=(first.itms&&first.itms[0]&&(first.itms[0].itm_det||first.itms[0]))||null;
+    if(it&&(it.iamt!=null||it.camt!=null||it.samt!=null))return '2A';
+    if(first.igst!=null||first.cgst!=null||first.sgst!=null)return '2B';
+    if(first.idt!=null)return '2A';
+  }
+  if(/2a/i.test(String(fileName||''))&&!/2b/i.test(String(fileName||'')))return '2A';
+  return '2B';
+}
+function parseGstJson(j,src,fileName){
+  var out=[];
+  var t=docTables(j),top=t.top,d=t.d;
+  src=src||srcOfJson(j,fileName);
   var regn=String(top.gstin||j.gstin||'').toUpperCase();
   var period=String(top.rtnprd||top.fp||'').trim();
-  function pushInv(ctin,trdnm,inv,sign,isCN,isAmend){
-    var items=inv.items||inv.itms||[];var ig=0,cg=0,sg=0,tx=0;
-    if(items.length){items.forEach(function(it){var o=it.itm_det||it;ig+=num(o.igst);cg+=num(o.cgst);sg+=num(o.sgst);tx+=num(o.txval);});}
-    else{ig=num(inv.igst);cg=num(inv.cgst);sg=num(inv.sgst);tx=num(inv.txval);}
+  function pushInv(s,inv,sign,isCN,isAmend){
+    var items=inv.items||inv.itms||[];var ig=0,cg=0,sg=0,cs=0,tx=0;
+    if(items.length){items.forEach(function(it){var o=it.itm_det||it;
+      ig+=num(o.igst!=null?o.igst:o.iamt);cg+=num(o.cgst!=null?o.cgst:o.camt);
+      sg+=num(o.sgst!=null?o.sgst:o.samt);cs+=num(o.cess!=null?o.cess:o.csamt);tx+=num(o.txval);});}
+    else{ig=num(inv.igst!=null?inv.igst:inv.iamt);cg=num(inv.cgst!=null?inv.cgst:inv.camt);
+      sg=num(inv.sgst!=null?inv.sgst:inv.samt);cs=num(inv.cess!=null?inv.cess:inv.csamt);tx=num(inv.txval);}
     var itcavl=String(inv.itcavl||inv.itc_avl||(items[0]&&(items[0].itc_avl||items[0].itcavl))||'').toUpperCase();
     var rsn=String(inv.rsn||(items[0]&&items[0].rsn)||'').trim();
-    out.push({regn:regn,period:period,gstin:String(ctin||'').toUpperCase(),party:trdnm||'',invNo:String(inv.inum||inv.nt_num||'').trim(),invDate:inv.dt||inv.nt_dt||'',invoiceValue:num(inv.val),taxable:sign*tx,igst:sign*ig,cgst:sign*cg,sgst:sign*sg,rcm:(String(inv.rev||inv.rchrg||'').toUpperCase()==='Y'),isCN:!!isCN,isAmend:!!isAmend,itcBlocked:(itcavl==='N'),rsn:rsn});
+    out.push({src:src,regn:regn,period:period,gstin:String(s.ctin||'').toUpperCase(),party:s.trdnm||'',
+      invNo:String(inv.inum||inv.nt_num||'').trim(),invDate:inv.dt||inv.idt||inv.nt_dt||'',
+      invoiceValue:num(inv.val),taxable:sign*tx,igst:sign*ig,cgst:sign*cg,sgst:sign*sg,cess:sign*cs,
+      rcm:(String(inv.rev||inv.rchrg||'').toUpperCase()==='Y'),isCN:!!isCN,isAmend:!!isAmend,
+      // 2A carries the supplier's filing status per counter-party; 2B does not
+      // (everything in 2B is, by definition, filed).
+      filed:(s.cfs==null?'':String(s.cfs).toUpperCase()),
+      itcBlocked:(itcavl==='N'),rsn:rsn});
   }
   // b2ba / cdnra are the AMENDMENT tables — the supplier revised a document
   // already reported. Flag them so a revised invoice isn't mistaken for a plain
   // mismatch; the reconciliation uses the amended (latest) figures.
-  (d.b2b||[]).forEach(function(s){(s.inv||[]).forEach(function(inv){pushInv(s.ctin,s.trdnm,inv,1,false,false);});});
-  (d.b2ba||[]).forEach(function(s){(s.inv||[]).forEach(function(inv){pushInv(s.ctin,s.trdnm,inv,1,false,true);});});
-  (d.cdnr||[]).forEach(function(s){(s.nt||[]).forEach(function(nt){pushInv(s.ctin,s.trdnm,nt,(String(nt.ntty||'').toUpperCase()==='C'?-1:1),true,false);});});
-  (d.cdnra||[]).forEach(function(s){(s.nt||[]).forEach(function(nt){pushInv(s.ctin,s.trdnm,nt,(String(nt.ntty||'').toUpperCase()==='C'?-1:1),true,true);});});
+  (d.b2b||[]).forEach(function(s){(s.inv||[]).forEach(function(inv){pushInv(s,inv,1,false,false);});});
+  (d.b2ba||[]).forEach(function(s){(s.inv||[]).forEach(function(inv){pushInv(s,inv,1,false,true);});});
+  (d.cdnr||[]).forEach(function(s){(s.nt||[]).forEach(function(nt){pushInv(s,nt,(String(nt.ntty||'').toUpperCase()==='C'?-1:1),true,false);});});
+  (d.cdnra||[]).forEach(function(s){(s.nt||[]).forEach(function(nt){pushInv(s,nt,(String(nt.ntty||'').toUpperCase()==='C'?-1:1),true,true);});});
   return out;
 }
+function parse2bJson(j){return parseGstJson(j,null,'');}
 function parseCsv(text){
   var lines=text.split(/\r?\n/).filter(function(l){return l.trim();});if(!lines.length)return [];
   var head=lines[0].split(',').map(function(h){return h.trim().toLowerCase().replace(/[^a-z0-9]+/g,'');});
@@ -703,7 +802,8 @@ function parseCsv(text){
     if(!g&&!invNo)continue;
     var av=String(col(row,['itcavl','itcavailable'])||'').toUpperCase();
     var blk=/^n/.test(av)||/^y|^true|^1/i.test(String(col(row,['itcblocked','blocked'])||''));
-    out.push({regn:'',period:'',gstin:g,party:col(row,['party','partyname','tradename','trdnm'])||'',invNo:invNo,invDate:col(row,['invoicedate','date','dt'])||'',invoiceValue:num(col(row,['invoicevalue','val','value'])),taxable:num(col(row,['taxable','taxablevalue','txval'])),igst:num(col(row,['igst'])),cgst:num(col(row,['cgst'])),sgst:num(col(row,['sgst'])),rcm:/^y|^true|^1/i.test(String(col(row,['rcm','reversecharge','rev','rchrg'])||'')),isCN:false,itcBlocked:blk,rsn:String(col(row,['rsn','reason'])||'')});
+    var src=/2a/i.test(String(col(row,['src','source','return','rtn'])||''))?'2A':'2B';
+    out.push({src:src,regn:'',period:'',gstin:g,party:col(row,['party','partyname','tradename','trdnm'])||'',invNo:invNo,invDate:col(row,['invoicedate','date','dt'])||'',invoiceValue:num(col(row,['invoicevalue','val','value'])),taxable:num(col(row,['taxable','taxablevalue','txval'])),igst:num(col(row,['igst'])),cgst:num(col(row,['cgst'])),sgst:num(col(row,['sgst'])),rcm:/^y|^true|^1/i.test(String(col(row,['rcm','reversecharge','rev','rchrg'])||'')),isCN:false,itcBlocked:blk,rsn:String(col(row,['rsn','reason'])||'')});
   }
   return out;
 }
@@ -807,12 +907,30 @@ function buildRec(b,br){
   if(!br){
     var cov=coverageNote(b.invDate),tag=coverageTag(b.invDate);
     rec._periodIssue=!!cov;
+    if(b.isCN){
+      /* A supplier credit note with nothing answering it in the books is the
+         one finding in this whole tool that costs money on its own: the credit
+         was taken on the original invoice and has not been given back, so the
+         ITC stands over-claimed with interest running under Sec 50. It is not
+         a "missing entry" like an unbooked purchase — it is a reversal due. */
+      var rev=Math.abs(rec.gst2b);
+      rec._cat='cnmiss';
+      rec.remarks=tag?(cnWord(b)+' not reversed — '+tag):(cnWord(b)+' not reversed in books');
+      rec.note=cnWord(b).charAt(0).toUpperCase()+cnWord(b).slice(1)+' '+(rec.docNo||'(no number)')+' from '+(rec.party2b||'the supplier')
+        +' for ₹'+inr(rec.tax2b)+' taxable / ₹'+inr(rec.gst2b)+' GST is in '+(b.src||'2B')
+        +', but no matching reversal (a purchase return / debit note against the same party) was found in the books'
+        +(cov?(' — '+cov):'. ')
+        +(cov?'':'ITC of ₹'+inr(rev)+' appears to be over-claimed — pass the reversal, or identify the entry that already gave it back.');
+      applySource(rec,b);applyAmended(rec,b);applyItcBlocked(rec,b);
+      return rec;
+    }
     // Distinguish, in the remarks column itself, a document that only looks
     // missing because its date is outside the fetch window (or in a month Tally
     // returned nothing for) from one that is genuinely unrecorded — so the two
     // are filterable in Excel without reading the Note.
     rec.remarks=tag?('not booked — '+tag):'not booked in tally';rec._cat='only2b';
-    rec.note=(b.isCN?'Credit note ':'')+'In GSTR-2B but not found in your books'+(cov?(' — '+cov):' — this document does not appear against any of the selected input-GST ledgers for the period read.');
+    rec.note='In GSTR-'+(b.src||'2B')+' but not found in your books'+(cov?(' — '+cov):' — this document does not appear against any of the selected input-GST ledgers for the period read.');
+    applySource(rec,b);
     applyAmended(rec,b);
     applyItcBlocked(rec,b);
     return rec;
@@ -832,6 +950,35 @@ function buildRec(b,br){
   var taxTol=Math.max(10,Math.abs(rec.tax2b)*0.005);
   var taxOff=Math.abs(rec.taxChk)>taxTol;
   var headMix=(Math.abs(rec.igst2b-rec.igstBk)>GSTTOL||Math.abs(rec.cgst2b-rec.cgstBk)>GSTTOL||Math.abs(rec.sgst2b-rec.sgstBk)>GSTTOL);
+  if(b.isCN){
+    /* The supplier's credit note and the voucher that answers it. In the buyer's
+       books that voucher is a DEBIT NOTE (a purchase return, or a rate/quantity
+       difference) which CREDITS the input-tax ledger — so it reaches us with the
+       tax negative, the same sign as the note itself, and the ordinary checks
+       above already compare like with like. */
+    var W=cnWord(b);
+    // The voucher type names WHAT answered the note — "Debit Note 12" reads as
+    // a purchase return, "Journal 44" as something to look at. Connectors older
+    // than v4.63 do not send it, so it is additive, never assumed.
+    rec.vchType=br.voucherType||'';
+    var VCH=(rec.vchType?rec.vchType+' ':'')+rec.vchBk;
+    if(gstOff){
+      rec._cat='cnmm';rec.remarks=W+' reversed — amount differs';
+      rec.note='Reversal found ('+VCH+'): GST reversed in the books ₹'+inr(Math.abs(rec.gstBk))+' against ₹'+inr(Math.abs(rec.gst2b))+' on the supplier’s '+W
+        +' — short by ₹'+inr(Math.abs(rec.gstChk))+'. Reverse the difference.';
+    }else{
+      rec._cat='cnok';rec.remarks=W+' reversed';
+      rec.note='Reversal found ('+VCH+', '+(rec.partyBk||'')+') — ITC of ₹'+inr(Math.abs(rec.gst2b))+' given back, matching the supplier’s '+W+'.';
+      if(taxOff)rec.note+=' The taxable differs by ₹'+inr(Math.abs(rec.taxChk))+'; the tax reversed agrees, which is what the credit turns on.';
+    }
+    if(typeof rec.spill==='number'&&rec.spill!==0)rec.note+=' Reversed '+Math.abs(rec.spill)+' month(s) '+(rec.spill>0?'earlier':'later')+' than the note’s period.';
+    var ownRegC=br._ownGstin||(chosen&&chosen.gstin)||'';
+    if(ownRegC)rec.regnBk=ownRegC;
+    if(b.regn&&ownRegC&&normGstin(b.regn)!==normGstin(ownRegC))
+      rec.note+=' Note: the '+W+' belongs to '+b.regn+' but the reversal is booked under '+ownRegC+' — reverse it in the registration that claimed the credit.';
+    applySource(rec,b);applyAmended(rec,b);applyItcBlocked(rec,b);
+    return rec;
+  }
   if(gstOff){
     rec.remarks='booked - amount mismatch';rec._cat='mismatch';
     rec.note='Purchase '+rec.vchBk+': GST in the books ₹'+inr(rec.gstBk)+' vs ₹'+inr(rec.gst2b)+' in 2B — differs by ₹'+inr(Math.abs(rec.gstChk))+'.';
@@ -888,9 +1035,25 @@ function buildRec(b,br){
       +(amountsAgree?' The value and tax agree, so this is a registration question only.'
                     :' The value or tax ALSO differs — check both.');
   }
+  applySource(rec,b);
   applyAmended(rec,b);
   applyItcBlocked(rec,b);
   return rec;
+}
+/* What the document IS, from the buyer's side. ntty 'C' (a credit note) takes
+   credit away; ntty 'D' (the supplier's debit note) adds to it. We know which
+   from the sign the parser already applied. */
+function cnWord(b){return ((b.igst||0)+(b.cgst||0)+(b.sgst||0))>0.005?'supplier debit note':'credit note';}
+/* A document that reached us from 2A and from no 2B in hand. It is reconciled
+   against the books exactly like any other — the books either have it or they
+   do not — but the ITC question is different, and saying so is the point. */
+function applySource(rec,b){
+  rec.src=(b&&b.src)||'2B';
+  if(!b||!b._only2a)return;
+  rec._only2a=true;
+  rec.remarks+=' · in 2A only';
+  rec.note+=' [In GSTR-2A but in none of the 2B files loaded'+(b.filed==='N'?' and the supplier’s GSTR-3B for the period is not filed':'')
+    +': under Sec 16(2)(aa) the credit is available only through GSTR-2B, so do not claim it on the strength of 2A. Usually the supplier filed his GSTR-1 late, or after the 2B cut-off, and it will land in a later month’s 2B — load that month to confirm. If it never appears in a 2B, the credit is not available at all.]';
 }
 function applyItcBlocked(rec,b){
   if(!b||!b.itcBlocked)return;
@@ -935,6 +1098,15 @@ function reconcile(){
     var best=-1,bestKey=null;
     Object.keys(pool).forEach(function(ks){
       var i=+ks,r=booksRows[i];
+      /* A credit note takes credit AWAY; the voucher answering it must do the
+         same. Without this, a supplier credit note carrying the original
+         invoice number as its reference matches the original PURCHASE — reads
+         "credit note booked", and the reversal that was actually missing is
+         never reported. Sign only decides when both sides have one, so a
+         nil-rated note still matches on its value. */
+      var rgst=bGst(r);
+      var bSign=bg>0.005?1:(bg<-0.005?-1:0),rSign=rgst>0.005?1:(rgst<-0.005?-1:0);
+      if(bSign&&rSign&&bSign!==rSign)return;
       var ib=invBest(bInv,r),im=ib.im;
       var rg=normGstin(r.gstin),gstEq=!!(g&&rg&&g===rg);
       var dg=Math.abs(bg-bGst(r)),gstClose=dg<=2,gstNear=dg<=50;
@@ -986,8 +1158,13 @@ function reconcile(){
   // confirmed yet (the 2B where it would land isn't in hand). A vendor reporting
   // an invoice a cycle or two late is normal, not an ITC risk, so those aren't
   // flagged as "not in 2B" — they're softened to "expected in a later 2B".
-  var maxTwoBYM=0;
-  twoBRows.forEach(function(b){var n=ymNumOfPeriod(b.period||periodOf(b.invDate));if(n>maxTwoBYM)maxTwoBYM=n;});
+  // Only the 2B files count here: a 2A period tells us nothing about which 2B
+  // is in hand, and counting it would make books entries look confirmable
+  // against a 2B nobody loaded.
+  var maxTwoBYM=0,any2b=twoBRows.some(function(b){return (b.src||'2B')==='2B';});
+  twoBRows.forEach(function(b){
+    if(any2b&&(b.src||'2B')!=='2B')return;
+    var n=ymNumOfPeriod(b.period||periodOf(b.invDate));if(n>maxTwoBYM)maxTwoBYM=n;});
   // Books booked but not in 2B → their own records (2B side blank).
   booksRows.forEach(function(r,i){
     if(used[i])return;
@@ -995,6 +1172,21 @@ function reconcile(){
     var d=ymd(r.date),bookYM=d?(d.y*100+d.mo):0;
     var later=!!(bookYM&&maxTwoBYM&&bookYM>=maxTwoBYM);
     var ref=r.voucherNo||r.supplierInvNo||'';
+    /* A voucher that CREDITS the input-tax ledger is a reversal — in the books
+       a debit note / purchase return, or an ITC reversal journal. Unmatched, it
+       is the mirror of the credit-note finding: credit given back with no
+       supplier note in 2A/2B asking for it. Usually right (a Rule 37/42/43 or
+       ineligible-credit reversal you passed yourselves), sometimes a reversal
+       passed twice — either way it is not "booked but not in 2B". */
+    if(r2(bt.igst+bt.cgst+bt.sgst)<-0.005){
+      recs.push({regn2b:'',gstin2b:'',party2b:'',docNo:'',docDate:'',invVal:'',tax2b:'',igst2b:'',cgst2b:'',sgst2b:'',gst2b:'',rcm:r.rcm?'Yes':'',period:periodOf(r.date),
+        gstinChk:'—',nameChk:'—',taxChk:'',gstChk:'',vchChk:'—',spill:'',remarks:'ITC reversed in books — no supplier credit note',
+        regnBk:r._ownGstin||(chosen&&chosen.gstin)||'',gstinBk:r.gstin||'',dateBk:r.date||'',partyBk:r.party||'',vchBk:ref,
+        igstBk:r2(bt.igst),cgstBk:r2(bt.cgst),sgstBk:r2(bt.sgst),gstBk:r2(bt.igst+bt.cgst+bt.sgst),taxBk:r2(r.taxable),
+        note:'Voucher '+(r.voucherType?r.voucherType+' ':'')+ref+' ('+(r.party||'')+') gives back ITC of ₹'+inr(Math.abs(bt.igst+bt.cgst+bt.sgst))+', and no credit note from this supplier in the 2A/2B loaded asks for it. That is correct for a reversal you passed yourselves (Rule 37 non-payment, Rule 42/43 apportionment, an ineligible credit written back) — check only that it is not the same reversal passed twice, and that a supplier credit note for it is not sitting in a month you have not loaded.',
+        _cat:'onlybkCN',_bk:r,_isCN:true});
+      return;
+    }
     recs.push({regn2b:'',gstin2b:'',party2b:'',docNo:'',docDate:'',invVal:'',tax2b:'',igst2b:'',cgst2b:'',sgst2b:'',gst2b:'',rcm:r.rcm?'Yes':'',period:periodOf(r.date),
       gstinChk:'—',nameChk:'—',taxChk:'',gstChk:'',vchChk:'—',spill:'',remarks:later?'booked — expected in a later 2B':'booked, but not in 2B',
       regnBk:r._ownGstin||(chosen&&chosen.gstin)||'',gstinBk:r.gstin||'',dateBk:r.date||'',partyBk:r.party||'',vchBk:ref,
@@ -1010,15 +1202,18 @@ function reconcile(){
 }
 
 /* ---- on-screen report ---- */
-function groupBy(recs){var by={matched:[],mismatch:[],wrongreg:[],probable:[],only2b:[],onlybk:[]};recs.forEach(function(r){(by[r._cat]||by.only2b).push(r);});return by;}
+function groupBy(recs){var by={matched:[],mismatch:[],wrongreg:[],probable:[],only2b:[],onlybk:[],onlybkCN:[],cnok:[],cnmm:[],cnmiss:[]};recs.forEach(function(r){(by[r._cat]||by.only2b).push(r);});return by;}
 function sumF(a,f){return a.reduce(function(s,r){return s+(Number(f(r))||0);},0);}
 function renderReport(){
-  var by=groupBy(report.recs), cn=report.cn;
-  var b2bTot=sumF(report.recs.filter(function(r){return r._cat!=='onlybk';}),function(r){return r.gst2b;});
+  var by=groupBy(report.recs), cn=report.cn, cby=groupBy(cn);
+  var b2bTot=sumF(report.recs.filter(function(r){return r._cat!=='onlybk'&&r._cat!=='onlybkCN';}),function(r){return r.gst2b;});
   var bkTot=booksRows.reduce(function(a,r){return a+bGst(r);},0);
   var blocked=report.recs.concat(cn).filter(function(r){return String(r.remarks).indexOf('[ITC blocked]')>=0;}).length;
   var wrongReg=report.recs.filter(function(r){return String(r.remarks).indexOf('wrong registration')>=0;}).length;
-  $('repSub').innerHTML=(report.recs.filter(function(r){return r._cat!=='onlybk';}).length)+' 2B docs · '+booksRows.length+' books invoices'+(cn.length?' · '+cn.length+' credit notes':'')+' · ITC 2B '+inr(b2bTot)+' vs books '+inr(bkTot)
+  var only2a=report.recs.concat(cn).filter(function(r){return r._only2a;});
+  var cnRev=sumF(cby.cnmiss,function(r){return Math.abs(r.gst2b);})+sumF(cby.cnmm,function(r){return Math.abs(r.gstChk);});
+  $('repSub').innerHTML=(report.recs.filter(function(r){return r._cat!=='onlybk'&&r._cat!=='onlybkCN';}).length)+' documents · '+booksRows.length+' books entries'+(cn.length?' · '+cn.length+' credit/debit notes':'')+' · ITC 2B '+inr(b2bTot)+' vs books '+inr(bkTot)
+    +(only2a.length?' · <b style="color:var(--warn)">'+only2a.length+' in 2A only</b>':'')
     +(wrongReg?' · <b style="color:var(--bad)">🚩 '+wrongReg+' wrong-registration</b>':'')+(blocked?' · <b style="color:var(--warn)">'+blocked+' ITC-blocked</b>':'')
     /* Say what was left out and why. A number that excludes part of 2B without
        saying so reads as a clean reconciliation of the whole thing. */
@@ -1030,19 +1225,27 @@ function renderReport(){
     tile('badv','Wrong registration',by.wrongreg.length,inr(sumF(by.wrongreg,function(r){return r.gst2b;}))+' GST in the wrong GSTIN'),
     tile('warnv','Probable — verify',by.probable.length,inr(sumF(by.probable,function(r){return r.gst2b;}))+' GST'),
     tile('badv','Not in books',by.only2b.length,inr(sumF(by.only2b,function(r){return r.gst2b;}))+' GST'),
-    tile('badv','Not in 2B',by.onlybk.length,inr(sumF(by.onlybk,function(r){return r.gstBk;}))+' GST')
-  ].join('');
+    tile('badv','Not in 2B',by.onlybk.length,inr(sumF(by.onlybk,function(r){return r.gstBk;}))+' GST'),
+    only2a.length?tile('warnv','In 2A only',only2a.length,inr(sumF(only2a,function(r){return r.gst2b;}))+' GST not yet claimable'):'',
+    cn.length?tile(cby.cnmiss.length||cby.cnmm.length?'badv':'good','Credit notes',cn.length,
+      cby.cnok.length+' reversed'+(cby.cnmiss.length?' · '+cby.cnmiss.length+' NOT reversed':'')+(cnRev>0.5?' · reverse '+inr(cnRev):'')):'',
+    by.onlybkCN.length?tile('warnv','Reversals with no note',by.onlybkCN.length,inr(Math.abs(sumF(by.onlybkCN,function(r){return r.gstBk;})))+' given back'):''
+  ].filter(Boolean).join('');
   var html='';
   html+=secMM('Amount mismatch — matched invoice, GST or split differs',by.mismatch);
   html+=secMM('🚩 Wrong registration — the invoice is booked under a different GSTIN of yours',by.wrongreg);
   html+=secMM('Probable match — verify',by.probable);
   var pi=by.only2b.filter(function(r){return r._periodIssue;}).length;
   if(pi)html+='<div class="repsec"><div class="conn-banner off" style="margin:0"><span class="cdot"></span><div><div class="ctitle">'+pi+' of the “not in books” documents fall outside the period you fetched</div><div class="csub">Their invoice dates are before/after '+esc(COV.from)+' → '+esc(COV.to)+', or in a month Tally returned no vouchers for (shown in red). Widen the fetch — Step&nbsp;2 dates, and Alt+F2 in Tally to open the right period/company — then reconcile again. Only the rest are genuinely unrecorded. In the Excel these are tagged in <b>remarks</b> (“not booked — before/after fetched period”, or “month not fetched”) — filter on them; the full reason is in each row’s Note.</div></div></div></div>';
-  html+=secOnly('In GSTR-2B but NOT in your books',by.only2b,'2b');
+  html+=secOnly('In GSTR-'+(mergeStats.has2a&&mergeStats.has2b?'2B/2A':(mergeStats.has2a?'2A':'2B'))+' but NOT in your books',by.only2b,'2b');
   var laterN=by.onlybk.filter(function(r){return r._timingLater;}).length;
   if(laterN)html+='<div class="repsec"><div class="conn-banner wait" style="margin:0"><span class="cdot"></span><div><div class="ctitle">'+laterN+' of these are just waiting on the vendor’s next filing</div><div class="csub">They’re booked in/after the latest 2B period you loaded ('+esc(fmtYM(report.maxTwoBYM))+'), so the 2B where they’d appear isn’t in hand yet. A vendor filing GSTR-1 a cycle late is normal — these are tagged <b>“booked — expected in a later 2B”</b>, not treated as errors. Only revisit any that are still missing near the Sec&nbsp;16(4) cut-off (30 Nov after the FY).</div></div></div></div>';
   html+=secOnly('Booked in your books but NOT in 2B',by.onlybk,'bk');
-  if(cn.length)html+=secOnly('Credit notes in 2B',cn.map(function(r){return r;}),'2b');
+  if(by.onlybkCN.length)html+=secOnly('ITC reversed in your books with no supplier credit note',by.onlybkCN,'bk');
+  if(cby.cnmiss.length)html+='<div class="repsec"><div class="conn-banner off" style="margin:0"><span class="cdot"></span><div><div class="ctitle">'+cby.cnmiss.length+' supplier credit note(s) have not been reversed — ITC '+inr(sumF(cby.cnmiss,function(r){return Math.abs(r.gst2b);}))+'</div><div class="csub">A credit note reduces what the supplier charged you, so the credit taken on the original invoice has to go back. In Tally that is a <b>Debit Note</b> (purchase return / rate difference) against the same party, which credits the input-GST ledger — that is exactly what this tool looks for and did not find. Until it is passed the ITC stands over-claimed, with interest under Sec&nbsp;50. Check first that the reversal is not sitting in a month outside the period you fetched.</div></div></div></div>';
+  if(cn.length)html+=secCN('Credit / debit notes from suppliers',cn);
+  if(only2a.length)html+='<div class="repsec"><div class="conn-banner wait" style="margin:0"><span class="cdot"></span><div><div class="ctitle">'+only2a.length+' document(s) are in GSTR-2A but in none of the 2B files loaded — ITC '+inr(sumF(only2a,function(r){return r.gst2b;}))+'</div><div class="csub">They are reconciled against the books like everything else (the “remarks” say whether the books have them), but the credit is a separate question: under Sec&nbsp;16(2)(aa) ITC is available only through <b>2B</b>. Usually the supplier filed GSTR-1 late or after the 2B cut-off and it lands in a later month’s 2B — load that month to confirm. If it never reaches a 2B, the credit is not available at all. In the Excel they carry <b>Source = 2A</b> and “· in 2A only” in remarks.</div></div></div></div>';
+  if(only2a.length)html+=sec2a('In GSTR-2A only (not in any 2B loaded) — the same rows also appear in the sections above',only2a);
   html+=secBooked('Booked (matched)',by.matched);
   $('repTables').innerHTML=html;
 }
@@ -1067,6 +1270,35 @@ function secOnly(title,recs,side){
   }).join('');
   return sec(title,String(recs.length),'<thead><tr><th>GSTIN</th><th>Party</th><th>Doc / Vch</th><th>Date</th><th class="r">Taxable</th><th class="r">IGST</th><th class="r">CGST</th><th class="r">SGST</th></tr></thead><tbody>'+body+'</tbody>');
 }
+/* 2A-only documents: what the return says, whether the books have it, and the
+   verdict — because the two questions ("is it booked?" and "can the credit be
+   claimed?") have different answers here and both belong on the row. */
+function sec2a(title,recs){
+  if(!recs.length)return sec(title,'0');
+  var body=recs.map(function(r){
+    return '<tr><td class="mono">'+esc(r.gstin2b||'—')+'</td><td>'+esc(r.party2b||'')+'</td><td>'+esc(r.docNo||'')+'</td>'
+      +'<td style="white-space:nowrap">'+esc((''+r.docDate).slice(0,10))+'</td>'
+      +'<td class="r">'+inr(r.tax2b)+'</td><td class="r">'+inr(r.gst2b)+'</td>'
+      +'<td>'+esc(r.vchBk||'— not in books —')+'</td>'
+      +'<td style="white-space:normal;max-width:380px;font-size:12px;color:var(--muted)">'+esc(r.remarks)+'</td></tr>';}).join('');
+  return sec(title,String(recs.length),'<thead><tr><th>GSTIN</th><th>Party</th><th>Doc No</th><th>Date</th><th class="r">Taxable</th><th class="r">GST</th><th>Books voucher</th><th>Verdict</th></tr></thead><tbody>'+body+'</tbody>');
+}
+/* Credit / debit notes: the 2B side, the reversal found in the books (if any),
+   and the verdict. The amounts are shown as the reversal they are — positive
+   numbers, labelled — rather than as the negatives they arrive as. */
+function secCN(title,recs){
+  if(!recs.length)return sec(title,'0');
+  var order={cnmiss:0,cnmm:1,cnok:2};
+  var body=recs.slice().sort(function(a,b){return (order[a._cat]==null?3:order[a._cat])-(order[b._cat]==null?3:order[b._cat]);}).map(function(r){
+    var cls=r._cat==='cnmiss'?' class="neg"':'';
+    return '<tr><td class="mono">'+esc(r.gstin2b||'—')+'</td><td>'+esc(r.party2b||r.partyBk)+'</td><td>'+esc(r.docNo||'')+'</td>'
+      +'<td style="white-space:nowrap">'+esc((''+r.docDate).slice(0,10))+'</td>'
+      +'<td class="r">'+inr(Math.abs(r.gst2b))+'</td>'
+      +'<td class="r">'+(r.gstBk===''?'—':inr(Math.abs(r.gstBk)))+'</td>'
+      +'<td'+cls+'>'+esc(r.vchBk?((r.vchType?r.vchType+' ':'')+r.vchBk):'— none —')+'</td>'
+      +'<td style="white-space:normal;max-width:420px;font-size:12px;color:var(--muted)">'+esc(r.remarks)+'</td></tr>';}).join('');
+  return sec(title,String(recs.length),'<thead><tr><th>GSTIN</th><th>Party</th><th>Note No</th><th>Date</th><th class="r">GST on note</th><th class="r">GST reversed</th><th>Reversal voucher</th><th>Verdict</th></tr></thead><tbody>'+body+'</tbody>');
+}
 function secBooked(title,recs){
   if(!recs.length)return sec(title,'0');
   var body=recs.slice(0,400).map(function(r){return '<tr><td class="mono">'+esc(r.gstin2b||'—')+'</td><td>'+esc(r.party2b||r.partyBk)+'</td><td>'+esc(r.docNo)+'</td><td style="white-space:nowrap">'+esc((''+r.docDate).slice(0,10))+'</td><td class="r">'+inr(r.tax2b)+'</td><td class="r">'+inr(r.gst2b)+'</td></tr>';}).join('');
@@ -1074,8 +1306,8 @@ function secBooked(title,recs){
 }
 
 /* ============================ excel export (reference layout) ============================ */
-var RECO_HDR=['Regn (your GSTIN)','GSTIN (2B)','Party (2B)','Doc No','Doc Date','Invoice Value','Taxable (2B)','IGST (2B)','CGST (2B)','SGST (2B)','GST (2B)','RCM','Period','GSTIN check','name check','taxable check','GST check','voucher check','spillover (mth)','remarks','Regn (books)','GSTIN (books)','Date (books)','Particulars (books)','Vch / Bill No','IGST (books)','CGST (books)','SGST (books)','GST as per Books','Taxable (books)','Note'];
-function recToRow(r){return [r.regn2b,r.gstin2b,r.party2b,r.docNo,(''+r.docDate).slice(0,10),r.invVal,r.tax2b,r.igst2b,r.cgst2b,r.sgst2b,r.gst2b,r.rcm,r.period,r.gstinChk,r.nameChk,r.taxChk,r.gstChk,r.vchChk,r.spill,r.remarks,r.regnBk,r.gstinBk,(''+r.dateBk).slice(0,10),r.partyBk,r.vchBk,r.igstBk,r.cgstBk,r.sgstBk,r.gstBk,r.taxBk,r.note];}
+var RECO_HDR=['Regn (your GSTIN)','GSTIN (2B)','Party (2B)','Doc No','Doc Date','Invoice Value','Taxable (2B)','IGST (2B)','CGST (2B)','SGST (2B)','GST (2B)','RCM','Period','Source','GSTIN check','name check','taxable check','GST check','voucher check','spillover (mth)','remarks','Regn (books)','GSTIN (books)','Date (books)','Particulars (books)','Vch / Bill No','IGST (books)','CGST (books)','SGST (books)','GST as per Books','Taxable (books)','Note'];
+function recToRow(r){return [r.regn2b,r.gstin2b,r.party2b,r.docNo,(''+r.docDate).slice(0,10),r.invVal,r.tax2b,r.igst2b,r.cgst2b,r.sgst2b,r.gst2b,r.rcm,r.period,r.src||'',r.gstinChk,r.nameChk,r.taxChk,r.gstChk,r.vchChk,r.spill,r.remarks,r.regnBk,r.gstinBk,(''+r.dateBk).slice(0,10),r.partyBk,r.vchBk,r.igstBk,r.cgstBk,r.sgstBk,r.gstBk,r.taxBk,r.note];}
 function colLetter(n){var s='';while(n>0){var m=(n-1)%26;s=String.fromCharCode(65+m)+s;n=(n-m-1)/26;}return s;}
 // Three colour bands, like the HTML sheet: the 2B side, the reconciliation
 // columns in the middle, and the books side — so it reads at a glance which
@@ -1083,9 +1315,10 @@ function colLetter(n){var s='';while(n>0){var m=(n-1)%26;s=String.fromCharCode(6
 var BAND_2B={hdr:'FF2E75B6',cell:'FFDDEBF7'},   // blue   — from GSTR-2B
     BAND_RC={hdr:'FFBF8F00',cell:'FFFFF2CC'},   // amber  — reconciliation checks
     BAND_BK={hdr:'FF548235',cell:'FFE2EFDA'};   // green  — from the books
-// column index (1-based) → band. 1..13 = 2B, 14..20 = checks, 21..31 = books.
-function bandOf(ci){return ci<=13?BAND_2B:(ci<=20?BAND_RC:BAND_BK);}
-var AMT_COLS=[6,7,8,9,10,11,16,17,26,27,28,29,30]; // #,##0.00
+// column index (1-based) → band. 1..14 = the return (2B/2A), 15..21 = checks,
+// 22..32 = books.
+function bandOf(ci){return ci<=14?BAND_2B:(ci<=21?BAND_RC:BAND_BK);}
+var AMT_COLS=[6,7,8,9,10,11,17,18,27,28,29,30,31]; // #,##0.00
 function exportXlsx(){
   if(!report||typeof ExcelJS==='undefined'){alert('Report or Excel library not ready.');return;}
   var wb=new ExcelJS.Workbook();
@@ -1101,34 +1334,48 @@ function exportXlsx(){
       var hasBoth=!!(r._b&&r._bk);
       // ---- live formulas: change any figure and the checks + remarks recompute
       if(r._b) row.getCell(11).value={formula:'SUM(H'+rn+':J'+rn+')',result:r.gst2b};        // K  GST (2B)
-      if(r._bk) row.getCell(29).value={formula:'SUM(Z'+rn+':AB'+rn+')',result:r.gstBk};      // AC GST as per Books
-      if(hasBoth){
-        row.getCell(14).value={formula:'IF(OR(B'+rn+'="",V'+rn+'=""),"—",UPPER(TRIM(B'+rn+'))=UPPER(TRIM(V'+rn+')))',result:r.gstinChk}; // N GSTIN check
-        row.getCell(16).value={formula:'G'+rn+'-AD'+rn,result:r.taxChk};                     // P taxable check
-        row.getCell(17).value={formula:'K'+rn+'-AC'+rn,result:r.gstChk};                     // Q GST check
-        // T remarks — wrong-registration wins, else amount/tax tolerance, else booked;
-        // [ITC blocked] stays appended (a 2B flag, not an arithmetic result).
-        var reg='IF(AND(A'+rn+'<>"",U'+rn+'<>"",UPPER(TRIM(A'+rn+'))<>UPPER(TRIM(U'+rn+'))),"booked - amount mismatch 🚩 wrong registration",'
-               +'IF(ABS(Q'+rn+')>'+GSTTOL+',"booked - amount mismatch",'
-               +'IF(ABS(P'+rn+')>MAX(10,ABS(G'+rn+')*0.005),"probable match — verify","booked")))';
+      if(r._bk) row.getCell(30).value={formula:'SUM(AA'+rn+':AC'+rn+')',result:r.gstBk};     // AD GST as per Books
+      /* The live formulas rebuild the VERDICT from the figures, so they only fit
+         rows whose verdict is arithmetic. A credit/debit note is judged as a
+         reversal, not as a purchase, and its remark would be rewritten into
+         nonsense — so notes keep the text this tool computed. */
+      if(hasBoth&&!r._isCN){
+        row.getCell(15).value={formula:'IF(OR(B'+rn+'="",W'+rn+'=""),"—",UPPER(TRIM(B'+rn+'))=UPPER(TRIM(W'+rn+')))',result:r.gstinChk}; // O GSTIN check
+        row.getCell(17).value={formula:'G'+rn+'-AE'+rn,result:r.taxChk};                     // Q taxable check
+        row.getCell(18).value={formula:'K'+rn+'-AD'+rn,result:r.gstChk};                     // R GST check
+        // U remarks — wrong-registration wins, else amount/tax tolerance, else booked;
+        // the 2A / amended / [ITC blocked] tags stay appended (facts from the
+        // return, not arithmetic results).
+        var reg='IF(AND(A'+rn+'<>"",V'+rn+'<>"",UPPER(TRIM(A'+rn+'))<>UPPER(TRIM(V'+rn+'))),"booked - amount mismatch 🚩 wrong registration",'
+               +'IF(ABS(R'+rn+')>'+GSTTOL+',"booked - amount mismatch",'
+               +'IF(ABS(Q'+rn+')>MAX(10,ABS(G'+rn+')*0.005),"probable match — verify","booked")))';
         var blocked=!!(r._b&&r._b.itcBlocked);
         var amended=!!(r._b&&r._b.isAmend);
-        // Keep the suffix order identical to buildRec: base → · amended → [ITC blocked].
-        row.getCell(20).value={formula:reg+(amended?'&" · amended"':'')+(blocked?'&" [ITC blocked]"':''),result:r.remarks};// T remarks
+        var only2a=!!(r._b&&r._b._only2a);
+        // Keep the suffix order identical to buildRec: base → · in 2A only → · amended → [ITC blocked].
+        row.getCell(21).value={formula:reg+(only2a?'&" · in 2A only"':'')+(amended?'&" · amended"':'')+(blocked?'&" [ITC blocked]"':''),result:r.remarks};// U remarks
       }
       // ---- band tints on the body
       for(var ci=1;ci<=RECO_HDR.length;ci++){row.getCell(ci).fill={type:'pattern',pattern:'solid',fgColor:{argb:bandOf(ci).cell}};}
     });
-    ws.columns.forEach(function(c,i){c.width=[16,17,26,16,12,13,13,11,11,11,12,6,11,10,10,11,10,11,10,20,16,17,12,26,16,11,11,11,13,13,60][i]||12;});
+    ws.columns.forEach(function(c,i){c.width=[16,17,26,16,12,13,13,11,11,11,12,6,11,8,10,10,11,10,11,10,20,16,17,12,26,16,11,11,11,13,13,60][i]||12;});
     AMT_COLS.forEach(function(ci){ws.getColumn(ci).numFmt='#,##0.00';});
-    ws.getColumn(19).numFmt='0'; // spillover (mth)
+    ws.getColumn(20).numFmt='0'; // spillover (mth)
     ws.views=[{state:'frozen',ySplit:1,xSplit:0}];
   }
-  // reconciled: matched, mismatch, probable, only-2b first, then only-books
-  var order={matched:0,mismatch:1,probable:2,only2b:3,onlybk:4};
-  var recs=report.recs.slice().sort(function(a,b){return (order[a._cat]-order[b._cat])||((b.gst2b||b.gstBk||0)-(a.gst2b||a.gstBk||0));});
+  // Findings first, matched last — and every category ranked, so a bucket added
+  // later can never sort as NaN and scatter its rows through the sheet.
+  var order={wrongreg:0,mismatch:1,probable:2,only2b:3,onlybk:4,onlybkCN:5,matched:6};
+  function rank(c){return order[c]==null?7:order[c];}
+  var recs=report.recs.slice().sort(function(a,b){return (rank(a._cat)-rank(b._cat))||((b.gst2b||b.gstBk||0)-(a.gst2b||a.gstBk||0));});
   sheet('reconciled',recs);
-  sheet('Credit Notes',report.cn);
+  var cnOrder={cnmiss:0,cnmm:1,cnok:2};
+  sheet('Credit Notes',report.cn.slice().sort(function(a,b){
+    return ((cnOrder[a._cat]==null?3:cnOrder[a._cat])-(cnOrder[b._cat]==null?3:cnOrder[b._cat]))||(Math.abs(b.gst2b||0)-Math.abs(a.gst2b||0));}));
+  // 2A-only documents also sit in 'reconciled' (Source = 2A); this sheet is the
+  // same rows on their own, because what to do about them is a separate job.
+  var o2a=report.recs.concat(report.cn).filter(function(r){return r._only2a;});
+  if(o2a.length)sheet('2A only',o2a);
   wb.xlsx.writeBuffer().then(function(buf){dl('itc-reconciliation.xlsx',new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));});
 }
 

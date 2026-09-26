@@ -63,6 +63,44 @@ const label = (b, bk) => page.evaluate(([b, bk]) => {
   return { cat: r._cat, remarks: r.remarks, note: r.note, gstChk: r.gstChk, taxChk: r.taxChk };
 }, [b, bk]);
 
+/* Load real GSTR-2A / 2B JSON shapes through the page's own file path — detect
+   the source, parse, merge — then reconcile against books rows. */
+const runJson = (files, bks) => page.evaluate(([files, bks]) => {
+  loadedFiles = files.map((f) => {
+    const src = srcOfJson(f.json, f.name);
+    const rows = parseGstJson(f.json, src, f.name);
+    return { name: f.name, rows, count: rows.length, src };
+  });
+  rebuild2b();
+  booksRows = bks;
+  ['hIGST', 'hINTRA', 'hNIL'].forEach((id) => { const e = document.getElementById(id); if (e) e.checked = true; });
+  reconcile();
+  const pick = (r) => ({ doc: r.docNo, src: r.src, cat: r._cat, remarks: r.remarks, note: r.note,
+    vch: r.vchBk, gst2b: r.gst2b, only2a: !!r._only2a });
+  return { detected: loadedFiles.map((f) => f.src), merge: mergeStats,
+    recs: report.recs.map(pick), cn: report.cn.map(pick) };
+}, [files, bks]);
+
+/* A GSTR-2A file as the portal gives it: tax inside itms[].itm_det as
+   iamt/camt/samt, the invoice date as idt, no itcavl anywhere. */
+const j2a = (invs, opts) => ({
+  gstin: '06AAGCE4293A1ZX', fp: (opts && opts.fp) || '112025',
+  b2b: [{ ctin: '07BICPL2786D1ZB', trdnm: 'DEEPALI ENGINEERING', cfs: 'Y',
+    inv: invs.map((i) => ({ inum: i.no, idt: i.dt || '05-11-2025', val: i.val || 0, pos: '07', rchrg: 'N', inv_typ: 'R',
+      itms: [{ num: 1, itm_det: { rt: 18, txval: i.txval, iamt: i.iamt || 0, camt: i.camt || 0, samt: i.samt || 0, csamt: 0 } }] })) }],
+});
+/* The same invoices as GSTR-2B gives them: docdata, dt, flat igst/cgst/sgst. */
+const j2b = (invs, cdnr) => ({
+  data: { gstin: '06AAGCE4293A1ZX', rtnprd: '112025', docdata: {
+    b2b: invs.length ? [{ ctin: '07BICPL2786D1ZB', trdnm: 'DEEPALI ENGINEERING',
+      inv: invs.map((i) => ({ inum: i.no, dt: i.dt || '05-11-2025', val: i.val || 0, txval: i.txval,
+        igst: i.igst || 0, cgst: i.cgst || 0, sgst: i.sgst || 0, itcavl: 'Y' })) }] : [],
+    cdnr: (cdnr || []).length ? [{ ctin: '07BICPL2786D1ZB', trdnm: 'DEEPALI ENGINEERING',
+      nt: cdnr.map((n) => ({ ntty: n.ntty || 'C', nt_num: n.no, nt_dt: n.dt || '20-12-2025', val: n.val || 0,
+        txval: n.txval, igst: n.igst || 0, cgst: n.cgst || 0, sgst: n.sgst || 0, itcavl: 'Y' })) }] : [],
+  } },
+});
+
 const doc = (o) => Object.assign({
   regn: '06AAGCE4293A1ZX', period: '112025', gstin: '07BICPL2786D1ZB', party: 'DEEPALI ENGINEERING',
   invNo: 'DEE/2025-26/196', invDate: '2025-11-05', invoiceValue: 1762094,
@@ -213,6 +251,180 @@ await t('but "6" alone does not pair two unrelated suppliers', async () => {
                                taxable: 9100, igst: 1638 }));
   assert(r.cat === 'only2b',
     `a shared one-digit number is not evidence — expected unbooked, got ${r.cat} (${r.remarks})`);
+});
+
+console.log('\n── reading GSTR-2A ──');
+await t('a 2A file is recognised as 2A and its figures read correctly', async () => {
+  const out = await runJson(
+    [{ name: 'GSTR2A_06AAGCE4293A1ZX_112025.json',
+       json: j2a([{ no: 'DEE/2025-26/196', txval: 1493300, iamt: 268794, val: 1762094 }]) }],
+    [book({})]);
+  assert(out.detected[0] === '2A', `expected 2A, detected ${out.detected[0]}`);
+  assert(out.recs.length === 1, `expected one document, got ${out.recs.length}`);
+  assert(Math.abs(out.recs[0].gst2b - 268794) < 0.01,
+    `iamt should be read as IGST, got ${out.recs[0].gst2b}`);
+  assert(out.recs[0].vch === 'DEE/2025-26/196', 'it must still match the books voucher: ' + out.recs[0].remarks);
+});
+await t('a 2B file is still recognised as 2B', async () => {
+  const out = await runJson(
+    [{ name: '2B_06AAGCE4293A1ZX_112025.json',
+       json: j2b([{ no: 'DEE/2025-26/196', txval: 1493300, igst: 268794 }]) }], [book({})]);
+  assert(out.detected[0] === '2B', `expected 2B, detected ${out.detected[0]}`);
+  assert(out.recs[0].cat === 'matched', `expected booked, got ${out.recs[0].cat}`);
+  assert(!out.recs[0].only2a, 'a 2B document is not "2A only"');
+});
+
+console.log('\n── 2A and 2B together ──');
+await t('a document in both is kept once, as 2B reports it', async () => {
+  const out = await runJson([
+    { name: '2B_112025.json', json: j2b([{ no: 'DEE/2025-26/196', txval: 1493300, igst: 268794 }]) },
+    { name: '2A_112025.json', json: j2a([{ no: 'DEE/2025-26/196', txval: 1493300, iamt: 268794 }]) },
+  ], [book({})]);
+  assert(out.recs.length === 1, `the same document twice must collapse to one, got ${out.recs.length}`);
+  assert(out.recs[0].src === '2B', `kept copy should be the 2B one, got ${out.recs[0].src}`);
+  assert(out.merge.common === 1, `it should be counted as common, got ${out.merge.common}`);
+  assert(!/2A only/.test(out.recs[0].remarks), 'a common document is not 2A-only: ' + out.recs[0].remarks);
+});
+await t('a document only in 2A is reconciled with the books and tagged', async () => {
+  const out = await runJson([
+    { name: '2B_112025.json', json: j2b([{ no: 'DEE/2025-26/196', txval: 1493300, igst: 268794 }]) },
+    { name: '2A_112025.json', json: j2a([
+      { no: 'DEE/2025-26/196', txval: 1493300, iamt: 268794 },
+      { no: 'DEE/2025-26/214', txval: 200000, iamt: 36000, dt: '28-11-2025' }]) },
+  ], [book({}),
+      book({ voucherNo: 'DEE/2025-26/214', supplierInvNo: 'DEE/2025-26/214', ref: 'DEE/2025-26/214',
+             date: '2025-11-28', taxable: 200000, igst: 36000 })]);
+  const only = out.recs.find((r) => r.doc === 'DEE/2025-26/214');
+  assert(out.merge.only2a === 1, `expected one 2A-only document, got ${out.merge.only2a}`);
+  assert(only.src === '2A' && only.only2a, `it should carry its source, got ${only.src}`);
+  assert(only.vch === 'DEE/2025-26/214',
+    'a 2A-only document must still be matched against the books: ' + only.remarks);
+  assert(/in 2A only/.test(only.remarks), 'the remark must say so: ' + only.remarks);
+  assert(/16\(2\)\(aa\)/.test(only.note), 'the note should say why it is not claimable yet: ' + only.note);
+});
+await t('a 2A-only document missing from the books says both things', async () => {
+  const out = await runJson([
+    { name: '2A_112025.json', json: j2a([{ no: 'DEE/2025-26/214', txval: 200000, iamt: 36000 }]) },
+  ], [book({})]);
+  const r = out.recs.find((x) => x.doc === 'DEE/2025-26/214');
+  assert(r.cat === 'only2b', `expected not-in-books, got ${r.cat}`);
+  assert(/not booked/.test(r.remarks) && /in 2A only/.test(r.remarks),
+    'both facts belong in the remark: ' + r.remarks);
+});
+
+console.log('\n── credit notes against the books ──');
+await t('a credit note answered by a debit note reads as reversed', async () => {
+  const out = await runJson(
+    [{ name: '2B_122025.json', json: j2b([], [{ no: 'CN/25-26/9', txval: 50000, igst: 9000, val: 59000 }]) }],
+    // In Tally the supplier's credit note is a DEBIT NOTE: it credits the input
+    // tax ledger, so the tax reaches us negative.
+    [book({ voucherNo: 'DN/12', voucherType: 'Debit Note', supplierInvNo: 'CN/25-26/9',
+            ref: 'CN/25-26/9', date: '2025-12-20', taxable: -50000, igst: -9000 })]);
+  assert(out.cn.length === 1, `the note should be in the credit-note set, got ${out.cn.length}`);
+  assert(out.cn[0].cat === 'cnok', `expected reversed, got ${out.cn[0].cat} (${out.cn[0].remarks})`);
+  assert(out.cn[0].vch === 'DN/12', `it should name the reversal voucher, got "${out.cn[0].vch}"`);
+  assert(/Debit Note DN\/12/.test(out.cn[0].note),
+    'the note should say what kind of voucher answered it: ' + out.cn[0].note);
+});
+await t('a credit note with no reversal is an ITC reversal due', async () => {
+  const out = await runJson(
+    [{ name: '2B_122025.json', json: j2b([], [{ no: 'CN/25-26/9', txval: 50000, igst: 9000 }]) }], []);
+  assert(out.cn[0].cat === 'cnmiss', `expected not-reversed, got ${out.cn[0].cat}`);
+  assert(/not reversed/.test(out.cn[0].remarks), 'the remark must say it: ' + out.cn[0].remarks);
+  assert(/9,000\.00/.test(out.cn[0].note), 'the note should name the amount to reverse: ' + out.cn[0].note);
+});
+await t('a credit note does not eat the purchase it refers to', async () => {
+  /* Suppliers often number the credit note after the invoice it relates to. If
+     the note is allowed to match the original PURCHASE, the reconciliation
+     reads "credit note reversed" and the reversal that is actually missing is
+     never reported. */
+  const out = await runJson(
+    [{ name: '2B_122025.json', json: j2b(
+        [{ no: 'DEE/2025-26/196', txval: 1493300, igst: 268794 }],
+        [{ no: 'DEE/2025-26/196', txval: 50000, igst: 9000 }]) }],
+    [book({})]);
+  const inv = out.recs.find((r) => r.doc === 'DEE/2025-26/196');
+  assert(inv.cat === 'matched', `the purchase keeps its voucher: got ${inv.cat} (${inv.remarks})`);
+  assert(out.cn[0].cat === 'cnmiss',
+    'the note must NOT claim the purchase as its reversal: ' + out.cn[0].remarks);
+  assert(!out.cn[0].vch, `and it has no reversal voucher, got "${out.cn[0].vch}"`);
+});
+await t('a reversal in the books with no supplier note gets its own bucket', async () => {
+  const out = await runJson(
+    [{ name: '2B_122025.json', json: j2b([{ no: 'DEE/2025-26/196', txval: 1493300, igst: 268794 }]) }],
+    [book({}), book({ voucherNo: 'DN/7', supplierInvNo: 'DN/7', ref: '', date: '2025-12-31',
+                      taxable: -12000, igst: -2160 })]);
+  const rev = out.recs.find((r) => r.cat === 'onlybkCN');
+  assert(rev, 'expected a reversal-without-note record, got ' + out.recs.map((r) => r.cat).join(','));
+  assert(/no supplier credit note/.test(rev.remarks), 'said plainly: ' + rev.remarks);
+  assert(/Rule 37/.test(rev.note), 'and the usual innocent explanations given: ' + rev.note);
+});
+
+console.log('\n── the Excel layout ──');
+await t('every formula in the export points at the column it means', async () => {
+  /* The live formulas address columns by letter. Inserting "Source" shifted
+     eleven of them, and a wrong letter silently computes a check against the
+     wrong figure — so the mapping is asserted, not eyeballed. */
+  const hdr = await page.evaluate(() => RECO_HDR);
+  const at = (n) => hdr[n - 1];
+  const want = { 7: 'Taxable (2B)', 11: 'GST (2B)', 14: 'Source', 15: 'GSTIN check',
+    17: 'taxable check', 18: 'GST check', 20: 'spillover (mth)', 21: 'remarks',
+    22: 'Regn (books)', 23: 'GSTIN (books)', 27: 'IGST (books)', 29: 'SGST (books)',
+    30: 'GST as per Books', 31: 'Taxable (books)' };
+  Object.keys(want).forEach((n) => assert(at(+n) === want[n],
+    `column ${n} should be "${want[n]}", it is "${at(+n)}"`));
+  const amt = await page.evaluate(() => AMT_COLS);
+  amt.forEach((ci) => assert(/Value|Taxable|IGST|CGST|SGST|GST|check/.test(at(ci)),
+    `column ${ci} ("${at(ci)}") is number-formatted but is not an amount`));
+});
+
+/* Build the workbook the download button builds, and read it back. */
+const xlsxOut = () => page.evaluate(() => new Promise((res, rej) => {
+  const orig = window.dl;
+  window.__blob = null;
+  window.dl = function (name, blob) { window.__blob = blob; };
+  try { exportXlsx(); } catch (e) { window.dl = orig; return rej(e.message); }
+  const t0 = Date.now();
+  (function wait() {
+    if (window.__blob) {
+      window.dl = orig;
+      const fr = new FileReader();
+      fr.onload = function () {
+        const wb = new ExcelJS.Workbook();
+        wb.xlsx.load(fr.result).then(function (w) {
+          const ws = w.getWorksheet('reconciled');
+          res({ sheets: w.worksheets.map((s) => s.name),
+                hdr: ws.getRow(1).values.slice(1),
+                rows: ws.rowCount - 1,
+                formulas: [2, 3, 4, 5].map((n) => (ws.getRow(n).getCell(21).formula || '')) });
+        }, function (e) { rej(String(e)); });
+      };
+      fr.readAsArrayBuffer(window.__blob);
+      return;
+    }
+    if (Date.now() - t0 > 15000) { window.dl = orig; return rej('no workbook was produced'); }
+    setTimeout(wait, 50);
+  })();
+}));
+
+await t('the workbook builds, with a sheet for the 2A-only documents', async () => {
+  await runJson([
+    { name: '2B_112025.json', json: j2b(
+        [{ no: 'DEE/2025-26/196', txval: 1493300, igst: 268794 }],
+        [{ no: 'CN/25-26/9', txval: 50000, igst: 9000 }]) },
+    { name: '2A_112025.json', json: j2a([
+        { no: 'DEE/2025-26/196', txval: 1493300, iamt: 268794 },
+        { no: 'DEE/2025-26/214', txval: 200000, iamt: 36000, dt: '28-11-2025' }]) },
+  ], [book({})]);
+  const x = await xlsxOut();
+  assert(x.sheets.join(',') === 'reconciled,Credit Notes,2A only',
+    'expected three sheets, got ' + x.sheets.join(','));
+  assert(x.hdr[13] === 'Source', `column N should be Source, it is "${x.hdr[13]}"`);
+  assert(x.hdr.length === 32, `expected 32 columns, got ${x.hdr.length}`);
+  // the matched row carries the live remark formula; it must address R/Q/A/V
+  const f = x.formulas.find((s) => /booked/.test(s)) || '';
+  assert(/ABS\(R\d+\)/.test(f) && /ABS\(Q\d+\)/.test(f) && /TRIM\(V\d+\)/.test(f),
+    'the remark formula must follow the shifted columns: ' + f);
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -49,7 +49,38 @@ for length: an invoice number carries a pair by itself only when the agreeing
 part is at least two characters. `6` ↔ `6` still needs the party or the tax to
 agree, because two unrelated suppliers both have a sixth bill.
 
-## 3. The credit follows the tax, not the taxable value
+## 3. Sign is not negotiable
+
+A credit note takes credit away; the voucher answering it must do the same. In
+the books that voucher is a **debit note** (purchase return, rate or quantity
+difference) which *credits* the input-tax ledger, so it reaches the matcher
+with its tax negative — the same sign as the note.
+
+Without that rule the matcher does something quietly terrible. Suppliers often
+number a credit note after the invoice it relates to, so the note matches the
+original **purchase**, reads "credit note reversed", and the reversal that was
+actually missing is never reported. A pair of signs only decides when both
+sides have one, so a nil-rated note still matches on its value.
+
+## 4. 2A and 2B are the same tables, and not the same question
+
+The parser reads both (`srcOfJson` decides from the shape, not the filename:
+`itcavl` exists only in 2B, `iamt` only in 2A). They are merged on the
+document's identity — supplier GSTIN + document number + invoice/note +
+amendment — with **2B winning every common document**, untouched.
+
+What is left from 2A is 2A-only, and that is a finding of its own kind: the
+books question ("is it recorded?") is answered exactly as for any other
+document, but the credit question is not. Under Sec 16(2)(aa) ITC comes
+through 2B, so 2A-only means *reported by the supplier, not yet claimable* —
+usually a late GSTR-1 that will land in a later month's 2B. Both answers go on
+the row; neither is allowed to stand in for the other.
+
+The reverse — in 2B but not in 2A — is **not** flagged. Loading twelve months
+of each still leaves the two sets ending on different documents, so the
+"finding" would be an artefact of which files were loaded.
+
+## 5. The credit follows the tax, not the taxable value
 
 GST tolerance is **₹1**; taxable tolerance is **max(₹10, 0.5%)**.
 
@@ -65,7 +96,7 @@ A taxable gap matters only when the invoice number does *not* vouch for the
 pairing: there the gap is evidence about whether this is even the right
 voucher, and it earns *verify*.
 
-## 4. A remark must be a finding, not a hedge
+## 6. A remark must be a finding, not a hedge
 
 The second tool the client compared against was, in their words, "more
 reliable and concise with no extra comments". That is the standard. Every
@@ -77,7 +108,7 @@ hedge spends the preparer's attention, and there is a fixed amount of it.
   Ultratech billed ₹8,424.00 eleven times over, and `913900250` paired with
   voucher `913900258` on nothing but the party and the value.
 
-## 5. Each kind of wrong gets its own bucket
+## 7. Each kind of wrong gets its own bucket
 
 *ITC taken in the wrong registration* is not an amount mismatch. Three ECLAT
 documents had identical figures on both sides and read "booked — amount
@@ -85,7 +116,25 @@ mismatch" with a difference of 0.00, because the registration branch
 overwrote the remark whatever the figures said. `wrongreg` is its own
 category; when the figures are *also* wrong, the note says both.
 
-## 6. Nothing in the input may be silently dropped
+A supplier credit note is the clearest example. It is not a missing entry like
+an unbooked purchase — it is a **reversal due**. The credit was taken on the
+original invoice, and if nothing in the books gives it back the ITC stands
+over-claimed with interest running under Sec 50. So credit notes carry their
+own verdicts:
+
+| Bucket | What it means |
+|---|---|
+| `cnok` | a reversal was found and the tax agrees |
+| `cnmm` | a reversal was found and is short by a stated amount |
+| `cnmiss` | **nothing answers it — reverse ₹x** |
+| `onlybkCN` | the books reversed credit no supplier note asked for |
+
+That last one is usually right — a Rule 37 non-payment reversal, Rule 42/43
+apportionment, an ineligible credit written back — and the note says so. It is
+reported because the same reversal passed twice looks identical, and because
+the supplier's note may be sitting in a month nobody loaded.
+
+## 8. Nothing in the input may be silently dropped
 
 Every one of these was a bug that presented as a wall of false findings:
 
@@ -96,17 +145,21 @@ Every one of these was a bug that presented as a wall of false findings:
   unbooked.
 - **Period coverage.** A 2B document dated outside the window the books were
   read for is a period gap, not an unbooked invoice.
+- **Duplicates.** The same document in two months' files is dropped once and
+  the count is shown. Left in, the second copy finds its voucher already taken
+  and reads "not in books" — a false finding manufactured by the input.
 - **TDS and round off.** Neither belongs in the taxable base. A voucher's TDS
   deduction was inflating it; the giveaway was that 18% of the base without
   TDS equalled the IGST exactly.
 
-## 7. Recall gaps are not all matcher gaps
+## 9. Recall gaps are not all matcher gaps
 
 142 documents worth ₹12.37 lakh appeared in the other tool's sheet and not in
 ours. Before touching the matcher: **119 of them were dated March 2026**, and
-their source file included 2A, not 2B alone. That is an input difference. Only
-the remaining handful were ours to fix — and they were the assignment-order
-and short-number bugs above.
+their source file included 2A, not 2B alone. That is an input difference — and
+the answer to it was to read 2A (rule 4), not to loosen the matching. Only the
+remaining handful were ours to fix, and they were the assignment-order and
+short-number bugs above.
 
 Always separate the two before concluding the matching is weak.
 
@@ -114,17 +167,27 @@ Always separate the two before concluding the matching is weak.
 
 ## Open, and honestly not done
 
-- **2A is not read.** We reconcile 2B. A document that appears only in 2A will
-  read as not booked. Worth stating on the page, or supporting.
 - **The Tally-side ITC filter is proved only against a stub.** Three TDL
   shapes are tried in order and each is validated against an unfiltered sample
   window, which is why `/api/itc/diagnose` exists. Output from a real Tally
   with the fastest shape failing has still not been seen, so tier 1 is
   untested in the field.
-- **Credit notes** are reported separately but not netted against the invoice
-  they relate to.
-- **Nothing ages the unmatched.** A 2B document unbooked for five months is
-  reported the same as one unbooked for five days.
+- **A credit note is not tied to the invoice it relates to.** It is matched to
+  the reversal in the books, which is the question that decides the tax; the
+  original document number the supplier put on the note (`onum`/`oinum` in the
+  return) is not read, so the note is not linked back to its invoice.
+- **Cess is parsed and then ignored.** `csamt`/`cess` is read into the row, but
+  there is no cess head to reconcile it against because the connector has no
+  cess ledger kind. Cess ITC is real credit and currently goes unchecked.
+- **ISD credit, imports and RCM self-invoices are not read.** The `isd`,
+  `impg`/`imp` and related tables in 2A/2B are skipped entirely, so a company
+  with an input-service distributor or import credits is only partly covered.
+- **Nothing ages the unmatched.** A document unbooked for five months is
+  reported the same as one unbooked for five days, and the Sec 16(4) cut-off
+  (30 Nov after the FY) is mentioned in notes but not computed.
+- **Nothing reconciles the total to GSTR-3B.** The tool ties 2B to the books;
+  it does not tie either to the ITC actually claimed in 3B, which is the number
+  a notice is raised on.
 
 ## Running the tests
 
