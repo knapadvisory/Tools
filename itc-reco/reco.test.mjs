@@ -193,6 +193,28 @@ await t("RAMCO's two documents are not cross-matched either", async () => {
     'a mis-pairing must not be reported as ITC in the wrong GSTIN: ' + wrong.remarks);
 });
 
+console.log('\n── a one-digit invoice number ──');
+await t('a supplier who bills "6" is still found in the books', async () => {
+  /* Maa Kalyani's invoice 6, ₹1,34,964 taxable: present in the books with the
+     same number, the same party and the same tax, and reported as not booked
+     because a one-character number was dropped before matching began. */
+  const r = await label(doc({ invNo: '6', party: 'MAA KALYANI TRADERS', gstin: '21ADQPP3838N1ZE',
+                              taxable: 134964, igst: 24293.52 }),
+                        book({ voucherNo: '6', supplierInvNo: '6', ref: '6',
+                               party: 'MAA KALYANI TRADERS', gstin: '21ADQPP3838N1ZE',
+                               taxable: 134964, igst: 24293.52 }));
+  assert(r.cat === 'matched', `expected booked, got ${r.cat} (${r.remarks})`);
+});
+await t('but "6" alone does not pair two unrelated suppliers', async () => {
+  const r = await label(doc({ invNo: '6', party: 'MAA KALYANI TRADERS', gstin: '21ADQPP3838N1ZE',
+                              taxable: 134964, igst: 24293.52 }),
+                        book({ voucherNo: '6', supplierInvNo: '6', ref: '6',
+                               party: 'SHREE BALAJI HARDWARE', gstin: '07AAACS1234B1Z1',
+                               taxable: 9100, igst: 1638 }));
+  assert(r.cat === 'only2b',
+    `a shared one-digit number is not evidence — expected unbooked, got ${r.cat} (${r.remarks})`);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (errs.length) { console.log('\nBROWSER ERRORS:'); errs.slice(0, 5).forEach((e) => console.log('  ' + e)); }
 await browser.close(); srv.close();

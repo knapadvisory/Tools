@@ -722,7 +722,20 @@ function normInv(x){return String(x||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
 function bTax(r){return {igst:r.igst+(r.rcmIgst||0),cgst:r.cgst+(r.rcmCgst||0),sgst:r.sgst+(r.rcmSgst||0)};}
 function bGstTotal(r){var t=bTax(r);return t.igst+t.cgst+t.sgst;}
 function uniq(a){var s={},o=[];a.forEach(function(x){if(x&&!s[x]){s[x]=1;o.push(x);}});return o;}
-function invCands(r){return uniq([r.supplierInvNo,r.voucherNo,r.ref].map(normInv)).filter(function(x){return x.length>=2;});}
+/* Every invoice number the books row could be known by. Single-character
+   numbers count: small suppliers really do bill "6" (Maa Kalyani's ₹1,34,964
+   was reported unbooked for no other reason than that its number was one
+   digit long). They are kept here and corroborated at the point of use —
+   see `invBest` — because on its own "6" is not evidence of anything. */
+function invCands(r){return uniq([r.supplierInvNo,r.voucherNo,r.ref].map(normInv)).filter(function(x){return x.length>=1;});}
+/* The strongest invoice-number agreement between a 2B number and a books row,
+   with the length of the shorter side of that agreement, so the caller can tell
+   "INV-2526-0441 both sides" from "6 both sides". */
+function invBest(bInv,r){
+  var im=0,len=0;
+  invCands(r).forEach(function(c){var s=invMatch(bInv,c);if(s>im){im=s;len=Math.min(bInv.length,c.length);}});
+  return {im:im,len:len};
+}
 // Invoice-number similarity: 3 exact, 2 one is a suffix of the other (len≥3 —
 // catches "100" ↔ "26-27/100"), 1 one contains the other (len≥5), else 0.
 function invMatch(a,b){
@@ -812,7 +825,7 @@ function buildRec(b,br){
   rec.nameChk=(b.party&&br.party)?(nameScore(b.party,br.party)>=0.5):'—';
   rec.taxChk=r2(rec.tax2b-rec.taxBk);
   rec.gstChk=r2(rec.gst2b-rec.gstBk);
-  var im=0;invCands(br).forEach(function(c){im=Math.max(im,invMatch(normInv(b.invNo),c));});
+  var im=invBest(normInv(b.invNo),br).im;
   rec.vchChk=im>=3;
   rec.spill=monthGap(b.invDate,br.date);
   var gstOff=Math.abs(rec.gstChk)>GSTTOL;
@@ -922,13 +935,17 @@ function reconcile(){
     var best=-1,bestKey=null;
     Object.keys(pool).forEach(function(ks){
       var i=+ks,r=booksRows[i];
-      var im=0;invCands(r).forEach(function(c){im=Math.max(im,invMatch(bInv,c));});
+      var ib=invBest(bInv,r),im=ib.im;
       var rg=normGstin(r.gstin),gstEq=!!(g&&rg&&g===rg);
       var dg=Math.abs(bg-bGst(r)),gstClose=dg<=2,gstNear=dg<=50;
       var dt=Math.abs((b.taxable||0)-(r.taxable||0)),taxClose=dt<=Math.max(10,Math.abs(b.taxable||0)*0.005);
       var ns=nameScore(b.party,r.party),nameStrong=ns>=0.5;
       var breg=normGstin(b.regn||''),oreg=normGstin(r._ownGstin||''),sameReg=!!(breg&&oreg&&breg===oreg);
-      var accept=im>=2||(im>=1&&(gstNear||nameStrong))||(gstEq&&gstNear)||(nameStrong&&gstClose);
+      /* An invoice number carries the match on its own only if it is long
+         enough to be distinctive; "6" agreeing with "6" needs the party or the
+         tax to agree as well, or two unrelated suppliers' sixth bills pair up. */
+      var invAlone=im>=2&&ib.len>=2;
+      var accept=invAlone||(im>=1&&(gstNear||nameStrong))||(gstEq&&gstNear)||(nameStrong&&gstClose);
       if(im<floor) return;              // this pass wants firmer evidence than that
       if(!accept)return;
       // Rank: SAME registration first (so a 06 invoice takes its 06 book, not an
