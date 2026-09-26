@@ -841,8 +841,22 @@ function buildRec(b,br){
   var ownReg=br._ownGstin||(chosen&&chosen.gstin)||'';
   if(ownReg)rec.regnBk=ownReg;
   if(b.regn&&ownReg&&normGstin(b.regn)!==normGstin(ownReg)){
-    rec.remarks='booked - amount mismatch 🚩 wrong registration';rec._cat='mismatch';
-    rec.note='🚩 BOOKED UNDER THE WRONG REGISTRATION: this document belongs to '+b.regn+', but the matching voucher '+rec.vchBk+' is booked under '+ownReg+' — claim the ITC in the correct registration (the credit sits in the wrong GSTIN).';
+    /* The registration is wrong. Whether the AMOUNTS are also wrong is a
+       separate question, and calling a document with figures that agree to the
+       paisa an "amount mismatch" is simply untrue — it sends the reader hunting
+       for a rate error that is not there, and buries the real finding inside a
+       pile of value differences. Say what is actually wrong, and keep these in
+       their own bucket: ITC sitting in the wrong GSTIN is the more serious
+       exposure of the two. */
+    // the SAME test the mismatch branch above uses, so the two can never disagree
+    var amountsAgree = Math.abs(rec.gstChk||0)<=GSTTOL
+                    && Math.abs(rec.taxChk||0)<=Math.max(10,Math.abs(rec.tax2b||0)*0.005);
+    rec.remarks = amountsAgree ? 'booked 🚩 wrong registration'
+                               : 'booked - amount mismatch 🚩 wrong registration';
+    rec._cat='wrongreg';
+    rec.note='🚩 BOOKED UNDER THE WRONG REGISTRATION: this document belongs to '+b.regn+', but the matching voucher '+rec.vchBk+' is booked under '+ownReg+' — claim the ITC in the correct registration (the credit sits in the wrong GSTIN).'
+      +(amountsAgree?' The value and tax agree, so this is a registration question only.'
+                    :' The value or tax ALSO differs — check both.');
   }
   applyAmended(rec,b);
   applyItcBlocked(rec,b);
@@ -938,7 +952,7 @@ function reconcile(){
 }
 
 /* ---- on-screen report ---- */
-function groupBy(recs){var by={matched:[],mismatch:[],probable:[],only2b:[],onlybk:[]};recs.forEach(function(r){(by[r._cat]||by.only2b).push(r);});return by;}
+function groupBy(recs){var by={matched:[],mismatch:[],wrongreg:[],probable:[],only2b:[],onlybk:[]};recs.forEach(function(r){(by[r._cat]||by.only2b).push(r);});return by;}
 function sumF(a,f){return a.reduce(function(s,r){return s+(Number(f(r))||0);},0);}
 function renderReport(){
   var by=groupBy(report.recs), cn=report.cn;
@@ -955,12 +969,14 @@ function renderReport(){
   $('statGrid').innerHTML=[
     tile('good','Booked (matched)',by.matched.length,inr(sumF(by.matched,function(r){return r.gst2b;}))+' GST'),
     tile('warnv','Amount mismatch',by.mismatch.length,'GST diff '+inr(sumF(by.mismatch,function(r){return r.gstChk;}))),
+    tile('badv','Wrong registration',by.wrongreg.length,inr(sumF(by.wrongreg,function(r){return r.gst2b;}))+' GST in the wrong GSTIN'),
     tile('warnv','Probable — verify',by.probable.length,inr(sumF(by.probable,function(r){return r.gst2b;}))+' GST'),
     tile('badv','Not in books',by.only2b.length,inr(sumF(by.only2b,function(r){return r.gst2b;}))+' GST'),
     tile('badv','Not in 2B',by.onlybk.length,inr(sumF(by.onlybk,function(r){return r.gstBk;}))+' GST')
   ].join('');
   var html='';
   html+=secMM('Amount mismatch — matched invoice, GST or split differs',by.mismatch);
+  html+=secMM('🚩 Wrong registration — the invoice is booked under a different GSTIN of yours',by.wrongreg);
   html+=secMM('Probable match — verify',by.probable);
   var pi=by.only2b.filter(function(r){return r._periodIssue;}).length;
   if(pi)html+='<div class="repsec"><div class="conn-banner off" style="margin:0"><span class="cdot"></span><div><div class="ctitle">'+pi+' of the “not in books” documents fall outside the period you fetched</div><div class="csub">Their invoice dates are before/after '+esc(COV.from)+' → '+esc(COV.to)+', or in a month Tally returned no vouchers for (shown in red). Widen the fetch — Step&nbsp;2 dates, and Alt+F2 in Tally to open the right period/company — then reconcile again. Only the rest are genuinely unrecorded. In the Excel these are tagged in <b>remarks</b> (“not booked — before/after fetched period”, or “month not fetched”) — filter on them; the full reason is in each row’s Note.</div></div></div></div>';
