@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.61';
+const VERSION = '4.62';
 // Bumped WITH connector/version.json — the two are compared to decide a
 // self-update, so a mismatch either loops every connector in the field or
 // hides the build. connector/version.test.mjs fails the pair apart.
@@ -2935,6 +2935,12 @@ async function readSalesForCompany(url, company, asOn, from) {
   } finally { state.settings.company = saved; }
 }
 
+/* Ledgers that ride along on a purchase but are not part of what the supplier
+   billed: tax withheld at source, and the rounding adjustment. Matched on the
+   ledger's own name because that is what every Tally exposes on the entry. */
+const TDS_LEDGER_RX = /\btds\b|\btcs\b|tax\s*deducted\s*at\s*source|tax\s*collected\s*at\s*source|\bt\.d\.s\b/i;
+const ROUNDOFF_LEDGER_RX = /round(ing)?\s*-?\s*off|\brounding\b/i;
+
 // ITC / purchase register — invoice-wise, for GSTR-2B reconciliation. Given the
 // input-GST ledgers the user picked (kind ∈ igst|cgst|sgst|rcm_igst|rcm_cgst|
 // rcm_sgst), reads every voucher over [from,to] that touches one of them and
@@ -3077,7 +3083,7 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
         const party = tag(block, 'PARTYLEDGERNAME') || '';
         const entryBlocks = block.match(/<ALLLEDGERENTRIES\.LIST>[\s\S]*?<\/ALLLEDGERENTRIES\.LIST>/gi) || block.match(/<LEDGERENTRIES\.LIST>[\s\S]*?<\/LEDGERENTRIES\.LIST>/gi) || [];
         const tax = { igst: 0, cgst: 0, sgst: 0, rcm_igst: 0, rcm_cgst: 0, rcm_sgst: 0 };
-        let touchesTax = false, taxable = 0, partyLeg = 0;
+        let touchesTax = false, taxable = 0, partyLeg = 0, tds = 0, roundOff = 0;
         for (const e of entryBlocks) {
           const nm = tag(e, 'LEDGERNAME'); if (!nm) continue;
           const rawAmt = toNum(tag(e, 'AMOUNT'));
@@ -3086,6 +3092,13 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
           const k = kindOf.get(norm(nm));
           if (k) { tax[k] = r2(tax[k] + dr); touchesTax = true; }
           else if (party && norm(nm) === norm(party)) { partyLeg = r2(partyLeg + dr); }
+          /* TDS is withheld from the PAYMENT; it is not consideration and never
+             forms part of the value the supplier reports in GSTR-1, so it has
+             no business in the taxable base being compared with 2B. Same for a
+             rounding adjustment. Both are kept as their own figures rather than
+             dropped, so the voucher can still be tied out. */
+          else if (TDS_LEDGER_RX.test(nm)) { tds = r2(tds + dr); }
+          else if (ROUNDOFF_LEDGER_RX.test(nm)) { roundOff = r2(roundOff + dr); }
           else taxable = r2(taxable + dr);                 // purchase / expense base
         }
         if (!touchesTax) continue;                         // not an ITC voucher
@@ -3096,8 +3109,10 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
            is the party leg, so the base is that less the tax on it. Only used
            when the direct sum found nothing, and never when there is no party. */
         const taxAll = r2(tax.igst + tax.cgst + tax.sgst + tax.rcm_igst + tax.rcm_cgst + tax.rcm_sgst);
+        /* The legs of a voucher sum to nil, so the base is everything that is
+           not the party, the tax, the TDS or the rounding. */
         if (Math.abs(taxable) < 0.005 && party && Math.abs(partyLeg) > 0.005) {
-          taxable = r2(-partyLeg - taxAll);
+          taxable = r2(-(partyLeg + taxAll + tds + roundOff));
         }
         // ITC set-off / utilisation journals (Input IGST/CGST/SGST CREDITED to
         // pay the Output tax at period end) carry NO supplier party and a net
@@ -3128,6 +3143,9 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
           party, gstin, ownGstin, ownRegnName, taxable: r2(taxable),
           igst: r2(tax.igst), cgst: r2(tax.cgst), sgst: r2(tax.sgst),
           rcmIgst: r2(tax.rcm_igst), rcmCgst: r2(tax.rcm_cgst), rcmSgst: r2(tax.rcm_sgst),
+          // TDS withheld, always shown as a positive amount: builds differ on
+          // which side they stamp the leg, and it is never negative in fact.
+          tds: r2(Math.abs(tds)), roundOff: r2(roundOff),
           rcm: rcmAbs > 0.005,
         });
       }

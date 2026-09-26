@@ -35,6 +35,24 @@ const stockVch = (i) => `<VOUCHER VCHTYPE="Purchase">
 <ALLLEDGERENTRIES.LIST><LEDGERNAME>Input IGST</LEDGERNAME><ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE><AMOUNT>-3600</AMOUNT></ALLLEDGERENTRIES.LIST>
 </VOUCHER>`;
 
+/* A real purchase from the field (Bombay Hardware, MNL-25-26-3459): stock
+   items 7,63,104.80 plus loading 2,200 and freight 10,000 make a taxable
+   value of 7,75,304.80 — exactly 18% of which is the 1,39,554.86 IGST. TDS of
+   763.10 is withheld and 0.44 is rounded. The taxable figure must be the
+   7,75,304.80 the supplier billed, not that plus the TDS. */
+const tdsVch = () => `<VOUCHER VCHTYPE="Purchase">
+<DATE>20251105</DATE><GUID>tds-1</GUID><VOUCHERTYPENAME>Purchase</VOUCHERTYPENAME>
+<VOUCHERNUMBER>MNL-25-26-3459</VOUCHERNUMBER><SUPPLIERINVOICENO>MNL-25-26-3459</SUPPLIERINVOICENO>
+<PARTYLEDGERNAME>Bombay Hardware Pvt Ltd</PARTYLEDGERNAME><ISCANCELLED>No</ISCANCELLED><ISOPTIONAL>No</ISOPTIONAL>
+<ALLLEDGERENTRIES.LIST><LEDGERNAME>Bombay Hardware Pvt Ltd</LEDGERNAME><ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE><AMOUNT>914097.00</AMOUNT></ALLLEDGERENTRIES.LIST>
+<ALLLEDGERENTRIES.LIST><LEDGERNAME>PURCHASE</LEDGERNAME><ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE><AMOUNT>-763104.80</AMOUNT></ALLLEDGERENTRIES.LIST>
+<ALLLEDGERENTRIES.LIST><LEDGERNAME>LOADING CHARGE @18%</LEDGERNAME><ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE><AMOUNT>-2200.00</AMOUNT></ALLLEDGERENTRIES.LIST>
+<ALLLEDGERENTRIES.LIST><LEDGERNAME>Freight Charges</LEDGERNAME><ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE><AMOUNT>-10000.00</AMOUNT></ALLLEDGERENTRIES.LIST>
+<ALLLEDGERENTRIES.LIST><LEDGERNAME>Input IGST</LEDGERNAME><ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE><AMOUNT>-139554.86</AMOUNT></ALLLEDGERENTRIES.LIST>
+<ALLLEDGERENTRIES.LIST><LEDGERNAME>TDS on Goods@0.1%</LEDGERNAME><ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE><AMOUNT>763.10</AMOUNT></ALLLEDGERENTRIES.LIST>
+<ALLLEDGERENTRIES.LIST><LEDGERNAME>Round Off</LEDGERNAME><ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE><AMOUNT>-0.44</AMOUNT></ALLLEDGERENTRIES.LIST>
+</VOUCHER>`;
+
 const srv = http.createServer((req, res) => {
   let b = ''; req.on('data', (c) => b += c); req.on('end', () => {
     res.setHeader('content-type', 'text/xml');
@@ -73,6 +91,8 @@ const srv = http.createServer((req, res) => {
         out.push(vch(i, true));
       }
       if (from <= 20250405 && to >= 20250405) out.push(stockVch(1));
+    if (from <= 20251105 && to >= 20251105) out.push(tdsVch());
+      if (from <= 20251105 && to >= 20251105) out.push(tdsVch());
       const body = '<ENVELOPE>' + out.join('') + '</ENVELOPE>';
       stats.bytes += body.length;
       return setTimeout(() => res.end(body), 30);
@@ -88,6 +108,7 @@ const srv = http.createServer((req, res) => {
       out.push(vch(i, itc));
     }
     if (from <= 20250405 && to >= 20250405) out.push(stockVch(1));
+    if (from <= 20251105 && to >= 20251105) out.push(tdsVch());
     const body = '<ENVELOPE>' + out.join('') + '</ENVELOPE>';
     stats.bytes += body.length;
     setTimeout(() => res.end(body), 30);
@@ -125,7 +146,7 @@ console.log('\n── no ledger index, but Tally\'s filter agrees with the books
 mode = 'filterOnly';
 const good = await run('filter honoured');
 t('every ITC voucher is found', () => {
-  const expected = Math.ceil(TOTAL / ITC_EVERY) + 1;        // + the stock-item purchase
+  const expected = Math.ceil(TOTAL / ITC_EVERY) + 2;        // + the stock-item purchase
   assert(good.j.rows.length === expected, `expected ${expected} rows, got ${good.j.rows.length}`);
 });
 t('the filter tier is used, and says so', () => {
@@ -151,7 +172,7 @@ t('the filter is refused and the books are read in full', () => {
   assert(bad.stats.filtered <= 2, 'the filter must not be used beyond the probe: ' + bad.stats.filtered);
 });
 t('no ITC voucher is lost', () => {
-  const expected = Math.ceil(TOTAL / ITC_EVERY) + 1;
+  const expected = Math.ceil(TOTAL / ITC_EVERY) + 2;
   assert(bad.j.rows.length === expected, `expected ${expected} rows, got ${bad.j.rows.length}`);
 });
 
@@ -167,7 +188,7 @@ t('the whole period comes from the ledger index', () => {
   assert(led.stats.filtered === 0, 'the day-book filter should not be needed');
 });
 t('and it still finds every ITC voucher', () => {
-  const expected = Math.ceil(TOTAL / ITC_EVERY) + 1;
+  const expected = Math.ceil(TOTAL / ITC_EVERY) + 2;
   assert(led.j.rows.length === expected, `expected ${expected} rows, got ${led.j.rows.length}`);
 });
 
@@ -178,7 +199,7 @@ t('a short ledger index is refused and something safer is used', () => {
   assert(!/ledger index/.test(short.note), 'the short ledger read must not be trusted: ' + short.note);
 });
 t('no ITC voucher is lost when it is refused', () => {
-  const expected = Math.ceil(TOTAL / ITC_EVERY) + 1;
+  const expected = Math.ceil(TOTAL / ITC_EVERY) + 2;
   assert(short.j.rows.length === expected, `expected ${expected} rows, got ${short.j.rows.length}`);
 });
 
@@ -186,7 +207,7 @@ console.log('\n── an older Tally with no ledger index at all ──');
 mode = 'noLedgerIndex';
 const older = await run('no ledger index');
 t('it falls through to a method that works, losing nothing', () => {
-  const expected = Math.ceil(TOTAL / ITC_EVERY) + 1;
+  const expected = Math.ceil(TOTAL / ITC_EVERY) + 2;
   assert(older.j.rows.length === expected, `expected ${expected} rows, got ${older.j.rows.length}`);
   assert(!/ledger index/.test(older.note), 'must not claim the ledger index: ' + older.note);
 });
@@ -200,10 +221,30 @@ t('the shape that works is found and named', () => {
   assert(/Ledger Vouchers report/.test(rep.note), 'should name the shape that worked: ' + rep.note);
 });
 t('and nothing is lost by it', () => {
-  const expected = Math.ceil(TOTAL / ITC_EVERY) + 1;
+  const expected = Math.ceil(TOTAL / ITC_EVERY) + 2;
   assert(rep.j.rows.length === expected, `expected ${expected} rows, got ${rep.j.rows.length}`);
 });
 
+
+
+console.log('\n── TDS withheld on a purchase ──');
+mode = 'good';
+const tdsRun = await run('with TDS');
+t('the taxable value is what the supplier billed, not that plus the TDS', () => {
+  const r = tdsRun.j.rows.find((x) => x.voucherNo === 'MNL-25-26-3459');
+  assert(r, 'the TDS voucher is missing');
+  assert(Math.abs(r.taxable - 775304.80) < 0.01,
+    `taxable should be 7,75,304.80 (items+loading+freight), got ${r.taxable}`);
+  // the proof the base is right: the tax on it comes back to the paisa
+  assert(Math.abs(r.taxable * 0.18 - r.igst) < 0.02,
+    `18% of the base should equal the IGST: ${(r.taxable * 0.18).toFixed(2)} vs ${r.igst}`);
+});
+t('the TDS and the rounding are reported, not silently dropped', () => {
+  const r = tdsRun.j.rows.find((x) => x.voucherNo === 'MNL-25-26-3459');
+  assert(Math.abs(r.tds - 763.10) < 0.01, `TDS withheld should be 763.10, got ${r.tds}`);
+  assert(Math.abs(Math.abs(r.roundOff) - 0.44) < 0.01,
+    `the rounding should be carried, got ${r.roundOff}`);
+});
 
 console.log('\n── the diagnostic ──');
 mode = 'onlyReport';

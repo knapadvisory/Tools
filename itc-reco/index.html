@@ -233,6 +233,14 @@
     <div id="filesLoaded" class="picked" style="margin-top:10px"></div>
     <div class="msg" id="msg2b"></div>
     <div class="row" style="margin-top:12px">
+      <div id="headPick" class="hide" style="margin:14px 0;padding:12px 14px;border:1px solid #cfe6d7;border-radius:10px;background:#f6fbf7">
+        <b>Which tax heads are you reconciling?</b>
+        <div class="lbl" style="margin:4px 0 8px">2B carries every invoice, whichever head it fell under. If you pulled only some input-GST ledgers from the books, leave the rest unticked — otherwise their 2B invoices come back as “not in books”, which is not a finding, only a gap in what was fetched.</div>
+        <label class="chk" style="display:inline-flex;margin-right:18px"><input type="checkbox" id="hIGST" checked> <span>IGST <i id="cIGST" class="k"></i></span></label>
+        <label class="chk" style="display:inline-flex;margin-right:18px"><input type="checkbox" id="hINTRA" checked> <span>CGST + SGST <i id="cINTRA" class="k"></i></span></label>
+        <label class="chk" style="display:inline-flex"><input type="checkbox" id="hNIL" checked> <span>no tax (nil-rated / exempt) <i id="cNIL" class="k"></i></span></label>
+        <div id="headWhy" class="lbl" style="margin-top:8px"></div>
+      </div>
       <button class="btn primary" id="btnReco" onclick="reconcile()" disabled>RECONCILE →</button>
       <button class="btn ghost sm" id="btnClear2b" onclick="clear2b()" style="display:none">Clear 2B files</button>
     </div>
@@ -253,7 +261,7 @@
 <script>
 /* ============================ connector ============================ */
 var API=(function(){try{return localStorage.getItem('knap_connector_url');}catch(e){return null;}})()||'http://127.0.0.1:8797';
-var REQVER='4.61', connVer='', POLL=null;
+var REQVER='4.62', connVer='', POLL=null;
 function $(id){return document.getElementById(id);}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 function setPill(cls,txt){var p=$('connPill');p.className='conn-pill '+cls;$('connPillText').textContent=txt;}
@@ -519,9 +527,24 @@ function showBooks(j){
 function csvcell(s){s=String(s==null?'':s);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}
 function downloadBooks(){
   if(!booksRows.length){alert('No books rows to download.');return;}
-  var head=['Regn','Date','Voucher No','Supplier Inv No','Ref','Party','GSTIN','Taxable','IGST','CGST','SGST','RCM IGST','RCM CGST','RCM SGST','RCM'];
+  /* Only the tax columns this fetch actually carries. Pulling the IGST ledger
+     and handing back empty CGST, SGST and three RCM columns invites the reader
+     to take those zeros as facts about the books, when they only mean the
+     ledgers were never asked for. TDS and rounding are shown because they were
+     deliberately kept OUT of the taxable value. */
+  var money=[['igst','IGST'],['cgst','CGST'],['sgst','SGST'],
+             ['rcmIgst','RCM IGST'],['rcmCgst','RCM CGST'],['rcmSgst','RCM SGST'],
+             ['tds','TDS withheld'],['roundOff','Round off']]
+    .filter(function(c){ return booksRows.some(function(r){ return Math.abs(+r[c[0]]||0)>0.005; }); });
+  var head=['Regn','Date','Voucher No','Supplier Inv No','Ref','Party','GSTIN','Taxable']
+    .concat(money.map(function(c){return c[1];})).concat(['RCM']);
   var lines=[head.join(',')];
-  booksRows.forEach(function(r){lines.push([r._ownGstin||'',r.date||'',csvcell(r.voucherNo),csvcell(r.supplierInvNo),csvcell(r.ref),csvcell(r.party),r.gstin||'',r.taxable,r.igst,r.cgst,r.sgst,r.rcmIgst||0,r.rcmCgst||0,r.rcmSgst||0,r.rcm?'Y':''].join(','));});
+  booksRows.forEach(function(r){
+    lines.push([r._ownGstin||'',r.date||'',csvcell(r.voucherNo),csvcell(r.supplierInvNo),
+                csvcell(r.ref),csvcell(r.party),r.gstin||'',r.taxable]
+      .concat(money.map(function(c){return (+r[c[0]]||0);}))
+      .concat([r.rcm?'Y':'']).join(','));
+  });
   dl('books-itc-'+(lastBooksMeta.from||'')+'_'+(lastBooksMeta.to||'')+'.csv',new Blob([lines.join('\n')],{type:'text/csv'}));
 }
 
@@ -562,6 +585,60 @@ function renderFiles(){
   }else{ $('drop').classList.remove('has'); $('drop').innerHTML=DROP_HTML; setMsg('msg2b','',''); }
   $('btnReco').disabled=twoBRows.length===0;
   $('btnClear2b').style.display=loadedFiles.length?'':'none';
+  renderHeadPick();
+}
+
+/* Which tax head a 2B invoice fell under. An invoice is either inter-state
+   (IGST) or intra-state (CGST+SGST) — never both — so this is a clean split. */
+function headOf2b(r){
+  var ig=+r.igst||0, cg=(+r.cgst||0)+(+r.sgst||0);
+  if(Math.abs(ig)>0.005 && Math.abs(cg)<=0.005) return 'IGST';
+  if(Math.abs(cg)>0.005) return 'INTRA';
+  return 'NIL';
+}
+/* The heads the BOOKS side actually holds, from the ledgers that were fetched.
+   Ticking a head whose ledger was never pulled guarantees false "not in books". */
+function booksHeads(){
+  var h={IGST:false,INTRA:false};
+  (booksRows||[]).forEach(function(r){
+    if(Math.abs(+r.igst||0)>0.005||Math.abs(+r.rcmIgst||0)>0.005) h.IGST=true;
+    if(Math.abs(+r.cgst||0)>0.005||Math.abs(+r.sgst||0)>0.005
+       ||Math.abs(+r.rcmCgst||0)>0.005||Math.abs(+r.rcmSgst||0)>0.005) h.INTRA=true;
+  });
+  return h;
+}
+var headPickTouched=false;
+['hIGST','hINTRA','hNIL'].forEach(function(id){
+  var el=$(id); if(el) el.addEventListener('change',function(){headPickTouched=true;renderHeadPick();});
+});
+function renderHeadPick(){
+  var box=$('headPick'); if(!box) return;
+  if(!twoBRows.length){ box.classList.add('hide'); return; }
+  box.classList.remove('hide');
+  var n={IGST:0,INTRA:0,NIL:0};
+  twoBRows.forEach(function(r){ n[headOf2b(r)]++; });
+  $('cIGST').textContent='· '+n.IGST+' in 2B';
+  $('cINTRA').textContent='· '+n.INTRA+' in 2B';
+  $('cNIL').textContent='· '+n.NIL+' in 2B';
+  // First time through, tick to match what the books side can answer for.
+  if(!headPickTouched){
+    var bh=booksHeads();
+    if(booksRows.length){ $('hIGST').checked=bh.IGST; $('hINTRA').checked=bh.INTRA; }
+  }
+  var picked=selectedHeads(), left=twoBRows.filter(function(r){return picked.indexOf(headOf2b(r))<0;}).length;
+  var bh2=booksHeads();
+  var warn='';
+  if($('hINTRA').checked&&booksRows.length&&!bh2.INTRA) warn='⚠ The books you fetched hold no CGST/SGST at all — every intra-state 2B invoice will read as “not in books”. Fetch the CGST/SGST input ledgers too, or untick this head.';
+  else if($('hIGST').checked&&booksRows.length&&!bh2.IGST) warn='⚠ The books you fetched hold no IGST at all — every IGST 2B invoice will read as “not in books”. Fetch the IGST input ledger too, or untick this head.';
+  $('headWhy').innerHTML=(left? left+' 2B invoice(s) will be set aside as outside the heads you picked. ':'')
+    +(warn?'<span style="color:var(--bad)">'+warn+'</span>':'');
+}
+function selectedHeads(){
+  var out=[];
+  if($('hIGST')&&$('hIGST').checked) out.push('IGST');
+  if($('hINTRA')&&$('hINTRA').checked) out.push('INTRA');
+  if($('hNIL')&&$('hNIL').checked) out.push('NIL');
+  return out;
 }
 function removeFile(idx){loadedFiles.splice(idx,1);renderFiles();}
 function clear2b(){loadedFiles=[];renderFiles();}
@@ -758,8 +835,18 @@ function applyAmended(rec,b){
   rec.remarks+=' · amended';
   rec.note+=' [Amendment in 2B'+(b.isCN?' (credit/debit note)':'')+': the supplier revised this document in a later return — reconcile against these revised figures, not the original.]';
 }
+var setAside2b=[];
 function reconcile(){
   setCoverage();
+  /* Only the heads the preparer picked. A 2B invoice under a head whose input
+     ledger was never fetched is not "missing from the books" — the books were
+     simply not asked about it, and reporting it as a finding buries the real
+     ones. Those invoices are set aside and counted, never silently dropped. */
+  var picked=selectedHeads();
+  var all2b=twoBRows;
+  setAside2b=all2b.filter(function(r){return picked.indexOf(headOf2b(r))<0;});
+  twoBRows=all2b.filter(function(r){return picked.indexOf(headOf2b(r))>=0;});
+
   var n=booksRows.length,used=new Array(n).fill(false);
   var invIdx={},gstinIdx={},gstAmtIdx={};
   booksRows.forEach(function(r,i){
@@ -835,7 +922,11 @@ function renderReport(){
   var blocked=report.recs.concat(cn).filter(function(r){return String(r.remarks).indexOf('[ITC blocked]')>=0;}).length;
   var wrongReg=report.recs.filter(function(r){return String(r.remarks).indexOf('wrong registration')>=0;}).length;
   $('repSub').innerHTML=(report.recs.filter(function(r){return r._cat!=='onlybk';}).length)+' 2B docs · '+booksRows.length+' books invoices'+(cn.length?' · '+cn.length+' credit notes':'')+' · ITC 2B '+inr(b2bTot)+' vs books '+inr(bkTot)
-    +(wrongReg?' · <b style="color:var(--bad)">🚩 '+wrongReg+' wrong-registration</b>':'')+(blocked?' · <b style="color:var(--warn)">'+blocked+' ITC-blocked</b>':'');
+    +(wrongReg?' · <b style="color:var(--bad)">🚩 '+wrongReg+' wrong-registration</b>':'')+(blocked?' · <b style="color:var(--warn)">'+blocked+' ITC-blocked</b>':'')
+    /* Say what was left out and why. A number that excludes part of 2B without
+       saying so reads as a clean reconciliation of the whole thing. */
+    +(setAside2b.length?' · <b style="color:var(--mut)">'+setAside2b.length+' set aside (other tax heads: '
+      +inr(setAside2b.reduce(function(a,r){return a+(+r.igst||0)+(+r.cgst||0)+(+r.sgst||0);},0))+' GST)</b>':'');
   $('statGrid').innerHTML=[
     tile('good','Booked (matched)',by.matched.length,inr(sumF(by.matched,function(r){return r.gst2b;}))+' GST'),
     tile('warnv','Amount mismatch',by.mismatch.length,'GST diff '+inr(sumF(by.mismatch,function(r){return r.gstChk;}))),
