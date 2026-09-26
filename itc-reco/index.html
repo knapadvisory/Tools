@@ -204,6 +204,7 @@
       </div>
       <div class="prog" id="fetchProg" style="display:none"><i id="fetchBar"></i></div>
       <div class="prog-line" id="fetchLine" style="display:none"></div>
+      <div id="fetchNote" class="muted" style="display:none;margin-top:4px;font-size:12px;color:#1b6a3a"></div>
       <div class="msg" id="msgFetch"></div>
     </div>
   </div>
@@ -447,6 +448,11 @@ function pollFetch(){
       $('fetchLine').textContent=(p.phase||'')+' '+(p.sub||'')
         +'  \u00b7 '+clock+(known?' \u00b7 '+pc+'%':'')
         +(p.etaSec?' \u00b7 about '+Math.ceil(p.etaSec/60)+'m left':'');
+      /* Whether Tally pre-filtered this read, and why. On a big company that
+         is the difference between reading the whole day book and reading only
+         the vouchers that carry input GST. */
+      var nl=$('fetchNote');
+      if(nl){ nl.textContent=p.note||''; nl.style.display=p.note?'block':'none'; }
     }).catch(function(){
       /* The connector is single-threaded: if it stops answering for a long
          while it is busy or gone, and the user should be told which. */
