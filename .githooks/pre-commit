@@ -1,0 +1,27 @@
+#!/bin/sh
+# The connector self-updates by version. A change that ships without a bump
+# reaches nobody — every Tally PC keeps running the old file and the symptom
+# looks like "the fix did not work". So: touching the connector means bumping
+# it, and version.json must agree.
+#
+#   git config core.hooksPath .githooks     (once per clone)
+
+changed=$(git diff --cached --name-only)
+echo "$changed" | grep -q '^connector/knap-tally-connector\.mjs$' || exit 0
+
+old=$(git show HEAD:connector/knap-tally-connector.mjs 2>/dev/null | sed -n "s/^const VERSION = '\([^']*\)'.*/\1/p")
+new=$(sed -n "s/^const VERSION = '\([^']*\)'.*/\1/p" connector/knap-tally-connector.mjs)
+
+if [ -n "$old" ] && [ "$old" = "$new" ]; then
+  echo "pre-commit: connector/knap-tally-connector.mjs changed but VERSION is still $new."
+  echo "            Bump it AND connector/version.json — a build that ships without"
+  echo "            a bump is never offered to any connector in the field."
+  exit 1
+fi
+
+node connector/version.test.mjs >/dev/null 2>&1 || {
+  echo "pre-commit: connector VERSION and connector/version.json disagree."
+  node connector/version.test.mjs
+  exit 1
+}
+exit 0

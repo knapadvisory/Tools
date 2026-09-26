@@ -13,7 +13,7 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 
 const TOTAL = 3000, ITC_EVERY = 5;           // 600 ITC vouchers among 3000
-let mode = 'good', stats = { plain: 0, filtered: 0, bytes: 0 };
+let mode = 'good', stats = { plain: 0, filtered: 0, ledger: 0, bytes: 0 };
 
 const vch = (i, itc) => `<VOUCHER VCHTYPE="Purchase">
 <DATE>${20250401 + Math.floor(i / 20)}</DATE><GUID>g-${i}</GUID>
@@ -41,8 +41,26 @@ const srv = http.createServer((req, res) => {
     if (/KnapLedgers|Ledger/i.test(b) && !/Voucher/i.test(b)) {
       return res.end('<ENVELOPE><LEDGER NAME="Stock Supplier"><PARENT>Sundry Creditors</PARENT></LEDGER></ENVELOPE>');
     }
+    const isLedger = /KnapLedVch/.test(b);
     const isFiltered = /KnapItcVch/.test(b);
-    isFiltered ? stats.filtered++ : stats.plain++;
+    if (isLedger) stats.ledger++; else if (isFiltered) stats.filtered++; else stats.plain++;
+
+    /* Tally's ledger index: only the vouchers that hit the named ledger.
+       In "noLedgerIndex" the server refuses it, as an older Tally would. */
+    if (isLedger) {
+      // 'filterOnly' and 'bad' exercise the tiers BELOW the ledger index
+      if (mode === 'noLedgerIndex' || mode === 'filterOnly' || mode === 'bad') { res.statusCode = 200; return res.end('<ENVELOPE></ENVELOPE>'); }
+      const out = [];
+      for (let i = 0; i < TOTAL; i++) {
+        if ((i % ITC_EVERY) !== 0) continue;
+        if (mode === 'ledgerMisses' && i === ITC_EVERY * 3) continue;   // silently short
+        out.push(vch(i, true));
+      }
+      out.push(stockVch(1));
+      const body = '<ENVELOPE>' + out.join('') + '</ENVELOPE>';
+      stats.bytes += body.length;
+      return setTimeout(() => res.end(body), 30);
+    }
     const from = Number((b.match(/<SVFROMDATE[^>]*>(\d{8})/i) || [])[1] || 20250401);
     const to = Number((b.match(/<SVTODATE[^>]*>(\d{8})/i) || [])[1] || 20260331);
     const out = [];
@@ -74,7 +92,7 @@ const t = (n, fn) => { try { fn(); pass++; console.log('  PASS  ' + n); }
 const assert = (c, m) => { if (!c) throw new Error(m); };
 
 async function run(label) {
-  stats = { plain: 0, filtered: 0, bytes: 0 };
+  stats = { plain: 0, filtered: 0, ledger: 0, bytes: 0 };
   const t0 = Date.now();
   const r = await fetch('http://127.0.0.1:8898/api/itc/register', {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -83,20 +101,20 @@ async function run(label) {
   });
   const j = await r.json();
   const prog = await (await fetch('http://127.0.0.1:8898/api/dc/progress')).json();
-  console.log(`\n[${label}] rows=${j.rows ? j.rows.length : '-'} requests: plain=${stats.plain} filtered=${stats.filtered} ` +
+  console.log(`\n[${label}] rows=${j.rows ? j.rows.length : '-'} requests: ledger=${stats.ledger} plain=${stats.plain} filtered=${stats.filtered} ` +
               `bytes=${(stats.bytes / 1048576).toFixed(1)}MB time=${((Date.now() - t0) / 1000).toFixed(1)}s`);
   console.log(`         note: ${prog.note}`);
   return { j, stats: { ...stats }, note: prog.note };
 }
 
-console.log('\n── Tally\'s filter agrees with the books ──');
-mode = 'good';
+console.log('\n── no ledger index, but Tally\'s filter agrees with the books ──');
+mode = 'filterOnly';
 const good = await run('filter honoured');
 t('every ITC voucher is found', () => {
   const expected = Math.ceil(TOTAL / ITC_EVERY) + 1;        // + the stock-item purchase
   assert(good.j.rows.length === expected, `expected ${expected} rows, got ${good.j.rows.length}`);
 });
-t('the fast path is used, and says so', () => {
+t('the filter tier is used, and says so', () => {
   assert(/pre-filtered/.test(good.note), 'note should record the filter: ' + good.note);
   assert(good.stats.filtered > good.stats.plain, `expected mostly filtered reads, got plain=${good.stats.plain} filtered=${good.stats.filtered}`);
 });
@@ -111,7 +129,7 @@ t('a stock-item purchase still gets its taxable base', () => {
   assert(Math.abs(s.igst - 3600) < 0.01, `igst should be 3,600, got ${s.igst}`);
 });
 
-console.log('\n── Tally\'s filter quietly drops one ──');
+console.log('\n── no ledger index, and Tally\'s filter quietly drops one ──');
 mode = 'bad';
 const bad = await run('filter unsafe');
 t('the filter is refused and the books are read in full', () => {
@@ -121,6 +139,40 @@ t('the filter is refused and the books are read in full', () => {
 t('no ITC voucher is lost', () => {
   const expected = Math.ceil(TOTAL / ITC_EVERY) + 1;
   assert(bad.j.rows.length === expected, `expected ${expected} rows, got ${bad.j.rows.length}`);
+});
+
+
+console.log('\n── Tally\'s ledger index answers ──');
+mode = 'good';
+const led = await run('ledger index');
+t('the whole period comes from the ledger index', () => {
+  assert(/ledger index/.test(led.note), 'note should record the ledger read: ' + led.note);
+  assert(led.stats.ledger === 1, `one request per ledger expected, got ${led.stats.ledger}`);
+  assert(led.stats.plain <= 1, `only the proving window should be scanned, got ${led.stats.plain}`);
+});
+t('and it still finds every ITC voucher', () => {
+  const expected = Math.ceil(TOTAL / ITC_EVERY) + 1;
+  assert(led.j.rows.length === expected, `expected ${expected} rows, got ${led.j.rows.length}`);
+});
+
+console.log('\n── the ledger index comes back short ──');
+mode = 'ledgerMisses';
+const short = await run('ledger index unsafe');
+t('a short ledger index is refused and something safer is used', () => {
+  assert(!/ledger index/.test(short.note), 'the short ledger read must not be trusted: ' + short.note);
+});
+t('no ITC voucher is lost when it is refused', () => {
+  const expected = Math.ceil(TOTAL / ITC_EVERY) + 1;
+  assert(short.j.rows.length === expected, `expected ${expected} rows, got ${short.j.rows.length}`);
+});
+
+console.log('\n── an older Tally with no ledger index at all ──');
+mode = 'noLedgerIndex';
+const older = await run('no ledger index');
+t('it falls through to a method that works, losing nothing', () => {
+  const expected = Math.ceil(TOTAL / ITC_EVERY) + 1;
+  assert(older.j.rows.length === expected, `expected ${expected} rows, got ${older.j.rows.length}`);
+  assert(!/ledger index/.test(older.note), 'must not claim the ledger index: ' + older.note);
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -253,7 +253,7 @@
 <script>
 /* ============================ connector ============================ */
 var API=(function(){try{return localStorage.getItem('knap_connector_url');}catch(e){return null;}})()||'http://127.0.0.1:8797';
-var REQVER='4.41', connVer='', POLL=null;
+var REQVER='4.60', connVer='', POLL=null;
 function $(id){return document.getElementById(id);}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 function setPill(cls,txt){var p=$('connPill');p.className='conn-pill '+cls;$('connPillText').textContent=txt;}
@@ -277,7 +277,23 @@ function doUpdate(){
     }).catch(function(){if(tries>25){clearInterval(t);checkConn();}});},1500);
   }).catch(function(){banner('off','Could not reach the connector','Make sure the KNAP connector is running on this PC.');});
 }
-function releaseTally(){fetch(API+'/api/tally/release',{method:'POST'}).then(function(r){return r.json();}).then(function(){if(POLL){clearInterval(POLL);POLL=null;}$('fetchProg').style.display='none';$('fetchLine').style.display='none';$('btnFetch').disabled=false;setMsg('msgFetch','Released Tally.','warn');}).catch(function(e){setMsg('msgFetch','Could not reach connector: '+e.message,'bad');});}
+/* Release has to let go at BOTH ends. Telling the connector to drop Tally
+   does nothing for a page still waiting on a request that will never answer,
+   which is what made the button feel dead. The page abandons its own request
+   first, so the screen frees immediately whatever the connector is doing. */
+function releaseTally(){
+  RELEASED=true;
+  if(FETCH_ABORT){ try{FETCH_ABORT.abort();}catch(e){} FETCH_ABORT=null; }
+  if(POLL){clearInterval(POLL);POLL=null;}
+  $('fetchProg').style.display='none';$('fetchLine').style.display='none';
+  var nl=$('fetchNote'); if(nl) nl.style.display='none';
+  $('btnFetch').disabled=false;
+  setMsg('msgFetch','Released. Tally is free again.','warn');
+  fetch(API+'/api/tally/release',{method:'POST'})
+    .then(function(r){return r.json();})
+    .then(function(j){ setMsg('msgFetch', j && j.released ? 'Released Tally \u2014 the read in progress was stopped.' : 'Released Tally.','warn'); })
+    .catch(function(e){ setMsg('msgFetch','Released on this page, but the connector did not answer: '+e.message,'bad'); });
+}
 function markStep(n,done){var s=document.querySelector('.step[data-s="'+n+'"]');if(!s)return;s.classList.remove('active');if(done)s.classList.add('done');var nx=document.querySelector('.step[data-s="'+(n+1)+'"]');if(nx)nx.classList.add('active');}
 
 /* ============================ step 1: scan ============================ */
@@ -392,7 +408,9 @@ function editLedgers(){$('confirmBlock').classList.add('hidden');$('ledPickArea'
 
 /* ============================ step 3: fetch books ITC ============================ */
 var booksRows=[];
+var FETCH_ABORT=null, RELEASED=false;
 function fetchItc(){
+  RELEASED=false;
   var sel=selectedLedgers();
   if(!sel.length){setMsg('msgFetch','Select at least one input-GST ledger.','bad');return;}
   var from=$('fromDate').value,to=$('toDate').value;
@@ -413,7 +431,8 @@ function fetchItc(){
     var c=chosenList[i++];
     $('fetchLine').textContent='Reading '+(c.company||'')+' ('+i+'/'+chosenList.length+')…';
     $('fetchBar').style.width=Math.round(8+(i/chosenList.length)*82)+'%';
-    fetch(API+'/api/itc/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url:c.url,company:c.company,from:from,to:to,taxLedgers:sel})})
+    FETCH_ABORT=new AbortController();
+    fetch(API+'/api/itc/register',{method:'POST',signal:FETCH_ABORT.signal,headers:{'content-type':'application/json'},body:JSON.stringify({url:c.url,company:c.company,from:from,to:to,taxLedgers:sel})})
       .then(function(r){return r.json();}).then(function(j){
         if(!j.ok){errs.push((c.company||'company')+': '+(j.error||'error'));next();return;}
         // Which of OUR registrations booked this voucher. For a company that
@@ -423,7 +442,10 @@ function fetchItc(){
         // Fall back to the picked company's GSTIN (separate-company setup).
         (j.rows||[]).forEach(function(row){row._ownGstin=(row.ownGstin||c.gstin||'').toUpperCase();row._company=c.company||'';booksRows.push(row);});
         next();
-      }).catch(function(e){errs.push((c.company||'company')+': '+e.message);next();});
+      }).catch(function(e){
+        if(RELEASED){return;}                 // Release already tidied up
+        errs.push((c.company||'company')+': '+e.message);next();
+      });
   })();
 }
 /* Progress while Tally is read. A bar that cannot know how far along it is

@@ -18,7 +18,16 @@ Sibling sites: [teamhub.knapadvisory.com](https://teamhub.knapadvisory.com) ·
 | GSTR-2B ⇄ Tally Poster | **Hosted here** at `/gstr2b/` + local connector | This repo — page `gstr2b/`, engine `connector/knap-tally-connector.mjs` (ported from `Dashboard` branch `claude/gstr2b-tally-posting-mqt7zn` v1.7) |
 | GSTR-1 Excel Summary | **Hosted here** at `/gstr1/` | This repo — page `gstr1/`, engine `gstr1-engine/` run unmodified as an internal child process, proxied at `/gstr1-api` (from `Dashboard` branch `claude/pdf-excel-extraction-tool-izu1zp`) |
 | Debtor / Creditor Consolidation | **Hosted here** at `/debtor-creditor/` + local connector | This repo — page `debtor-creditor/`, engine in `connector/knap-tally-connector.mjs` (`/api/dc/*`). Balances = the closing balance of every ledger under Sundry Debtors / Creditors as on the date, read in one light group-scoped request (ties to Tally's Group Summary; does not hang on big companies). Ageing / bill-wise read the vouchers (FIFO, with reimbursement pass-throughs netted). A company too dense to age voucher-by-voucher (a marketplace book with millions of vouchers) is aged **month-level** instead — Tally's monthly group summaries FIFO'd into buckets (fast, never freezes, still ties to the balance). Reports: consolidated matrix, 80/20 Pareto, ageing, bill-wise summary, party master; master workbook bundles all. |
-**Connector versions.** `connector/knap-tally-connector.mjs` self-updates from
+**Connector versions — bump on EVERY change, however small.** A build that
+ships without a bump is never offered to any connector in the field: every
+Tally PC keeps running the old file, and the symptom looks like "the fix did
+not work". `.githooks/pre-commit` refuses a commit that touches the connector
+without changing `VERSION` — enable it once per clone with
+`git config core.hooksPath .githooks`. Raise the `REQVER` in any page that
+needs the new behaviour, so it prompts for the update instead of silently
+misbehaving against an old connector.
+
+`connector/knap-tally-connector.mjs` self-updates from
 `/connector/version.json`: it compares its own `const VERSION` against that file
 and, when they differ, downloads itself and restarts. So the two must be bumped
 **together** — `version.json` ahead loops every connector in the field, behind

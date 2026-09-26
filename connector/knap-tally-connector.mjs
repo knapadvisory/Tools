@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.59';
+const VERSION = '4.60';
 // Bumped WITH connector/version.json — the two are compared to decide a
 // self-update, so a mismatch either loops every connector in the field or
 // hides the build. connector/version.test.mjs fails the pair apart.
@@ -453,6 +453,40 @@ function dcVoucherRequest(from, to, extra) {
    invoice number, and a voucher that uses LEDGERENTRIES rather than
    ALLLEDGERENTRIES would otherwise arrive with no legs at all. */
 const ITC_FETCH = ['SUPPLIERINVOICENO', 'BASICBUYERREFNO', 'LEDGERENTRIES.LIST'];
+
+/**
+ * The vouchers of ONE ledger, straight from Tally's own ledger index.
+ *
+ * This is the report Tally itself shows as "Ledger Vouchers" — the screen a
+ * preparer opens to see what hit a ledger. An input-GST ledger with nineteen
+ * entries answers in one request, whatever the size of the books around it.
+ * Scanning the day book for those nineteen, which is what this used to do,
+ * costs Tally the whole year regardless.
+ */
+function ledgerVouchersRequest(ledgerName, from, to) {
+  return `<ENVELOPE>
+ <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>KnapLedVch</ID></HEADER>
+ <BODY><DESC>
+  <STATICVARIABLES>
+   <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+   <SVFROMDATE>${toTallyDate(from)}</SVFROMDATE>
+   <SVTODATE>${toTallyDate(to)}</SVTODATE>${svCompany()}
+  </STATICVARIABLES>
+  <TDL><TDLMESSAGE>
+   <COLLECTION NAME="KnapLedVch" ISMODIFY="No">
+    <TYPE>Voucher : Ledger</TYPE>
+    <CHILDOF>${escXml(ledgerName)}</CHILDOF>
+    <BELONGSTO>Yes</BELONGSTO>
+    <FETCH>DATE</FETCH><FETCH>GUID</FETCH><FETCH>VOUCHERTYPENAME</FETCH><FETCH>VOUCHERNUMBER</FETCH>
+    <FETCH>PARTYLEDGERNAME</FETCH><FETCH>ISCANCELLED</FETCH><FETCH>ISOPTIONAL</FETCH>
+    <FETCH>PARTYGSTIN</FETCH><FETCH>CMPGSTIN</FETCH><FETCH>GSTREGISTRATION</FETCH>
+    <FETCH>REFERENCE</FETCH><FETCH>SUPPLIERINVOICENO</FETCH><FETCH>BASICBUYERREFNO</FETCH>
+    <FETCH>ALLLEDGERENTRIES.LIST</FETCH><FETCH>LEDGERENTRIES.LIST</FETCH>
+   </COLLECTION>
+  </TDLMESSAGE></TDL>
+ </DESC></BODY>
+</ENVELOPE>`;
+}
 
 /**
  * The same read, but asking Tally to hand back ONLY the vouchers that touch one
@@ -2883,29 +2917,65 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
       }
       return out;
     };
-    let useFilter = false, filterNote = '';
+    let useFilter = false, filterNote = '', ledgerXml = null;
     if (ledgerNames.length) {
-      dcProgress.phase = 'Checking whether Tally can pre-filter this read…';
+      dcProgress.phase = 'Asking Tally which vouchers touch these ledgers…';
       const probeEnd = new Date(Math.min(to.getTime(), from.getTime() + 20 * DAY_MS));
+      let want = null, plainCount = 0;
       try {
         const plain = await tallyFetch(url, dcVoucherRequest(from, probeEnd, ITC_FETCH), 90000);
-        const want = itcGuids(plain);
-        if (!want.size) {
-          filterNote = 'no ITC vouchers in the sample window, so the filter could not be proved — read in full';
-        } else {
-          const filtered = await tallyFetch(url, itcVoucherRequest(from, probeEnd, ledgerNames), 90000);
-          const got = itcGuids(filtered);
-          const missing = [...want].filter((g) => !got.has(g));
-          if (!missing.length) {
-            useFilter = true;
-            filterNote = `Tally pre-filtered: ${got.size} of ${(plain.match(/<VOUCHER[\s>]/gi) || []).length} vouchers in the sample carried input GST`;
-          } else {
-            filterNote = `Tally's filter missed ${missing.length} voucher(s) in the sample, so it was not used — read in full`;
-          }
-        }
+        want = itcGuids(plain);
+        plainCount = (plain.match(/<VOUCHER[\s>]/gi) || []).length;
       } catch (e) {
         if (/released/i.test(String(e && e.message))) throw e;
-        filterNote = 'the pre-filter probe failed, so the books were read in full';
+      }
+
+      /* ---- 1. straight off Tally's ledger index ----
+         One request per input-GST ledger for the WHOLE period. A ledger with
+         nineteen entries answers in a moment however big the books are. Proved
+         against the sample window before it is used: if the ledger index does
+         not account for every ITC voucher the day book showed, it is dropped. */
+      if (want && want.size) {
+        try {
+          const parts = [];
+          for (const nm of ledgerNames) {
+            if (dcCancel) throw new Error('released by user');
+            dcProgress.sub = `reading the vouchers of “${nm}”…`;
+            parts.push(await tallyFetch(url, ledgerVouchersRequest(nm, from, to), 90000));
+          }
+          const joined = parts.join('');
+          const got = itcGuids(joined);
+          const missing = [...want].filter((g) => !got.has(g));
+          if (!missing.length && got.size) {
+            ledgerXml = joined;
+            filterNote = `read straight from Tally's ledger index — ${ledgerNames.length} ledger request(s) instead of scanning the day book`;
+          }
+        } catch (e) {
+          if (/released/i.test(String(e && e.message))) throw e;
+          ledgerXml = null;
+        }
+      }
+
+      /* ---- 2. or let Tally filter the day book ---- */
+      if (!ledgerXml) {
+        try {
+          if (!want || !want.size) {
+            filterNote = 'no ITC vouchers in the sample window, so no shortcut could be proved — read in full';
+          } else {
+            const filtered = await tallyFetch(url, itcVoucherRequest(from, probeEnd, ledgerNames), 90000);
+            const got = itcGuids(filtered);
+            const missing = [...want].filter((g) => !got.has(g));
+            if (!missing.length) {
+              useFilter = true;
+              filterNote = `Tally pre-filtered: ${got.size} of ${plainCount} vouchers in the sample carried input GST`;
+            } else {
+              filterNote = `Tally's filter missed ${missing.length} voucher(s) in the sample, so it was not used — read in full`;
+            }
+          }
+        } catch (e) {
+          if (/released/i.test(String(e && e.message))) throw e;
+          filterNote = 'the shortcut probe failed, so the books were read in full';
+        }
       }
     }
     dcProgress.note = filterNote;
@@ -2917,7 +2987,7 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
     dcProgress.monthsTotal = totalDays; dcProgress.monthsDone = 0;
     dcProgress.sub = 'reading…';
     let scanned = 0;
-    await readVouchersRamp(url, from, to, async (xml) => {
+    const eat = async (xml) => {
       for (const block of xml.match(/<VOUCHER[\s>][\s\S]*?<\/VOUCHER>/gi) || []) {
         // A dense window holds tens of thousands of vouchers; parsing them in
         // one unbroken run blocks this process, and the progress endpoint stops
@@ -2992,18 +3062,27 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
           rcm: rcmAbs > 0.005,
         });
       }
-    }, (endDate) => {
-      dcProgress.monthsDone = Math.min(totalDays, Math.round((endDate.getTime() - from.getTime()) / DAY_MS) + 1);
-      dcProgress.sub = `to ${endDate.toISOString().slice(0, 10)} \u00b7 ${rows.length.toLocaleString('en-IN')} invoice(s) with input GST`;
-      // An invoice-level read carries far more per day than a balance read, so
-      // the window is capped short: a month of a busy company will not come back.
-    }, { firstWin: useFilter ? 15 : 3, attemptMs: 90000, failFast: true,
-         maxWin: useFilter ? 62 : 15,
-         // With Tally doing the filtering, a window carries a fraction of the
-         // XML, so far longer windows come back comfortably — which is where
-         // most of the wall-clock saving actually shows up.
-         request: useFilter ? (a, b) => itcVoucherRequest(a, b, ledgerNames)
-                            : (a, b) => dcVoucherRequest(a, b, ITC_FETCH) });
+    };
+    if (ledgerXml) {
+      // Already in hand, whole period, in as many requests as there are
+      // ledgers. Nothing left to window over.
+      dcProgress.phase = 'ITC register — reading the ledgers\u2019 vouchers\u2026';
+      await eat(ledgerXml);
+      dcProgress.monthsDone = totalDays;
+    } else {
+      await readVouchersRamp(url, from, to, eat,
+        (endDate) => {
+          dcProgress.monthsDone = Math.min(totalDays, Math.round((endDate.getTime() - from.getTime()) / DAY_MS) + 1);
+          dcProgress.sub = `to ${endDate.toISOString().slice(0, 10)} \u00b7 ${rows.length.toLocaleString('en-IN')} invoice(s) with input GST`;
+        },
+        { firstWin: useFilter ? 15 : 3, attemptMs: 90000, failFast: true,
+          maxWin: useFilter ? 62 : 15,
+          // With Tally doing the filtering, a window carries a fraction of the
+          // XML, so far longer windows come back comfortably — which is where
+          // most of the wall-clock saving actually shows up.
+          request: useFilter ? (a, b) => itcVoucherRequest(a, b, ledgerNames)
+                             : (a, b) => dcVoucherRequest(a, b, ITC_FETCH) });
+    }
     rows.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
     return { rows };
   } finally { state.settings.company = saved; }
