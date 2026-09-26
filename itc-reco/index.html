@@ -129,6 +129,30 @@
   footer{max-width:1520px;margin:20px auto 0;padding:0 22px 30px;color:var(--faint);font-size:12px}
   .indet{background-image:repeating-linear-gradient(45deg,rgba(255,255,255,.35) 0 10px,transparent 10px 20px);animation:indet 1s linear infinite}
   @keyframes indet{from{background-position:0 0}to{background-position:28px 0}}
+  /* ---- date picker ----
+     The browser's own picker scrolls its day grid without moving its header,
+     so the month you are looking at and the month it names can disagree. This
+     one has no scroll: the header names the grid, always, because they are
+     drawn from the same value. */
+  /* The native indicator is the one thing that can still summon the browser's
+     own picker, so it goes; the field opens ours on click like any other. */
+  input.kdate::-webkit-calendar-picker-indicator{display:none;-webkit-appearance:none;appearance:none}
+  input.kdate{cursor:pointer}
+  .fyq{display:inline-flex;gap:6px;flex-wrap:wrap;margin-left:6px}
+  .fyq button{border:1px solid #cfe6d7;background:#fff;color:#1b6a3a;border-radius:7px;padding:4px 9px;font:inherit;font-size:12px;cursor:pointer}
+  .fyq button:hover{background:#eef7f1}
+  .kdp{position:absolute;z-index:60;background:#fff;border:1px solid #cfe6d7;border-radius:10px;box-shadow:0 10px 30px rgba(20,40,25,.18);padding:10px;width:250px}
+  .kdp-h{display:flex;align-items:center;gap:6px;margin-bottom:8px}
+  .kdp-h select{flex:1;padding:4px 6px;border:1px solid #dfe6e0;border-radius:6px;font:inherit;font-size:13px}
+  .kdp-h button{border:1px solid #dfe6e0;background:#fff;border-radius:6px;width:26px;height:26px;cursor:pointer;font:inherit;line-height:1}
+  .kdp-g{display:grid;grid-template-columns:repeat(7,1fr);gap:2px}
+  .kdp-g span{text-align:center;font-size:11px;color:#6b7280;padding:2px 0}
+  .kdp-g button{border:0;background:none;border-radius:6px;padding:5px 0;font:inherit;font-size:13px;cursor:pointer}
+  .kdp-g button:hover{background:#eef7f1}
+  .kdp-g button.out{color:#b9c2bb}
+  .kdp-g button.on{background:#1b6a3a;color:#fff;font-weight:600}
+  .kdp-f{display:flex;justify-content:space-between;margin-top:8px}
+  .kdp-f button{border:0;background:none;color:#1b6a3a;cursor:pointer;font:inherit;font-size:12px}
 </style>
 </head>
 <body>
@@ -198,8 +222,9 @@
         <button class="btn ghost sm" onclick="editLedgers()">✎ Edit ledger selection</button>
       </div>
       <div class="row" style="margin-top:14px">
-        <label class="lbl">From <input type="date" id="fromDate"></label>
-        <label class="lbl">To <input type="date" id="toDate"></label>
+        <label class="lbl">From <input type="date" id="fromDate" class="kdate"></label>
+        <label class="lbl">To <input type="date" id="toDate" class="kdate"></label>
+        <span id="fyQuick" class="fyq"></span>
         <button class="btn primary" id="btnFetch" onclick="fetchItc()">Fetch books ITC →</button>
       </div>
       <div class="prog" id="fetchProg" style="display:none"><i id="fetchBar"></i></div>
@@ -1037,6 +1062,104 @@ function exportXlsx(){
 function inr(n){n=Math.round((Number(n)||0)*100)/100;return n.toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});}
 addEndpoint('http://localhost:9000');
 (function(){var t=new Date(),y=t.getMonth()>=3?t.getFullYear():t.getFullYear()-1;$('fromDate').value=y+'-04-01';$('toDate').value=t.toISOString().slice(0,10);})();
+
+/* ======================= date picker =======================================
+   The browser's own picker lets the day grid scroll while its header stays
+   put, so it can show one month and name another — which is how a fetch ends
+   up running over a period nobody chose. This one cannot drift: the header and
+   the grid are both drawn from the same value, and there is nothing to scroll.
+
+   The quick buttons matter more than the calendar. This is a GST tool; the
+   period is a financial year or a month far more often than it is two dates
+   picked by hand. */
+(function(){
+  var MON=['January','February','March','April','May','June','July','August','September','October','November','December'];
+  var open=null;
+  function pad(n){return (n<10?'0':'')+n;}
+  function iso(d){return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());}
+  function parse(v){var m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(v||'');return m?new Date(+m[1],+m[2]-1,+m[3]):null;}
+  function close(){ if(open){open.el.remove();open=null;document.removeEventListener('mousedown',onDoc,true);} }
+  function onDoc(e){ if(open && !open.el.contains(e.target) && e.target!==open.input) close(); }
+
+  function build(input){
+    close();
+    var sel=parse(input.value)||new Date();
+    var view={y:sel.getFullYear(),m:sel.getMonth()};
+    var el=document.createElement('div'); el.className='kdp';
+    function draw(){
+      var years=[]; for(var y=view.y-12;y<=view.y+6;y++) years.push(y);
+      var h='<div class="kdp-h">'
+        +'<button type="button" data-step="-1" title="Previous month">\u2039</button>'
+        +'<select class="kdp-m">'+MON.map(function(n,i){return '<option value="'+i+'"'+(i===view.m?' selected':'')+'>'+n+'</option>';}).join('')+'</select>'
+        +'<select class="kdp-y">'+years.map(function(y){return '<option'+(y===view.y?' selected':'')+'>'+y+'</option>';}).join('')+'</select>'
+        +'<button type="button" data-step="1" title="Next month">\u203a</button></div>';
+      h+='<div class="kdp-g">'+['Su','Mo','Tu','We','Th','Fr','Sa'].map(function(d){return '<span>'+d+'</span>';}).join('');
+      var first=new Date(view.y,view.m,1), start=first.getDay();
+      var prevDays=new Date(view.y,view.m,0).getDate();
+      var days=new Date(view.y,view.m+1,0).getDate();
+      var cells=[];
+      for(var i=start-1;i>=0;i--) cells.push({d:prevDays-i,off:-1});
+      for(var d=1;d<=days;d++) cells.push({d:d,off:0});
+      while(cells.length%7) cells.push({d:cells.length-start-days+1,off:1});
+      cells.forEach(function(c){
+        var dt=new Date(view.y,view.m+c.off,c.d);
+        var on=input.value===iso(dt);
+        h+='<button type="button" class="'+(c.off?'out':'')+(on?' on':'')+'" data-iso="'+iso(dt)+'">'+c.d+'</button>';
+      });
+      h+='</div><div class="kdp-f"><button type="button" data-set="today">Today</button>'
+        +'<button type="button" data-set="clear">Clear</button></div>';
+      el.innerHTML=h;
+      el.querySelector('.kdp-m').onchange=function(){view.m=+this.value;draw();};
+      el.querySelector('.kdp-y').onchange=function(){view.y=+this.value;draw();};
+      el.querySelectorAll('[data-step]').forEach(function(b){
+        b.onclick=function(){ view.m+=+b.dataset.step;
+          if(view.m<0){view.m=11;view.y--;} if(view.m>11){view.m=0;view.y++;} draw(); };
+      });
+      el.querySelectorAll('[data-iso]').forEach(function(b){
+        b.onclick=function(){ setVal(input,b.dataset.iso); close(); };
+      });
+      el.querySelector('[data-set="today"]').onclick=function(){ setVal(input,iso(new Date())); close(); };
+      el.querySelector('[data-set="clear"]').onclick=function(){ setVal(input,''); close(); };
+    }
+    draw();
+    document.body.appendChild(el);
+    /* Put it where it actually fits: below when there is room, above when the
+       field is near the bottom, so the last week of the month is never cut off
+       by the edge of the window. */
+    var r=input.getBoundingClientRect(), h=el.offsetHeight;
+    var below=window.innerHeight-r.bottom, above=r.top;
+    var top=(below>=h+8||below>=above) ? r.bottom+4 : Math.max(8,r.top-h-4);
+    el.style.left=Math.max(8,Math.min(window.innerWidth-260,r.left+window.scrollX))+'px';
+    el.style.top=(top+window.scrollY)+'px';
+    open={el:el,input:input};
+    setTimeout(function(){document.addEventListener('mousedown',onDoc,true);},0);
+  }
+  function setVal(input,v){ input.value=v; input.dispatchEvent(new Event('change',{bubbles:true})); }
+
+  document.querySelectorAll('input.kdate').forEach(function(inp){
+    // keep the value as an ISO date, but take over the calendar
+    inp.addEventListener('mousedown',function(e){ e.preventDefault(); inp.focus(); build(inp); });
+    inp.addEventListener('keydown',function(e){ if(e.key==='Escape') close(); });
+  });
+
+  /* Financial-year and month shortcuts — what this period almost always is. */
+  var q=$('fyQuick');
+  if(q){
+    var t=new Date(), fy=t.getMonth()>=3?t.getFullYear():t.getFullYear()-1;
+    function setRange(a,b){ setVal($('fromDate'),a); setVal($('toDate'),b); }
+    function btn(label,a,b,title){
+      var el=document.createElement('button'); el.type='button'; el.textContent=label;
+      if(title) el.title=title;
+      el.onclick=function(){ setRange(a,b); }; q.appendChild(el);
+    }
+    btn('FY '+fy+'-'+String(fy+1).slice(2), fy+'-04-01', (fy+1)+'-03-31', 'the whole current financial year');
+    btn('FY '+(fy-1)+'-'+String(fy).slice(2), (fy-1)+'-04-01', fy+'-03-31', 'the whole previous financial year');
+    var ms=new Date(t.getFullYear(),t.getMonth(),1), me=new Date(t.getFullYear(),t.getMonth()+1,0);
+    btn('This month', iso(ms), iso(me));
+    var ls=new Date(t.getFullYear(),t.getMonth()-1,1), le=new Date(t.getFullYear(),t.getMonth(),0);
+    btn('Last month', iso(ls), iso(le));
+  }
+})();
 checkConn();
 </script>
 </body>
