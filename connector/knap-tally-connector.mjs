@@ -27,7 +27,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.60';
+const VERSION = '4.61';
 // Bumped WITH connector/version.json — the two are compared to decide a
 // self-update, so a mismatch either loops every connector in the field or
 // hides the build. connector/version.test.mjs fails the pair apart.
@@ -463,8 +463,20 @@ const ITC_FETCH = ['SUPPLIERINVOICENO', 'BASICBUYERREFNO', 'LEDGERENTRIES.LIST']
  * Scanning the day book for those nineteen, which is what this used to do,
  * costs Tally the whole year regardless.
  */
-function ledgerVouchersRequest(ledgerName, from, to) {
-  return `<ENVELOPE>
+/* Several shapes of "give me this ledger's vouchers". Tally builds differ in
+   which they honour, and there is no way to know from here which a given
+   installation will answer, so each is tried in turn and the first whose
+   result can be PROVED complete is the one used. A shape that returns nothing,
+   or returns vouchers stripped of their ledger entries, fails the proof by
+   itself and costs one request to find out.
+
+   /api/itc/diagnose runs all of them and reports what came back, so a site
+   that suits none of them can be fixed from evidence rather than guesswork. */
+const LEDGER_VCH_SHAPES = [
+  {
+    id: 'collection-voucher-ledger',
+    what: 'Collection of Voucher : Ledger, CHILDOF the ledger',
+    xml: (nm, from, to) => `<ENVELOPE>
  <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>KnapLedVch</ID></HEADER>
  <BODY><DESC>
   <STATICVARIABLES>
@@ -475,17 +487,61 @@ function ledgerVouchersRequest(ledgerName, from, to) {
   <TDL><TDLMESSAGE>
    <COLLECTION NAME="KnapLedVch" ISMODIFY="No">
     <TYPE>Voucher : Ledger</TYPE>
-    <CHILDOF>${escXml(ledgerName)}</CHILDOF>
+    <CHILDOF>${escXml(nm)}</CHILDOF>
     <BELONGSTO>Yes</BELONGSTO>
-    <FETCH>DATE</FETCH><FETCH>GUID</FETCH><FETCH>VOUCHERTYPENAME</FETCH><FETCH>VOUCHERNUMBER</FETCH>
-    <FETCH>PARTYLEDGERNAME</FETCH><FETCH>ISCANCELLED</FETCH><FETCH>ISOPTIONAL</FETCH>
-    <FETCH>PARTYGSTIN</FETCH><FETCH>CMPGSTIN</FETCH><FETCH>GSTREGISTRATION</FETCH>
-    <FETCH>REFERENCE</FETCH><FETCH>SUPPLIERINVOICENO</FETCH><FETCH>BASICBUYERREFNO</FETCH>
-    <FETCH>ALLLEDGERENTRIES.LIST</FETCH><FETCH>LEDGERENTRIES.LIST</FETCH>
+    ${ITC_VCH_FETCH}
    </COLLECTION>
   </TDLMESSAGE></TDL>
  </DESC></BODY>
-</ENVELOPE>`;
+</ENVELOPE>`,
+  },
+  {
+    id: 'collection-voucher-childof',
+    what: 'Collection of Voucher, CHILDOF the ledger',
+    xml: (nm, from, to) => `<ENVELOPE>
+ <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>KnapLedVch2</ID></HEADER>
+ <BODY><DESC>
+  <STATICVARIABLES>
+   <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+   <SVFROMDATE>${toTallyDate(from)}</SVFROMDATE>
+   <SVTODATE>${toTallyDate(to)}</SVTODATE>${svCompany()}
+   <LEDGERNAME>${escXml(nm)}</LEDGERNAME>
+  </STATICVARIABLES>
+  <TDL><TDLMESSAGE>
+   <COLLECTION NAME="KnapLedVch2" ISMODIFY="No">
+    <TYPE>Voucher</TYPE>
+    <CHILDOF>${escXml(nm)}</CHILDOF>
+    <BELONGSTO>Yes</BELONGSTO>
+    ${ITC_VCH_FETCH}
+   </COLLECTION>
+  </TDLMESSAGE></TDL>
+ </DESC></BODY>
+</ENVELOPE>`,
+  },
+  {
+    id: 'report-ledger-vouchers',
+    what: 'the Ledger Vouchers report, exported',
+    xml: (nm, from, to) => `<ENVELOPE>
+ <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Data</TYPE><ID>Ledger Vouchers</ID></HEADER>
+ <BODY><DESC>
+  <STATICVARIABLES>
+   <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+   <SVFROMDATE>${toTallyDate(from)}</SVFROMDATE>
+   <SVTODATE>${toTallyDate(to)}</SVTODATE>${svCompany()}
+   <LEDGERNAME>${escXml(nm)}</LEDGERNAME>
+   <EXPLODEFLAG>Yes</EXPLODEFLAG>
+  </STATICVARIABLES>
+ </DESC></BODY>
+</ENVELOPE>`,
+  },
+];
+const ITC_VCH_FETCH = `<FETCH>DATE</FETCH><FETCH>GUID</FETCH><FETCH>VOUCHERTYPENAME</FETCH><FETCH>VOUCHERNUMBER</FETCH>
+    <FETCH>PARTYLEDGERNAME</FETCH><FETCH>ISCANCELLED</FETCH><FETCH>ISOPTIONAL</FETCH>
+    <FETCH>PARTYGSTIN</FETCH><FETCH>CMPGSTIN</FETCH><FETCH>GSTREGISTRATION</FETCH>
+    <FETCH>REFERENCE</FETCH><FETCH>SUPPLIERINVOICENO</FETCH><FETCH>BASICBUYERREFNO</FETCH>
+    <FETCH>ALLLEDGERENTRIES.LIST</FETCH><FETCH>LEDGERENTRIES.LIST</FETCH>`;
+function ledgerVouchersRequest(ledgerName, from, to, shape) {
+  return (shape || LEDGER_VCH_SHAPES[0]).xml(ledgerName, from, to);
 }
 
 /**
@@ -2936,23 +2992,36 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
          against the sample window before it is used: if the ledger index does
          not account for every ITC voucher the day book showed, it is dropped. */
       if (want && want.size) {
-        try {
-          const parts = [];
-          for (const nm of ledgerNames) {
-            if (dcCancel) throw new Error('released by user');
-            dcProgress.sub = `reading the vouchers of “${nm}”…`;
-            parts.push(await tallyFetch(url, ledgerVouchersRequest(nm, from, to), 90000));
+        for (const shape of LEDGER_VCH_SHAPES) {
+          if (ledgerXml) break;
+          try {
+            /* Prove it on the SAMPLE window first — one small request per
+               ledger. Only a shape that accounts for every ITC voucher the day
+               book showed is then run over the whole period. */
+            const probeParts = [];
+            for (const nm of ledgerNames) {
+              if (dcCancel) throw new Error('released by user');
+              dcProgress.sub = `trying ${shape.what} on “${nm}”…`;
+              probeParts.push(await tallyFetch(url, ledgerVouchersRequest(nm, from, probeEnd, shape), 90000));
+            }
+            const got = itcGuids(probeParts.join(''));
+            if (!got.size) continue;                       // this build will not answer that way
+            if ([...want].some((g) => !got.has(g))) continue;  // incomplete — never trust it
+
+            const parts = [];
+            for (const nm of ledgerNames) {
+              if (dcCancel) throw new Error('released by user');
+              dcProgress.sub = `reading the vouchers of “${nm}”…`;
+              parts.push(await tallyFetch(url, ledgerVouchersRequest(nm, from, to, shape), 180000));
+            }
+            const full = parts.join('');
+            if (!itcGuids(full).size) continue;
+            ledgerXml = full;
+            filterNote = `read straight from Tally's ledger index (${shape.what}) — ${ledgerNames.length} ledger request(s) instead of scanning the day book`;
+          } catch (e) {
+            if (/released/i.test(String(e && e.message))) throw e;
+            /* this shape is not available here — try the next */
           }
-          const joined = parts.join('');
-          const got = itcGuids(joined);
-          const missing = [...want].filter((g) => !got.has(g));
-          if (!missing.length && got.size) {
-            ledgerXml = joined;
-            filterNote = `read straight from Tally's ledger index — ${ledgerNames.length} ledger request(s) instead of scanning the day book`;
-          }
-        } catch (e) {
-          if (/released/i.test(String(e && e.message))) throw e;
-          ledgerXml = null;
         }
       }
 
@@ -4815,6 +4884,50 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     // ITC reco — invoice-wise purchase/ITC register for the selected input ledgers.
+    /* Which "give me this ledger's vouchers" shapes THIS Tally answers.
+       Read-only, one small request per shape over a short window. When the
+       fast path does not engage on a site, this says why with evidence
+       instead of leaving it to guesswork. */
+    if (req.method === 'POST' && url.pathname === '/api/itc/diagnose') {
+      const body = JSON.parse(await readBody(req).catch(() => '{}') || '{}');
+      const turl = String(body.url || state.settings.tallyUrl);
+      const nm = String(body.ledger || '');
+      const from = tallyDateOf(String(body.from || '').replace(/-/g, '')) || new Date(Date.UTC(2025, 3, 1));
+      const to = new Date(Math.min(
+        (tallyDateOf(String(body.to || '').replace(/-/g, '')) || from).getTime(),
+        from.getTime() + 20 * DAY_MS));
+      if (!nm) { json(res, 400, { ok: false, error: 'Name one input-GST ledger to test with.' }); return; }
+      const savedC = state.settings.company;
+      state.settings.company = String(body.company || '');
+      const out = [];
+      try {
+        for (const shape of LEDGER_VCH_SHAPES) {
+          const t0 = Date.now();
+          try {
+            const xml = await tallyFetch(turl, ledgerVouchersRequest(nm, from, to, shape), 60000);
+            const vchs = (xml.match(/<VOUCHER[\s>]/gi) || []).length;
+            const withLegs = (xml.match(/<(?:ALL)?LEDGERENTRIES\.LIST>/gi) || []).length;
+            out.push({ shape: shape.id, what: shape.what, ms: Date.now() - t0,
+                       bytes: xml.length, vouchers: vchs, ledgerEntryBlocks: withLegs,
+                       usable: vchs > 0 && withLegs > 0,
+                       head: xml.slice(0, 400) });
+          } catch (e) {
+            out.push({ shape: shape.id, what: shape.what, ms: Date.now() - t0, error: String((e && e.message) || e) });
+          }
+        }
+        // and what the plain day-book read costs over the same window, to compare
+        const t1 = Date.now();
+        try {
+          const plain = await tallyFetch(turl, dcVoucherRequest(from, to, ITC_FETCH), 90000);
+          out.push({ shape: 'day-book (what it does today)', ms: Date.now() - t1,
+                     bytes: plain.length, vouchers: (plain.match(/<VOUCHER[\s>]/gi) || []).length });
+        } catch (e) { out.push({ shape: 'day-book', error: String((e && e.message) || e) }); }
+      } finally { state.settings.company = savedC; }
+      json(res, 200, { ok: true, version: VERSION, ledger: nm,
+                       window: [from.toISOString().slice(0, 10), to.toISOString().slice(0, 10)], results: out });
+      return;
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/itc/register') {
       if (dcProgress.active) { json(res, 409, { ok: false, error: 'A read is already running.' }); return; }
       const body = JSON.parse(await readBody(req));

@@ -41,28 +41,42 @@ const srv = http.createServer((req, res) => {
     if (/KnapLedgers|Ledger/i.test(b) && !/Voucher/i.test(b)) {
       return res.end('<ENVELOPE><LEDGER NAME="Stock Supplier"><PARENT>Sundry Creditors</PARENT></LEDGER></ENVELOPE>');
     }
-    const isLedger = /KnapLedVch/.test(b);
+    /* Which "give me this ledger's vouchers" shape is being asked for. A real
+       Tally answers some and not others, which is the whole point of trying
+       several — so the stub can be told which ones it knows. */
+    const shape = /KnapLedVch2/.test(b) ? 'collection-voucher-childof'
+                : /KnapLedVch/.test(b) ? 'collection-voucher-ledger'
+                : /<ID>Ledger Vouchers<\/ID>/i.test(b) ? 'report-ledger-vouchers'
+                : null;
+    const isLedger = !!shape;
+    const from = Number((b.match(/<SVFROMDATE[^>]*>(\d{8})/i) || [])[1] || 20250401);
+    const to = Number((b.match(/<SVTODATE[^>]*>(\d{8})/i) || [])[1] || 20260331);
     const isFiltered = /KnapItcVch/.test(b);
     if (isLedger) stats.ledger++; else if (isFiltered) stats.filtered++; else stats.plain++;
 
     /* Tally's ledger index: only the vouchers that hit the named ledger.
        In "noLedgerIndex" the server refuses it, as an older Tally would. */
     if (isLedger) {
-      // 'filterOnly' and 'bad' exercise the tiers BELOW the ledger index
-      if (mode === 'noLedgerIndex' || mode === 'filterOnly' || mode === 'bad') { res.statusCode = 200; return res.end('<ENVELOPE></ENVELOPE>'); }
+      // Which shapes this "Tally" knows. Anything else answers empty, as a
+      // build that does not support that TDL would.
+      const knows = { good: ['collection-voucher-ledger'],
+                      onlyReport: ['report-ledger-vouchers'],
+                      ledgerMisses: ['collection-voucher-ledger'],
+                      filterOnly: [], bad: [], noLedgerIndex: [] }[mode] || [];
+      if (!knows.includes(shape)) { res.statusCode = 200; return res.end('<ENVELOPE></ENVELOPE>'); }
       const out = [];
       for (let i = 0; i < TOTAL; i++) {
         if ((i % ITC_EVERY) !== 0) continue;
+        const d = 20250401 + Math.floor(i / 20);
+        if (d < from || d > to) continue;                 // a real ledger read honours the window
         if (mode === 'ledgerMisses' && i === ITC_EVERY * 3) continue;   // silently short
         out.push(vch(i, true));
       }
-      out.push(stockVch(1));
+      if (from <= 20250405 && to >= 20250405) out.push(stockVch(1));
       const body = '<ENVELOPE>' + out.join('') + '</ENVELOPE>';
       stats.bytes += body.length;
       return setTimeout(() => res.end(body), 30);
     }
-    const from = Number((b.match(/<SVFROMDATE[^>]*>(\d{8})/i) || [])[1] || 20250401);
-    const to = Number((b.match(/<SVTODATE[^>]*>(\d{8})/i) || [])[1] || 20260331);
     const out = [];
     for (let i = 0; i < TOTAL; i++) {
       const d = 20250401 + Math.floor(i / 20);
@@ -147,8 +161,10 @@ mode = 'good';
 const led = await run('ledger index');
 t('the whole period comes from the ledger index', () => {
   assert(/ledger index/.test(led.note), 'note should record the ledger read: ' + led.note);
-  assert(led.stats.ledger === 1, `one request per ledger expected, got ${led.stats.ledger}`);
+  // one small request per ledger to PROVE the shape, then one for the period
+  assert(led.stats.ledger === 2, `expected a probe and a full read per ledger, got ${led.stats.ledger}`);
   assert(led.stats.plain <= 1, `only the proving window should be scanned, got ${led.stats.plain}`);
+  assert(led.stats.filtered === 0, 'the day-book filter should not be needed');
 });
 t('and it still finds every ITC voucher', () => {
   const expected = Math.ceil(TOTAL / ITC_EVERY) + 1;
@@ -173,6 +189,41 @@ t('it falls through to a method that works, losing nothing', () => {
   const expected = Math.ceil(TOTAL / ITC_EVERY) + 1;
   assert(older.j.rows.length === expected, `expected ${expected} rows, got ${older.j.rows.length}`);
   assert(!/ledger index/.test(older.note), 'must not claim the ledger index: ' + older.note);
+});
+
+
+console.log('\n── a Tally that answers only the report shape ──');
+mode = 'onlyReport';
+const rep = await run('report shape');
+t('the shape that works is found and named', () => {
+  assert(/ledger index/.test(rep.note), 'should use the ledger index: ' + rep.note);
+  assert(/Ledger Vouchers report/.test(rep.note), 'should name the shape that worked: ' + rep.note);
+});
+t('and nothing is lost by it', () => {
+  const expected = Math.ceil(TOTAL / ITC_EVERY) + 1;
+  assert(rep.j.rows.length === expected, `expected ${expected} rows, got ${rep.j.rows.length}`);
+});
+
+
+console.log('\n── the diagnostic ──');
+mode = 'onlyReport';
+const diag = await (await fetch('http://127.0.0.1:8898/api/itc/diagnose', {
+  method: 'POST', headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ url: 'http://127.0.0.1:9977/', company: 'X', ledger: 'Input IGST',
+                         from: '2025-04-01', to: '2026-03-31' }),
+})).json();
+t('every shape is tried and reported', () => {
+  assert(diag.ok, 'diagnose failed: ' + JSON.stringify(diag).slice(0, 200));
+  assert(diag.results.length === 4, 'expected 3 shapes plus the day book, got ' + diag.results.length);
+  const byShape = Object.fromEntries(diag.results.filter((r) => r.shape).map((r) => [r.shape, r]));
+  assert(byShape['report-ledger-vouchers'].usable === true, 'the report shape should be usable here');
+  assert(byShape['collection-voucher-ledger'].usable === false, 'the unsupported shape should read as unusable');
+});
+t('it shows what the day book would have cost instead', () => {
+  const db = diag.results.find((r) => /day-book/.test(r.shape));
+  assert(db && db.vouchers > 0, 'the day-book comparison is missing');
+  const rep = diag.results.find((r) => r.shape === 'report-ledger-vouchers');
+  assert(rep.vouchers < db.vouchers, `the ledger read should be smaller: ${rep.vouchers} vs ${db.vouchers}`);
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

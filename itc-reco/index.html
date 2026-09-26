@@ -253,7 +253,7 @@
 <script>
 /* ============================ connector ============================ */
 var API=(function(){try{return localStorage.getItem('knap_connector_url');}catch(e){return null;}})()||'http://127.0.0.1:8797';
-var REQVER='4.60', connVer='', POLL=null;
+var REQVER='4.61', connVer='', POLL=null;
 function $(id){return document.getElementById(id);}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 function setPill(cls,txt){var p=$('connPill');p.className='conn-pill '+cls;$('connPillText').textContent=txt;}
