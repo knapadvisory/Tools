@@ -105,6 +105,45 @@ await t('a real GST difference is still an amount mismatch', async () => {
   assert(!/wrong registration/.test(r.remarks), 'the registration is fine: ' + r.remarks);
 });
 
+
+console.log('\n── a taxable difference where the GST agrees ──');
+await t('freight on the voucher does not turn a confirmed match into "verify"', async () => {
+  // the real ST/25-26/221: same invoice number, GST 109031.40 both sides,
+  // books taxable 5,000 higher because freight was charged on the voucher
+  const r = await label(doc({ invNo: 'ST/25-26/221', taxable: 605730, igst: 109031.40 }),
+                        book({ voucherNo: 'ST/25-26/221', supplierInvNo: 'ST/25-26/221',
+                               taxable: 610730, igst: 109031.40 }));
+  assert(r.cat === 'matched', `the invoice number and the GST both agree — expected booked, got ${r.cat}`);
+  assert(!/verify/.test(r.remarks), 'nothing needs verifying here: ' + r.remarks);
+  assert(/credit is unaffected/.test(r.note), 'the difference should still be explained: ' + r.note);
+});
+await t('but an unconfirmed match with a taxable gap is still worth a look', async () => {
+  // same figures, except the books voucher number tells us nothing
+  const r = await label(doc({ invNo: 'ST/25-26/221', taxable: 605730, igst: 109031.40 }),
+                        book({ voucherNo: 'PUR/0012', supplierInvNo: '', ref: '',
+                               taxable: 610730, igst: 109031.40 }));
+  assert(r.cat === 'probable', `nothing confirms this pairing — expected probable, got ${r.cat}`);
+});
+
+console.log('\n── a run of identical invoices from one supplier ──');
+await t('pairing 913900250 with voucher 913900258 is not called booked', async () => {
+  // Ultratech billed 8,424.00 many times over; the amounts tie but the
+  // document numbers plainly differ, so party+amount is the only evidence
+  const r = await label(doc({ invNo: '913900250', party: 'M/s Ultratech Cement Ltd.',
+                              taxable: 46800, igst: 8424 }),
+                        book({ voucherNo: '913900258', supplierInvNo: '913900258',
+                               party: 'ULTRATECH CEMENT LTD', taxable: 46800, igst: 8424 }));
+  assert(r.cat !== 'matched', 'a different document number must not read as booked: ' + r.remarks);
+  assert(/verify/.test(r.remarks), 'it should ask for a look: ' + r.remarks);
+  assert(/wrong two/.test(r.note), 'the note should say why: ' + r.note);
+});
+await t('books with no invoice number at all still match on amount', async () => {
+  // an internal voucher number and nothing else: amount matching is all there is
+  const r = await label(doc({ invNo: '913900250', taxable: 46800, igst: 8424 }),
+                        book({ voucherNo: '', supplierInvNo: '', ref: '', taxable: 46800, igst: 8424 }));
+  assert(r.cat === 'matched', `nothing contradicts this pairing — expected booked, got ${r.cat} (${r.remarks})`);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (errs.length) { console.log('\nBROWSER ERRORS:'); errs.slice(0, 5).forEach((e) => console.log('  ' + e)); }
 await browser.close(); srv.close();

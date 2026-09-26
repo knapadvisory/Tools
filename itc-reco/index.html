@@ -822,14 +822,31 @@ function buildRec(b,br){
   if(gstOff){
     rec.remarks='booked - amount mismatch';rec._cat='mismatch';
     rec.note='Purchase '+rec.vchBk+': GST in the books ₹'+inr(rec.gstBk)+' vs ₹'+inr(rec.gst2b)+' in 2B — differs by ₹'+inr(Math.abs(rec.gstChk))+'.';
-  } else if(taxOff){
+  } else if(taxOff && im<2){
+    /* The taxable differs AND the invoice number does not vouch for the match.
+       Here the taxable gap is evidence about whether this is even the right
+       voucher, so it is worth a human eye. */
     rec.remarks='probable match — verify';rec._cat='probable';
-    rec.note='Purchase '+rec.vchBk+' ('+rec.partyBk+'): GST matches but books taxable ₹'+inr(rec.taxBk)+' vs ₹'+inr(rec.tax2b)+' in 2B — verify.';
+    rec.note='Purchase '+rec.vchBk+' ('+rec.partyBk+'): GST matches but books taxable ₹'+inr(rec.taxBk)+' vs ₹'+inr(rec.tax2b)+' in 2B, and the invoice number does not confirm the match — verify.';
+  } else if(im===0 && invCands(br).length && normInv(b.invNo)){
+    /* Both sides carry an invoice number and they are plainly different, so the
+       only thing joining these two is the party and the amount. That is exactly
+       how a run of identical invoices from one supplier gets cross-matched —
+       Ultratech billing 8,424 eleven times over. Call it what it is. */
+    rec.remarks='probable match — verify';rec._cat='probable';
+    rec.note='Purchase '+rec.vchBk+' ('+rec.partyBk+'): the amounts tie, but the books voucher number '+rec.vchBk+' is not the 2B document '+rec.docNo+'. Matched on party and amount alone — with several invoices of the same value from one supplier this can pair the wrong two.';
   } else {
-    // GST and taxable both tie → booked, even if the invoice number differs
-    // (books often use an internal voucher number, not the supplier's invoice).
+    /* GST ties and the invoice number vouches for it (or the books carry no
+       invoice number at all). A taxable difference here is not an ITC question:
+       the credit follows the tax, which agrees. It is usually freight, loading
+       or packing charged on the voucher and outside the supplier's invoice
+       value. Said in the note, not raised as something to verify. */
     rec.remarks='booked';rec._cat='matched';
     rec.note='Matched purchase '+rec.vchBk+' ('+rec.partyBk+').';
+    if(taxOff){
+      rec.taxOnly=true;
+      rec.note+=' The GST agrees to the paisa; the books taxable is ₹'+inr(rec.taxBk)+' against ₹'+inr(rec.tax2b)+' in 2B — a ₹'+inr(Math.abs(rec.taxChk))+' difference, typically non-GST charges on the voucher. The credit is unaffected.';
+    }
     if(headMix)rec.note+=' Note: split differs — 2B IGST/CGST/SGST '+inr(rec.igst2b)+'/'+inr(rec.cgst2b)+'/'+inr(rec.sgst2b)+' vs books '+inr(rec.igstBk)+'/'+inr(rec.cgstBk)+'/'+inr(rec.sgstBk)+' (same total — check place of supply).';
     else if(im<2)rec.note+=' (Matched by amount — books voucher '+rec.vchBk+' vs 2B doc '+rec.docNo+'.)';
   }
