@@ -911,7 +911,10 @@ function reconcile(){
     (gstAmtIdx[Math.round(bGst(r))]||(gstAmtIdx[Math.round(bGst(r))]=[])).push(i);
   });
   function cmpKey(a,b){for(var i=0;i<a.length;i++){if(a[i]!==b[i])return a[i]>b[i]?1:-1;}return 0;}
-  function findMatch(b){
+  /* `floor` is the weakest invoice-number evidence this pass will accept:
+     3 = the same number, 2 = one is the other's tail, 0 = anything goes. */
+  function findMatch(b,floor){
+    floor=floor||0;
     var bInv=normInv(b.invNo),g=normGstin(b.gstin),bg=b.igst+b.cgst+b.sgst;
     var pool={};
     function add(list){(list||[]).forEach(function(i){if(!used[i])pool[i]=1;});}
@@ -926,6 +929,7 @@ function reconcile(){
       var ns=nameScore(b.party,r.party),nameStrong=ns>=0.5;
       var breg=normGstin(b.regn||''),oreg=normGstin(r._ownGstin||''),sameReg=!!(breg&&oreg&&breg===oreg);
       var accept=im>=2||(im>=1&&(gstNear||nameStrong))||(gstEq&&gstNear)||(nameStrong&&gstClose);
+      if(im<floor) return;              // this pass wants firmer evidence than that
       if(!accept)return;
       // Rank: SAME registration first (so a 06 invoice takes its 06 book, not an
       // identical 37 one), then amount-tie (GST, taxable), then invoice number.
@@ -934,10 +938,30 @@ function reconcile(){
     });
     return best;
   }
-  var recs=[],cn=[];
-  twoBRows.forEach(function(b){
-    var bi=findMatch(b);var br=null;
-    if(bi>=0){used[bi]=true;br=booksRows[bi];}
+  /* Assign in order of how firm the evidence is, not in the order the file
+     happens to be in.
+
+     Matching greedily in file order lets a weak match eat a voucher that an
+     exact one needs later. In the ECLAT run, 2B document SA/25-26/100 was
+     paired with voucher SA/25-26/10 — one number contains the other and the
+     party agrees — so when the real SA/25-26/10 came along its voucher was
+     gone and it was reported as not booked at all. The same thing turned
+     RAMCO's VGDIN026605/2526 into a "not booked", and produced a wrong-
+     registration flag on KNDIN022701/2526 that was not a registration problem
+     at all, only a mis-pairing.
+
+     So: every document that can be settled on an exact invoice number is
+     settled first, then those matching on a tail, and only then the rest. */
+  var recs=[],cn=[],assign=new Array(twoBRows.length).fill(-1);
+  [3,2,0].forEach(function(floor){
+    twoBRows.forEach(function(b,i){
+      if(assign[i]>=0) return;
+      var bi=findMatch(b,floor);
+      if(bi>=0){ used[bi]=true; assign[i]=bi; }
+    });
+  });
+  twoBRows.forEach(function(b,i){
+    var br=assign[i]>=0?booksRows[assign[i]]:null;
     var rec=buildRec(b,br);
     (b.isCN?cn:recs).push(rec);
   });

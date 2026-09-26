@@ -41,6 +41,17 @@ const t = async (n, fn) => { try { await fn(); pass++; console.log('  PASS  ' + 
   catch (e) { fail++; console.log('  FAIL  ' + n + '\n        ' + e.message); } };
 const assert = (c, m) => { if (!c) throw new Error(m); };
 
+/* Run several 2B documents against several books vouchers, and report how each
+   was labelled and which voucher it was given. */
+const runAll = (bs, bks) => page.evaluate(([bs, bks]) => {
+  booksRows = bks;
+  twoBRows = bs;
+  loadedFiles = [{ name: 'x.json', count: bs.length, rows: bs }];
+  ['hIGST', 'hINTRA', 'hNIL'].forEach((id) => { const e = document.getElementById(id); if (e) e.checked = true; });
+  reconcile();
+  return report.recs.map((r) => ({ doc: r.docNo, cat: r._cat, remarks: r.remarks, vch: r.vchBk }));
+}, [bs, bks]);
+
 /* Run one 2B document against one books voucher and report how it is labelled. */
 const label = (b, bk) => page.evaluate(([b, bk]) => {
   booksRows = [bk];
@@ -142,6 +153,44 @@ await t('books with no invoice number at all still match on amount', async () =>
   const r = await label(doc({ invNo: '913900250', taxable: 46800, igst: 8424 }),
                         book({ voucherNo: '', supplierInvNo: '', ref: '', taxable: 46800, igst: 8424 }));
   assert(r.cat === 'matched', `nothing contradicts this pairing — expected booked, got ${r.cat} (${r.remarks})`);
+});
+
+
+console.log('\n── a weak match must not eat a voucher an exact one needs ──');
+await t('SA/25-26/10 and SA/25-26/100 each get their own voucher', async () => {
+  /* The real pair. One invoice number contains the other and the party is the
+     same, so in file order SA/25-26/100 took voucher SA/25-26/10 and the real
+     SA/25-26/10 was reported as not booked at all. */
+  const out = await runAll(
+    [doc({ invNo: 'SA/25-26/100', party: 'SARA ASSOCIATES', gstin: '33BDRPR3498A1Z9', taxable: 68005, igst: 12240.90 }),
+     doc({ invNo: 'SA/25-26/10',  party: 'SARA ASSOCIATES', gstin: '33BDRPR3498A1Z9', taxable: 164440, igst: 29599.20 })],
+    [book({ voucherNo: 'SA/25-26/10', supplierInvNo: 'SA/25-26/10', ref: 'SA/25-26/10',
+            party: 'SARA ASSOCIATES', gstin: '33BDRPR3498A1Z9', taxable: 164440, igst: 29599.20 })]);
+  const exact = out.find((r) => r.doc === 'SA/25-26/10');
+  const other = out.find((r) => r.doc === 'SA/25-26/100');
+  assert(exact.vch === 'SA/25-26/10',
+    `the document with the SAME number must get the voucher, got "${exact.vch}" (${exact.remarks})`);
+  assert(exact.cat === 'matched', `expected booked, got ${exact.cat} (${exact.remarks})`);
+  assert(!other.vch, `SA/25-26/100 has no voucher of its own, got "${other.vch}"`);
+});
+await t("RAMCO's two documents are not cross-matched either", async () => {
+  /* KNDIN022701/2526 took VGDIN026605/2526's voucher on party and amount, and
+     the resulting registration difference was then reported as an ITC booked
+     under the wrong GSTIN — a finding that did not exist. */
+  const out = await runAll(
+    [doc({ regn: '06AAGCE4293A1ZX', invNo: 'KNDIN022701/2526', party: 'THE RAMCO CEMENTS LIMITED',
+           gstin: '37AABCM8375L1ZV', taxable: 163064.41, igst: 29351.59 }),
+     doc({ regn: '21AAGCE4293A1Z5', invNo: 'VGDIN026605/2526', party: 'THE RAMCO CEMENTS LIMITED',
+           gstin: '37AABCM8375L1ZV', taxable: 162881.54, igst: 29318.64 })],
+    [book({ _ownGstin: '21AAGCE4293A1Z5', voucherNo: 'VGDIN026605/2526', supplierInvNo: 'VGDIN026605/2526',
+            ref: 'VGDIN026605/2526', party: 'THE RAMCO CEMENTS LIMITED', gstin: '37AABCM8375L1ZV',
+            taxable: 162881.54, igst: 29318.66 })]);
+  const right = out.find((r) => r.doc === 'VGDIN026605/2526');
+  const wrong = out.find((r) => r.doc === 'KNDIN022701/2526');
+  assert(right.vch === 'VGDIN026605/2526', `the exact number should win the voucher, got "${right.vch}"`);
+  assert(right.cat === 'matched', `expected booked, got ${right.cat} (${right.remarks})`);
+  assert(!/wrong registration/.test(wrong.remarks),
+    'a mis-pairing must not be reported as ITC in the wrong GSTIN: ' + wrong.remarks);
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);
