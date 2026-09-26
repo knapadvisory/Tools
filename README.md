@@ -18,6 +18,14 @@ Sibling sites: [teamhub.knapadvisory.com](https://teamhub.knapadvisory.com) ·
 | GSTR-2B ⇄ Tally Poster | **Hosted here** at `/gstr2b/` + local connector | This repo — page `gstr2b/`, engine `connector/knap-tally-connector.mjs` (ported from `Dashboard` branch `claude/gstr2b-tally-posting-mqt7zn` v1.7) |
 | GSTR-1 Excel Summary | **Hosted here** at `/gstr1/` | This repo — page `gstr1/`, engine `gstr1-engine/` run unmodified as an internal child process, proxied at `/gstr1-api` (from `Dashboard` branch `claude/pdf-excel-extraction-tool-izu1zp`) |
 | Debtor / Creditor Consolidation | **Hosted here** at `/debtor-creditor/` + local connector | This repo — page `debtor-creditor/`, engine in `connector/knap-tally-connector.mjs` (`/api/dc/*`). Balances = the closing balance of every ledger under Sundry Debtors / Creditors as on the date, read in one light group-scoped request (ties to Tally's Group Summary; does not hang on big companies). Ageing / bill-wise read the vouchers (FIFO, with reimbursement pass-throughs netted). A company too dense to age voucher-by-voucher (a marketplace book with millions of vouchers) is aged **month-level** instead — Tally's monthly group summaries FIFO'd into buckets (fast, never freezes, still ties to the balance). Reports: consolidated matrix, 80/20 Pareto, ageing, bill-wise summary, party master; master workbook bundles all. |
+**Connector versions.** `connector/knap-tally-connector.mjs` self-updates from
+`/connector/version.json`: it compares its own `const VERSION` against that file
+and, when they differ, downloads itself and restarts. So the two must be bumped
+**together** — `version.json` ahead loops every connector in the field, behind
+means the build is never offered. `node connector/version.test.mjs` fails them
+apart. A connector picks a new version up within 6 hours, or immediately if it
+is restarted.
+
 | PDF Toolkit | **Hosted here** at `/pdftools/` | This repo — page `pdftools/`, all of it in the browser (pdf-lib + pdf.js + JSZip; ExcelJS fetched on demand). Merge, split, organise, PDF ⇄ JPG, **Compress** and **Excel → PDF**. Compress takes a queue of files (several in, one ZIP out) and a size target for portal upload caps: it searches the best quality that fits, then encodes and MEASURES the real file before claiming the target was met. Nothing retains a PDF's bytes — each file is read when its turn comes and handed to pdf.js's worker, so a queue costs no more memory than its largest member. Measured: a 356 MB, 60-page scan → 4.8 MB in 64 s, peak heap 362 MB. Excel → PDF lays out cell values with widths, merges, number and date formats and a repeating header; it is not a pixel copy of Excel and the page says so. Tests: `node pdftools/compress.test.mjs` (needs `playwright-core`). |
 
 The desktop tools in `downloads/` are **copies** of the branch files above —

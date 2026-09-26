@@ -27,7 +27,10 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.58';
+const VERSION = '4.59';
+// Bumped WITH connector/version.json — the two are compared to decide a
+// self-update, so a mismatch either loops every connector in the field or
+// hides the build. connector/version.test.mjs fails the pair apart.
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
@@ -422,7 +425,10 @@ function voucherCollectionRequest(from, to) {
 // every voucher) makes Tally's export dramatically smaller and faster, so a
 // high-volume company exports without choking. Kept separate from
 // voucherCollectionRequest so the GSTR-2B/recon path is untouched.
-function dcVoucherRequest(from, to) {
+/* `extra` adds FETCH fields for a caller that needs them — the ITC register
+   wants the supplier invoice number and the nested ledger-entry list, which
+   the debtor/creditor and sales readers would only pay for and discard. */
+function dcVoucherRequest(from, to, extra) {
   return `<ENVELOPE>
  <HEADER><VERSION>1</VERSION><TALLYREQUEST>Export</TALLYREQUEST><TYPE>Collection</TYPE><ID>DcVouchers</ID></HEADER>
  <BODY><DESC>
@@ -437,13 +443,16 @@ function dcVoucherRequest(from, to) {
     <FETCH>DATE</FETCH><FETCH>GUID</FETCH><FETCH>VOUCHERTYPENAME</FETCH><FETCH>VOUCHERNUMBER</FETCH>
     <FETCH>PARTYLEDGERNAME</FETCH><FETCH>ISCANCELLED</FETCH><FETCH>ISOPTIONAL</FETCH>
     <FETCH>PARTYGSTIN</FETCH><FETCH>CMPGSTIN</FETCH><FETCH>GSTREGISTRATION</FETCH>
-    <FETCH>REFERENCE</FETCH><FETCH>SUPPLIERINVOICENO</FETCH><FETCH>BASICBUYERREFNO</FETCH>
-    <FETCH>ALLLEDGERENTRIES.LIST</FETCH><FETCH>LEDGERENTRIES.LIST</FETCH>
+    <FETCH>REFERENCE</FETCH><FETCH>ALLLEDGERENTRIES.LIST</FETCH>${(extra || []).map((f) => `<FETCH>${f}</FETCH>`).join('')}
    </COLLECTION>
   </TDLMESSAGE></TDL>
  </DESC></BODY>
 </ENVELOPE>`;
 }
+/* What the ITC register needs on top: GSTR-2B is matched on the supplier's own
+   invoice number, and a voucher that uses LEDGERENTRIES rather than
+   ALLLEDGERENTRIES would otherwise arrive with no legs at all. */
+const ITC_FETCH = ['SUPPLIERINVOICENO', 'BASICBUYERREFNO', 'LEDGERENTRIES.LIST'];
 
 /**
  * The same read, but asking Tally to hand back ONLY the vouchers that touch one
@@ -2879,7 +2888,7 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
       dcProgress.phase = 'Checking whether Tally can pre-filter this read…';
       const probeEnd = new Date(Math.min(to.getTime(), from.getTime() + 20 * DAY_MS));
       try {
-        const plain = await tallyFetch(url, dcVoucherRequest(from, probeEnd), 90000);
+        const plain = await tallyFetch(url, dcVoucherRequest(from, probeEnd, ITC_FETCH), 90000);
         const want = itcGuids(plain);
         if (!want.size) {
           filterNote = 'no ITC vouchers in the sample window, so the filter could not be proved — read in full';
@@ -2993,7 +3002,8 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
          // With Tally doing the filtering, a window carries a fraction of the
          // XML, so far longer windows come back comfortably — which is where
          // most of the wall-clock saving actually shows up.
-         request: useFilter ? (a, b) => itcVoucherRequest(a, b, ledgerNames) : null });
+         request: useFilter ? (a, b) => itcVoucherRequest(a, b, ledgerNames)
+                            : (a, b) => dcVoucherRequest(a, b, ITC_FETCH) });
     rows.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
     return { rows };
   } finally { state.settings.company = saved; }
