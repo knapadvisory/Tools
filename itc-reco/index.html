@@ -1297,7 +1297,7 @@ function applyAmended(rec,b){
   rec.remarks+=' · amended';
   rec.note+=' [Amendment in 2B'+(b.isCN?' (credit/debit note)':'')+': the supplier revised this document in a later return — reconcile against these revised figures, not the original.]';
 }
-var setAside2b=[],superseded2b=[],nextPeriod2b=[];
+var setAside2b=[],superseded2b=[],nextPeriod2b=[],rcmAside2b=[];
 function reconcile(){
   setCoverage();
   /* Only the heads the preparer picked. A 2B invoice under a head whose input
@@ -1320,6 +1320,20 @@ function reconcile(){
      fetched. Only applies when the books window is known; a document dated
      BEFORE the window keeps the existing "widen the fetch" treatment, because
      there the books probably should have covered it. */
+  /* Reverse-charge documents are answered by the RCM ledgers, and if none were
+     fetched there is nothing for them to match — 46 of them in the client's
+     first full run came back as "verify" or "not booked", which is a statement
+     about the ledgers picked, not about the books. Set aside and counted, like
+     a tax head nobody fetched. The test is the books themselves rather than the
+     tick boxes, so an RCM ledger that was selected but holds nothing counts as
+     not fetched, which is what it is. */
+  var booksHaveRcm=(booksRows||[]).some(function(r){
+    return Math.abs(+r.rcmIgst||0)+Math.abs(+r.rcmCgst||0)+Math.abs(+r.rcmSgst||0)>0.005;});
+  rcmAside2b=[];
+  if(!booksHaveRcm){
+    rcmAside2b=twoBRows.filter(function(r){return r.rcm;});
+    twoBRows=twoBRows.filter(function(r){return !r.rcm;});
+  }
   nextPeriod2b=[];
   if(COV&&COV.toYM){
     nextPeriod2b=twoBRows.filter(function(r){var d=ymd(r.invDate);return d&&(d.y*100+d.mo)>COV.toYM;});
@@ -1526,6 +1540,8 @@ function renderReport(){
        saying so reads as a clean reconciliation of the whole thing. */
     +(setAside2b.length?' · <b style="color:var(--mut)">'+setAside2b.length+' set aside (other tax heads: '
       +inr(setAside2b.reduce(function(a,r){return a+(+r.igst||0)+(+r.cgst||0)+(+r.sgst||0);},0))+' GST)</b>':'')
+    +(rcmAside2b.length?' · <b style="color:var(--mut)">'+rcmAside2b.length+' reverse-charge set aside ('
+      +inr(rcmAside2b.reduce(function(a,r){return a+(+r.igst||0)+(+r.cgst||0)+(+r.sgst||0);},0))+' GST)</b>':'')
     +(nextPeriod2b.length?' · <b style="color:var(--mut)">'+nextPeriod2b.length+' dated after '+esc(COV.to)+' — next period’s ('
       +inr(nextPeriod2b.reduce(function(a,r){return a+(+r.igst||0)+(+r.cgst||0)+(+r.sgst||0);},0))+' GST)</b>':'');
   $('statGrid').innerHTML=[
@@ -1544,6 +1560,7 @@ function renderReport(){
   html+=secMM('Amount mismatch — matched invoice, GST or split differs',by.mismatch);
   html+=secMM('🚩 Wrong registration — the invoice is booked under a different GSTIN of yours',by.wrongreg);
   html+=secMM('Probable match — verify',by.probable);
+  if(rcmAside2b.length)html+='<div class="repsec"><div class="conn-banner wait" style="margin:0"><span class="cdot"></span><div><div class="ctitle">'+rcmAside2b.length+' reverse-charge document(s) set aside — no RCM ledger was fetched</div><div class="csub">2B marks these as liable to reverse charge, so the credit is answered by your <b>RCM input ledgers</b>, and none of the ledgers read hold any reverse-charge tax. ITC of <b>'+inr(rcmAside2b.reduce(function(a,r){return a+(+r.igst||0)+(+r.cgst||0)+(+r.sgst||0);},0))+'</b>. Counted here rather than reported as “not booked”, because against these ledgers they never could be. Tick the RCM ledgers in step 2 and fetch again to reconcile them.</div></div></div></div>';
   if(nextPeriod2b.length)html+='<div class="repsec"><div class="conn-banner wait" style="margin:0"><span class="cdot"></span><div><div class="ctitle">'+nextPeriod2b.length+' document(s) in these returns belong to the next period, not this one</div><div class="csub">Their invoice dates are after <b>'+esc(COV.to)+'</b>, the end of the books you read — they came in because the April/May returns that carry this year’s late filings also carry next year’s own invoices. ITC of <b>'+inr(nextPeriod2b.reduce(function(a,r){return a+(+r.igst||0)+(+r.cgst||0)+(+r.sgst||0);},0))+'</b>. Set aside and counted, not reported as “not booked”, because against this year’s books they never could be.</div></div></div></div>';
   html+=periodGapWarning();
   html+=spilloverWarning();

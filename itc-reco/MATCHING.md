@@ -330,6 +330,34 @@ on screen and on its own sheet — with the count, the GST, and what it usually
 means. One supplier's whole run missing is a question about the ledgers that
 were fetched, not about 674 omissions.
 
+### Verified against the GST portal's own figures
+
+The client supplied the portal's *Tax liability and ITC comparison* report for
+all three registrations — the GSTN's own month-wise statement of ITC auto-drafted
+in GSTR-2B. Our parse was compared to it for every one of the 27 return periods:
+
+**In all 27, the difference is exactly the file's reverse-charge block.** No
+exceptions, no residue. The portal's auto-drafted column excludes inward supplies
+liable to reverse charge (they sit in its own RCM sheet); we include them. Add
+them back and every period ties to the paisa.
+
+The one period that could not be compared is Haryana's March 2026, whose 2B file
+carries no `itcsumm` at all — which the file-check reports as unchecked rather
+than assuming it good.
+
+The same report also settles two things the tool had only inferred:
+
+- **Odisha's missing months are genuinely empty.** The portal shows nil for April
+  to October and February, so there was no return to download — the per-
+  registration coverage rule was right to stay quiet once the books showed
+  nothing in them either.
+- **Reverse charge needs its own ledgers.** 46 documents in the first full run
+  came back "verify" or "not booked" because only the three Input ledgers were
+  fetched. That is a statement about which ledgers were picked, not about the
+  books, so a reverse-charge document is now set aside and counted when the books
+  hold no reverse-charge tax at all — the test being the books themselves, not
+  the tick boxes.
+
 ## 11. A total is only as complete as the files behind it
 
 The client checked the tool's 2B total against the portal's own 2A/2B summary

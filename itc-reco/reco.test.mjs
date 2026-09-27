@@ -618,6 +618,35 @@ await t('an amendment that renumbers the document still supersedes the original'
     `and only the amended value counts, got ${live.gst2b}`);
 });
 
+console.log('\n── reverse charge, when no RCM ledger was fetched ──');
+const rcmRun = (bookRows) => page.evaluate(([bs, bks]) => {
+  booksRows = bks; twoBRows = bs;
+  loadedFiles = [{ name: 'x.json', count: bs.length, rows: bs, src: '2B' }];
+  lastBooksMeta = { from: '2025-04-01', to: '2026-03-31' };
+  ['hIGST', 'hINTRA', 'hNIL'].forEach((id) => { const e = document.getElementById(id); if (e) e.checked = true; });
+  reconcile();
+  return { aside: rcmAside2b.length, recs: report.recs.map((r) => ({ doc: r.docNo, cat: r._cat, vch: r.vchBk })) };
+}, [[doc({ invNo: 'RC/1', rcm: true, taxable: 10000, igst: 1800 }),
+     doc({ invNo: 'N/1', taxable: 20000, igst: 3600 })], bookRows]);
+await t('they are set aside and counted, not called "not booked"', async () => {
+  /* 46 of them in the client's first full run came back as "verify" or "not
+     booked" — a statement about which ledgers were picked, not about the books. */
+  const out = await rcmRun([book({ voucherNo: 'N/1', supplierInvNo: 'N/1', ref: '',
+    taxable: 20000, igst: 3600, rcmIgst: 0, rcmCgst: 0, rcmSgst: 0 })]);
+  assert(out.aside === 1, `the reverse-charge document should be set aside, got ${out.aside}`);
+  assert(out.recs.length === 1 && out.recs[0].doc === 'N/1',
+    'and must not appear among the findings: ' + JSON.stringify(out.recs));
+});
+await t('but they are reconciled when the RCM ledgers were fetched', async () => {
+  const out = await rcmRun([
+    book({ voucherNo: 'N/1', supplierInvNo: 'N/1', ref: '', taxable: 20000, igst: 3600 }),
+    book({ voucherNo: 'RC/1', supplierInvNo: 'RC/1', ref: '', taxable: 10000,
+           igst: 0, rcmIgst: 1800 })]);
+  assert(out.aside === 0, `nothing should be set aside, got ${out.aside}`);
+  const rc = out.recs.find((r) => r.doc === 'RC/1');
+  assert(rc && rc.cat === 'matched', `it must reconcile: ${rc && rc.cat}`);
+});
+
 console.log('\n── evidence the books cannot supply ──');
 await t('an invoice dated before the books were read is not matched to them', async () => {
   /* Shree Ganesh's 003 of 15-03-2025 — last year's invoice, reported late in the
