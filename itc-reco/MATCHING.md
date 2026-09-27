@@ -217,8 +217,8 @@ Every one of these was a bug that presented as a wall of false findings:
 - **Amendments.** An amendment *restates* a document; it does not add one. The
   original is marked superseded, shown for the trail, and kept out of both the
   total and the matching, so it cannot take the voucher the live version needs.
-  Four documents in the CGST run were counted twice for ₹3,55,466.25 — and the
-  portal's own tool did the same, so the two sheets agreed on a figure that was
+  Three documents in the CGST run were counted twice for ₹71,966.25 — and the
+  portal's own tool does the same, so the two sheets agreed on a figure that was
   wrong in both. Agreement is not correctness.
 
   In a multi-GSTIN group the commonest amendment is not a change of figures at
@@ -283,6 +283,48 @@ One subtlety it has to respect: **the `b2ba` / `cdnra` lines in `itcsumm` are
 differentials** (amended value less the original), not gross. June 2025 reads
 `-2,20,654.44` because of the three Kaushik amendments above. So the comparison
 is made on the non-amendment documents only, where it ties exactly.
+
+With all **fourteen** returns per registration loaded (Apr-25 → May-26) against
+the 29 of 2A, the year closes on both heads, every difference from the portal's
+own 2A-vs-2B summary named:
+
+```
+CGST   portal summary, net                         3,19,92,657.57
+       less 3 amendment originals it counts twice       -71,966.25
+                                                   3,19,20,691.32
+       this tool                                   3,19,20,691.32   ✓ 0.00
+
+IGST   portal summary, net                        11,16,29,786.67
+       less the 2A-only credit note (in no 2B)         -81,955.37
+       add back 2 supplier DEBIT notes it subtracts     +24,336.00
+                                                  11,15,72,167.30
+       this tool                                  11,15,72,167.30   ✓ 0.00
+```
+
+The 110 documents that were "in 2A only" on twelve returns fall to **one** on
+fourteen — a credit note the supplier reported in 2A and in no 2B at all, which
+is the same ₹81,955.37 the portal's own sheet shows as its only Haryana note
+difference.
+
+**Those returns also carry the NEXT year's invoices** — 1,133 of them — and
+against this year's books every one would read "booked, but not in 2B". They are
+set aside and counted, like a tax head nobody fetched. A document dated *before*
+the books window keeps the "widen the fetch" treatment instead, because there the
+books probably should have covered it.
+
+### A document's identity includes its financial year
+
+Invoice numbers restart every April. Keying a document on supplier GSTIN +
+number alone collapsed three real invoices numbered **003** from one supplier —
+15-03-2025, 30-10-2025 and 29-04-2026 — and dropped two of them in silence the
+moment the 2026 returns were loaded. Eight documents went that way in all. The
+financial year of the document date is part of `docKey`, and of the amendment
+lookup (which uses `oidt`, the original's date, so an amendment filed in April
+still reaches back into March's year).
+
+This also corrects an earlier reading in this file: of the four documents once
+called "counted twice", only three were amendments. `003` was two different
+invoices all along.
 
 ### Coverage is per registration
 

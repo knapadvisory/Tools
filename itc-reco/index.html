@@ -604,11 +604,22 @@ function handleFiles(files){
     fr.readAsText(file);
   })();
 }
+/* The financial year a document belongs to — April to March, named by its
+   starting year. */
+function fyOf(dt,period){
+  var d=ymd(dt);
+  if(!d){var p=ymNumOfPeriod(period);if(!p)return '';d={y:Math.floor(p/100),mo:p%100};}
+  return String(d.mo>=4?d.y:d.y-1);
+}
 /* One document, wherever it came from. A supplier's invoice is unique by his
-   GSTIN and his invoice number (the law requires it), so that is the identity —
-   plus whether it is a note rather than an invoice, and whether it is an
-   amendment, because an amendment is a second document about the same one. */
-function docKey(r){return normGstin(r.gstin)+'|'+normInv(r.invNo)+'|'+(r.isCN?'C':'I')+(r.isAmend?'|A':'');}
+   GSTIN and his invoice number — but only WITHIN A FINANCIAL YEAR, because
+   numbering restarts every April. Leaving the year out of the identity silently
+   dropped eight real documents the moment the April and May 2026 returns were
+   loaded: invoice "003" dated 29-04-2026 collided with "003" dated 30-10-2025
+   and with "003" dated 15-03-2025, three different invoices from one supplier.
+   So the year is part of the key, and the dedupe only ever collapses documents
+   that genuinely cannot both exist. */
+function docKey(r){return normGstin(r.gstin)+'|'+normInv(r.invNo)+'|'+(r.isCN?'C':'I')+(r.isAmend?'|A':'')+'|'+fyOf(r.invDate,r.period);}
 var mergeStats={only2a:0,common:0,dupDropped:0,has2a:false,has2b:false};
 /* 2B first, then 2A. A document present in both is kept EXACTLY as 2B gave it —
    2B is the statutory basis of the credit, so nothing about a common document
@@ -670,13 +681,16 @@ function fillPartyNames(){
    `origNo` covers the case where the amendment carries a different number. */
 function markSuperseded(){
   var amended={};
+  // Scoped to the original document's own financial year (`oidt` when the return
+  // gives it), for the same reason docKey is: numbering restarts each April.
   twoBRows.forEach(function(r){
     if(!r.isAmend)return;
-    amended[normGstin(r.gstin)+'|'+normInv(r.origNo||r.invNo)+'|'+(r.isCN?'C':'I')]={regn:r.regn||'',period:r.period||''};
+    amended[normGstin(r.gstin)+'|'+normInv(r.origNo||r.invNo)+'|'+(r.isCN?'C':'I')+'|'+fyOf(r.origDt||r.invDate,r.period)]
+      ={regn:r.regn||'',period:r.period||''};
   });
   mergeStats.superseded=0;
   twoBRows.forEach(function(r){
-    var a=r.isAmend?null:amended[normGstin(r.gstin)+'|'+normInv(r.invNo)+'|'+(r.isCN?'C':'I')];
+    var a=r.isAmend?null:amended[normGstin(r.gstin)+'|'+normInv(r.invNo)+'|'+(r.isCN?'C':'I')+'|'+fyOf(r.invDate,r.period)];
     r._superseded=!!a;r._amendedTo=a||null;
     if(a)mergeStats.superseded++;
   });
@@ -889,8 +903,10 @@ function parseGstJson(j,src,fileName){
          type was unreadable — a POSITIVE sign, so it looked like an extra
          invoice instead of a reversal. Both dialects are read here. */
       invNo:String(inv.inum||inv.ntnum||inv.nt_num||'').trim(),
-      // The document this one revises or relates to, when the return says.
+      // The document this one revises or relates to, when the return says — and
+      // its date, which fixes the financial year the amendment reaches back into.
       origNo:String(inv.oinum||inv.ontnum||inv.onum||'').trim(),
+      origDt:inv.oidt||inv.ontdt||inv.odt||'',
       invDate:inv.dt||inv.idt||inv.ntdt||inv.nt_dt||'',
       invoiceValue:num(inv.val),taxable:sign*tx,igst:sign*ig,cgst:sign*cg,sgst:sign*sg,cess:sign*cs,
       rcm:(String(inv.rev||inv.rchrg||'').toUpperCase()==='Y'),isCN:!!isCN,isAmend:!!isAmend,
@@ -1222,7 +1238,7 @@ function applyAmended(rec,b){
   rec.remarks+=' · amended';
   rec.note+=' [Amendment in 2B'+(b.isCN?' (credit/debit note)':'')+': the supplier revised this document in a later return — reconcile against these revised figures, not the original.]';
 }
-var setAside2b=[],superseded2b=[];
+var setAside2b=[],superseded2b=[],nextPeriod2b=[];
 function reconcile(){
   setCoverage();
   /* Only the heads the preparer picked. A 2B invoice under a head whose input
@@ -1237,6 +1253,19 @@ function reconcile(){
   // matched (see markSuperseded).
   superseded2b=twoBRows.filter(function(r){return r._superseded;});
   twoBRows=twoBRows.filter(function(r){return !r._superseded;});
+  /* Reconciling a year properly means loading the April and May returns after it,
+     because that is where invoices filed late land. Those returns also carry the
+     NEXT year's own invoices — 1,133 of them in the client's set — and against
+     this year's books every one would read "not booked". That is not a finding,
+     it is next year's business: set aside and counted, like a tax head nobody
+     fetched. Only applies when the books window is known; a document dated
+     BEFORE the window keeps the existing "widen the fetch" treatment, because
+     there the books probably should have covered it. */
+  nextPeriod2b=[];
+  if(COV&&COV.toYM){
+    nextPeriod2b=twoBRows.filter(function(r){var d=ymd(r.invDate);return d&&(d.y*100+d.mo)>COV.toYM;});
+    twoBRows=twoBRows.filter(function(r){var d=ymd(r.invDate);return !(d&&(d.y*100+d.mo)>COV.toYM);});
+  }
 
   var n=booksRows.length,used=new Array(n).fill(false);
   var invIdx={},gstinIdx={},gstAmtIdx={};
@@ -1402,7 +1431,9 @@ function renderReport(){
     /* Say what was left out and why. A number that excludes part of 2B without
        saying so reads as a clean reconciliation of the whole thing. */
     +(setAside2b.length?' · <b style="color:var(--mut)">'+setAside2b.length+' set aside (other tax heads: '
-      +inr(setAside2b.reduce(function(a,r){return a+(+r.igst||0)+(+r.cgst||0)+(+r.sgst||0);},0))+' GST)</b>':'');
+      +inr(setAside2b.reduce(function(a,r){return a+(+r.igst||0)+(+r.cgst||0)+(+r.sgst||0);},0))+' GST)</b>':'')
+    +(nextPeriod2b.length?' · <b style="color:var(--mut)">'+nextPeriod2b.length+' dated after '+esc(COV.to)+' — next period’s ('
+      +inr(nextPeriod2b.reduce(function(a,r){return a+(+r.igst||0)+(+r.cgst||0)+(+r.sgst||0);},0))+' GST)</b>':'');
   $('statGrid').innerHTML=[
     tile('good','Booked (matched)',by.matched.length,inr(sumF(by.matched,function(r){return r.gst2b;}))+' GST'),
     tile('warnv','Amount mismatch',by.mismatch.length,'GST diff '+inr(sumF(by.mismatch,function(r){return r.gstChk;}))),
@@ -1419,6 +1450,7 @@ function renderReport(){
   html+=secMM('Amount mismatch — matched invoice, GST or split differs',by.mismatch);
   html+=secMM('🚩 Wrong registration — the invoice is booked under a different GSTIN of yours',by.wrongreg);
   html+=secMM('Probable match — verify',by.probable);
+  if(nextPeriod2b.length)html+='<div class="repsec"><div class="conn-banner wait" style="margin:0"><span class="cdot"></span><div><div class="ctitle">'+nextPeriod2b.length+' document(s) in these returns belong to the next period, not this one</div><div class="csub">Their invoice dates are after <b>'+esc(COV.to)+'</b>, the end of the books you read — they came in because the April/May returns that carry this year’s late filings also carry next year’s own invoices. ITC of <b>'+inr(nextPeriod2b.reduce(function(a,r){return a+(+r.igst||0)+(+r.cgst||0)+(+r.sgst||0);},0))+'</b>. Set aside and counted, not reported as “not booked”, because against this year’s books they never could be.</div></div></div></div>';
   html+=periodGapWarning();
   html+=spilloverWarning();
   if(by.superseded.length+cby.superseded.length)

@@ -585,6 +585,49 @@ await t('an amendment that renumbers the document still supersedes the original'
     `and only the amended value counts, got ${live.gst2b}`);
 });
 
+console.log('\n── invoice numbers restart every April ──');
+await t('three invoices numbered 003 from one supplier are three documents', async () => {
+  /* The real trio, from Haryana's returns: 003 dated 15-03-2025 (FY24-25,
+     reported late in the April 2025 2B), 003 dated 30-10-2025 (FY25-26) and 003
+     dated 29-04-2026 (FY26-27). Keying on GSTIN + number alone collapsed them
+     and dropped two real documents in silence. */
+  const mk = (p, dt, cgst) => ({ name: '2B_' + p + '.json', json: { data: { gstin: '06AAGCE4293A1ZX', rtnprd: p,
+    docdata: { b2b: [{ ctin: '07BICPL2786D1ZB', trdnm: 'DEEPALI ENGINEERING',
+      inv: [{ inum: '003', dt, txval: cgst / 0.09, cgst, sgst: cgst, itcavl: 'Y' }] }] } } } });
+  const out = await runJson([
+    mk('042025', '15-03-2025', 91758.69),
+    mk('112025', '30-10-2025', 283500),
+    mk('042026', '29-04-2026', 92160),
+  ], []);
+  assert(out.merge.dupDropped === 0,
+    `nothing here is a duplicate, got ${out.merge.dupDropped} dropped`);
+  assert(out.recs.length === 3, `all three must survive, got ${out.recs.length}`);
+});
+await t('the same invoice in two months of one year is still one document', async () => {
+  const mk = (p, dt) => ({ name: '2B_' + p + '.json', json: { data: { gstin: '06AAGCE4293A1ZX', rtnprd: p,
+    docdata: { b2b: [{ ctin: '07BICPL2786D1ZB', trdnm: 'DEEPALI ENGINEERING',
+      inv: [{ inum: '003', dt, txval: 100000, cgst: 9000, sgst: 9000, itcavl: 'Y' }] }] } } } });
+  const out = await runJson([mk('102025', '30-10-2025'), mk('112025', '30-10-2025')], []);
+  assert(out.merge.dupDropped === 1, `expected one drop, got ${out.merge.dupDropped}`);
+  assert(out.recs.length === 1, `expected one document, got ${out.recs.length}`);
+});
+await t('an amendment reaches back into the year its original belongs to', async () => {
+  // a March 2026 invoice amended in the April 2026 return: different periods,
+  // same financial year, so the original is still superseded
+  const out = await runJson([
+    { name: '2B_032026.json', json: { data: { gstin: '06AAGCE4293A1ZX', rtnprd: '032026', docdata: {
+        b2b: [{ ctin: '07BICPL2786D1ZB', trdnm: 'DEEPALI ENGINEERING',
+          inv: [{ inum: 'M/9', dt: '28-03-2026', txval: 100000, cgst: 9000, sgst: 9000, itcavl: 'Y' }] }] } } } },
+    { name: '2B_042026.json', json: { data: { gstin: '06AAGCE4293A1ZX', rtnprd: '042026', docdata: {
+        b2ba: [{ ctin: '07BICPL2786D1ZB', trdnm: 'DEEPALI ENGINEERING',
+          inv: [{ inum: 'M/9', oinum: 'M/9', oidt: '28-03-2026', dt: '28-03-2026',
+                  txval: 80000, cgst: 7200, sgst: 7200, itcavl: 'Y' }] }] } } } },
+  ], []);
+  assert(out.merge.superseded === 1, `the original must be superseded, got ${out.merge.superseded}`);
+  const live = out.recs.find((r) => r.cat !== 'superseded');
+  assert(Math.abs(live.gst2b - 14400) < 0.01, `and only the amended value counts, got ${live.gst2b}`);
+});
+
 console.log('\n── the dialect GSTR-2A actually speaks ──');
 /* A real 2A file: no trdnm anywhere, notes in `cdn` (not cdnr), tax inside
    itms[].itm_det as iamt/camt/samt, the date as idt. */
@@ -634,6 +677,32 @@ await t('a month with no entries in the books is not reported as a missing retur
     [bk('2025-11-10'), bk('2025-12-15'), bk('2026-01-10')]);
   html = await page.evaluate(() => periodGapWarning());
   assert(/Dec 2025/.test(html), 'now it must be named: ' + html.slice(0, 300));
+});
+
+await t("next year's invoices in the April return are set aside, not reported", async () => {
+  /* Loading the April/May returns after a year is correct — that is where its
+     late filings land — but those returns also carry the next year's own
+     invoices. Against this year's books every one would read "not booked". */
+  const mk = (p, dt, no) => ({ name: '2B_' + p + '.json', json: { data: { gstin: '06AAGCE4293A1ZX', rtnprd: p,
+    docdata: { b2b: [{ ctin: '07BICPL2786D1ZB', trdnm: 'DEEPALI ENGINEERING',
+      inv: [{ inum: no, dt, txval: 100000, igst: 18000, itcavl: 'Y' }] }] } } } });
+  const out = await page.evaluate(([files, bks]) => {
+    loadedFiles = files.map((f) => ({ name: f.name, src: srcOfJson(f.json, f.name),
+      rows: parseGstJson(f.json, srcOfJson(f.json, f.name), f.name) }));
+    rebuild2b();
+    booksRows = bks;
+    lastBooksMeta = { from: '2025-04-01', to: '2026-03-31' };
+    ['hIGST', 'hINTRA', 'hNIL'].forEach((id) => { const e = document.getElementById(id); if (e) e.checked = true; });
+    reconcile();
+    return { next: nextPeriod2b.map((r) => r.invNo), recs: report.recs.map((r) => r.docNo) };
+  }, [[mk('042026', '20-03-2026', 'LATE/1'), mk('042026', '15-04-2026', 'NEXT/1')],
+      [{ _ownGstin: '06AAGCE4293A1ZX', date: '2026-03-20', voucherNo: 'LATE/1', supplierInvNo: 'LATE/1',
+         ref: '', party: 'DEEPALI ENGINEERING', gstin: '07BICPL2786D1ZB', taxable: 100000,
+         igst: 18000, cgst: 0, sgst: 0, rcmIgst: 0, rcmCgst: 0, rcmSgst: 0 }]]);
+  assert(out.next.join() === 'NEXT/1',
+    `only the April 2026 invoice belongs to next period, got [${out.next.join()}]`);
+  assert(out.recs.join() === 'LATE/1',
+    `and the March invoice still reconciles, got [${out.recs.join()}]`);
 });
 
 console.log('\n── the Excel layout ──');
