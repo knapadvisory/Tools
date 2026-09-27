@@ -368,12 +368,13 @@ note *increases* the tax rather than reducing it (rule 5).
 ### The workbook ties itself out now
 
 Everything above was done by hand. The Excel carries a **Tie-out** sheet that
-does it every run: enter the portal's Total for "ITC auto-drafted in GSTR-2B"
-once per registration in step 4, and the sheet walks from that figure to this
-tool's, line by line —
+does it every run: give the portal's "ITC auto-drafted in GSTR-2B" once per
+registration in step 4 — typed, or read straight out of the portal's *Tax
+liability and ITC comparison* .xlsx — and the sheet walks from that figure to
+this tool's, line by line —
 
 ```
-portal: ITC auto-drafted in GSTR-2B                     (entered)
+portal: ITC auto-drafted in GSTR-2B                     (given)
   add reverse charge                        (portal reports it separately)
   add ITC blocked in 2B, itcavl = N         (portal excludes it)
   add invoices filed late, in a return after the year
@@ -382,6 +383,33 @@ portal: ITC auto-drafted in GSTR-2B                     (entered)
   this tool
   difference — nil, or a question
 ```
+
+### Reading the report instead of retyping it
+
+The figure can be read out of the portal's own workbook. Nothing in that parser
+is addressed by cell: the GSTIN is found by its own pattern wherever it sits,
+the block by its heading *"ITC auto-drafted in GSTR-2B during the month"*, and
+IGST / CGST / SGST by the sub-headings underneath it. A report whose columns
+shift by one and is still read without complaint would be worse than one that
+fails loudly, so a workbook missing either the heading or those three
+sub-headings is refused rather than guessed at.
+
+**It sums the months, never the Total row** — unless no month matches, in which
+case it says so. The report covers a whole financial year; a run need not. The
+Odisha registration was opened in November, so only four of its twelve rows are
+taken; the April and May 2026 returns this tool reads are not in a FY 2025-26
+report at all, and are reported as falling outside it rather than silently
+dropped. Read this way against the client's 34 returns and their three real
+reports, the difference is still **0.00 on every head of every registration**.
+
+### 2A is not in the portal's 2B column
+
+A document that reached GSTR-2A and never reached 2B cannot stand on this tool's
+side of the bridge, because the portal's column is *auto-drafted in GSTR-2B*.
+Load a year of 2A alongside the 2B and, before this, the difference would have
+been the whole of the 2A-only credit. It is now a line of its own —
+`less found only in GSTR-2A, never in 2B` — which is also a finding in its own
+right: the supplier filed, but the document never became claimable.
 
 Against the client's 34 returns and their three portal reports the difference is
 **0.00 on every head of every registration**. The last line of that bridge was

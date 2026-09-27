@@ -1076,6 +1076,121 @@ await t('loose JSON still works exactly as before', async () => {
     `and keep its own name, got ${got[0].name}`);
 });
 
+/* ---------------------------------------------------------------------------
+ * The portal's own comparison report, read rather than retyped.
+ *
+ * Built and read back through ExcelJS in the page, so what is parsed is a real
+ * .xlsx and not a stand-in. The block is found by its heading and the heads by
+ * the sub-headings under it — never by cell address — so these tests move the
+ * whole block sideways and expect the same answer.
+ * ------------------------------------------------------------------------- */
+console.log('\n── reading the portal’s comparison report ──');
+const readPortal = (o, twoB) => page.evaluate(async ([o, twoB]) => {
+  loadedFiles = (twoB || []).map((f) => {
+    const rows = parseGstJson(f.json, '2B', f.name);
+    return { name: f.name, rows, count: rows.length, src: '2B' };
+  });
+  rebuild2b();
+  const wb = new ExcelJS.Workbook();
+  const s1 = wb.addWorksheet('Tax Liability Summary');
+  s1.getRow(4).getCell(1).value = 'GSTIN:   ' + (o.gstin || '06AAGCE4293A1ZX');
+  s1.getRow(5).getCell(4).value = 'Financial Year:   2025-26';
+  const s2 = wb.addWorksheet(o.sheet || 'ITC (Other than IMPG)');
+  const c = o.col || 6;
+  s2.getRow(5).getCell(2).value = 'ITC claimed in GSTR-3B excluding ITC Reversal [Table 4A(4)+4A(5)-4D(1)]';
+  if (!o.noBlock) s2.getRow(5).getCell(c).value = 'ITC auto-drafted in GSTR-2B during the month '
+    + '[as per table B2B, B2BA, CDNR, CDNRA, ECO, ECOA] (Excluding RCM supplies), ISD, ISDA';
+  ['IGST', 'CGST', 'SGST/UTGST', 'CESS'].forEach((h, i) => {
+    s2.getRow(6).getCell(2 + i).value = h;
+    if (!o.noHeads) s2.getRow(6).getCell(c + i).value = h;
+  });
+  let r = 7;
+  (o.months || []).forEach((m) => {
+    const row = s2.getRow(r++);
+    row.getCell(1).value = m.label;
+    row.getCell(c).value = m.igst; row.getCell(c + 1).value = m.cgst; row.getCell(c + 2).value = m.sgst;
+  });
+  if (o.total) {
+    const row = s2.getRow(r++);
+    row.getCell(1).value = 'Total';
+    row.getCell(c).value = o.total.igst; row.getCell(c + 1).value = o.total.cgst; row.getCell(c + 2).value = o.total.sgst;
+  }
+  const buf = await wb.xlsx.writeBuffer();
+  portalFig = {};
+  try {
+    const res = applyPortalComparison(await parsePortalComparison(buf));
+    return { ok: true, res, fig: portalFig[res.gstin] };
+  } catch (e) { return { ok: false, error: e.message }; }
+}, [o, twoB]);
+
+/* Two returns loaded out of a twelve-month report. */
+const twoB2 = (p, no, cgst) => ({ name: '2B_' + p + '.json', json: { data: {
+  gstin: '06AAGCE4293A1ZX', rtnprd: p, docdata: { b2b: [{ ctin: '07BICPL2786D1ZB', trdnm: 'D',
+    inv: [{ inum: no, dt: '10-' + p.slice(0, 2) + '-' + p.slice(2), txval: 1000, cgst, sgst: cgst, itcavl: 'Y' }] }] } } } });
+const twelve = () => ['042025', '052025', '062025', '072025', '082025', '092025',
+  '102025', '112025', '122025', '012026', '022026', '032026'].map((p, i) => ({
+  label: ['Apr-25', 'May-25', 'Jun-25', 'Jul-25', 'Aug-25', 'Sep-25', 'Oct-25', 'Nov-25',
+    'Dec-25', 'Jan-26', 'Feb-26', 'Mar-26'][i], igst: (i + 1) * 100, cgst: (i + 1) * 10, sgst: (i + 1) * 10 }));
+
+await t('it sums only the months whose returns are actually loaded', async () => {
+  const out = await readPortal({ months: twelve(), total: { igst: 7800, cgst: 780, sgst: 780 } },
+    [twoB2('042025', 'A/1', 90), twoB2('062025', 'A/2', 90)]);
+  assert(out.ok, `it must read: ${out.error}`);
+  assert(out.res.gstin === '06AAGCE4293A1ZX', `the GSTIN comes from the file, got ${out.res.gstin}`);
+  assert(out.fig.igst === 400 && out.fig.cgst === 40,
+    `April 100 + June 300 = 400 IGST, got ${JSON.stringify(out.fig)} — the Total row must NOT be used`);
+  assert(out.res.months.length === 2, `two months used, got ${out.res.months}`);
+});
+await t('a registration opened mid-year takes only its own months', async () => {
+  const out = await readPortal({ months: twelve() }, [twoB2('112025', 'A/1', 90), twoB2('122025', 'A/2', 90)]);
+  assert(out.fig.igst === 800 + 900, `Nov 800 + Dec 900, got ${out.fig.igst}`);
+});
+await t('the April and May returns after the year are reported as outside it', async () => {
+  const out = await readPortal({ months: twelve() }, [twoB2('032026', 'A/1', 90), twoB2('042026', 'A/2', 90)]);
+  assert(out.res.outside.join() === '042026', `the next year's return is outside, got ${out.res.outside}`);
+  assert(out.fig.igst === 1200, `and contributes nothing to the portal figure, got ${out.fig.igst}`);
+});
+await t('the block is found by its heading, not by its column', async () => {
+  const shifted = await readPortal({ col: 14, months: twelve() }, [twoB2('042025', 'A/1', 90)]);
+  assert(shifted.ok && shifted.fig.igst === 100,
+    `a report whose columns moved must still read: ${shifted.error || JSON.stringify(shifted.fig)}`);
+});
+await t('with no month matching, it falls back to the Total row', async () => {
+  const out = await readPortal({ months: twelve(), total: { igst: 7800, cgst: 780, sgst: 780 } },
+    [twoB2('042027', 'A/1', 90)]);
+  assert(out.ok && out.fig.igst === 7800 && /Total/.test(out.res.basis),
+    `nothing matched, so the Total stands in: ${JSON.stringify(out)}`);
+});
+await t('a workbook that is not the comparison report is refused, not guessed at', async () => {
+  const out = await readPortal({ noBlock: true, months: twelve() }, [twoB2('042025', 'A/1', 90)]);
+  assert(!out.ok && /auto-drafted/.test(out.error), `it must say what it looked for, got ${JSON.stringify(out)}`);
+});
+await t('the heading without its IGST/CGST/SGST columns is refused too', async () => {
+  const out = await readPortal({ noHeads: true, months: twelve() }, [twoB2('042025', 'A/1', 90)]);
+  assert(!out.ok && /IGST/.test(out.error), `a half-read report is worse than none: ${JSON.stringify(out)}`);
+});
+await t('a document found only in 2A is kept out of the 2B side of the bridge', async () => {
+  const out = await page.evaluate(() => {
+    loadedFiles = [
+      { name: '2b.json', src: '2B', rows: parseGstJson({ data: { gstin: '06AAGCE4293A1ZX', rtnprd: '112025',
+        docdata: { b2b: [{ ctin: '07BICPL2786D1ZB', trdnm: 'D',
+          inv: [{ inum: 'IN/1', dt: '05-11-2025', txval: 1000, igst: 180, itcavl: 'Y' }] }] } } }, '2B', '2b.json') },
+      { name: '2a.json', src: '2A', rows: parseGstJson({ gstin: '06AAGCE4293A1ZX', fp: '112025',
+        b2b: [{ ctin: '07BICPL2786D1ZB', cfs: 'Y', inv: [
+          { inum: 'IN/1', idt: '05-11-2025', itms: [{ itm_det: { txval: 1000, iamt: 180 } }] },
+          { inum: 'IN/2', idt: '06-11-2025', itms: [{ itm_det: { txval: 2000, iamt: 360 } }] }] }] }, '2A', '2a.json') },
+    ];
+    rebuild2b(); booksRows = []; lastBooksMeta = { from: '2025-04-01', to: '2026-03-31' };
+    ['hIGST', 'hINTRA', 'hNIL'].forEach((id) => { const e = document.getElementById(id); if (e) e.checked = true; });
+    reconcile();
+    const o = tieOutRows().byRegn['06AAGCE4293A1ZX'];
+    return { all: o.all.igst, only2a: o.only2a.igst, live: o.live.igst };
+  });
+  assert(out.all === 540, `all three documents are parsed, got ${out.all}`);
+  assert(out.only2a === 360, `the 2A-only invoice is identified, got ${out.only2a}`);
+  assert(out.live === 180, `and excluded — the portal's 2B column never held it, got ${out.live}`);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (errs.length) { console.log('\nBROWSER ERRORS:'); errs.slice(0, 5).forEach((e) => console.log('  ' + e)); }
 await browser.close(); srv.close();
