@@ -649,12 +649,13 @@ function markSuperseded(){
   var amended={};
   twoBRows.forEach(function(r){
     if(!r.isAmend)return;
-    amended[normGstin(r.gstin)+'|'+normInv(r.origNo||r.invNo)+'|'+(r.isCN?'C':'I')]=1;
+    amended[normGstin(r.gstin)+'|'+normInv(r.origNo||r.invNo)+'|'+(r.isCN?'C':'I')]={regn:r.regn||'',period:r.period||''};
   });
   mergeStats.superseded=0;
   twoBRows.forEach(function(r){
-    r._superseded=!r.isAmend&&!!amended[normGstin(r.gstin)+'|'+normInv(r.invNo)+'|'+(r.isCN?'C':'I')];
-    if(r._superseded)mergeStats.superseded++;
+    var a=r.isAmend?null:amended[normGstin(r.gstin)+'|'+normInv(r.invNo)+'|'+(r.isCN?'C':'I')];
+    r._superseded=!!a;r._amendedTo=a||null;
+    if(a)mergeStats.superseded++;
   });
 }
 function setFileSrc(idx,src){var f=loadedFiles[idx];if(!f)return;f.src=src;(f.rows||[]).forEach(function(r){r.src=src;});renderFiles();}
@@ -1206,9 +1207,23 @@ function reconcile(){
   });
   superseded2b.forEach(function(b){
     var rec=buildRec(b,null);
+    var to=b._amendedTo||{};
+    /* The commonest amendment in a multi-GSTIN group is not a change of figures
+       at all: the supplier reported the invoice against the WRONG registration
+       of yours and moved it. Seen in the real files — SS Associates reported
+       23/2025-26 against 06 in April and amended it to 37 in May. Saying
+       "restated" there hides the only fact that matters, which is where the
+       credit now belongs (and it explains why the books, which had it under 37,
+       were right and the original 2B was not). */
+    var moved=!!(to.regn&&b.regn&&normGstin(to.regn)!==normGstin(b.regn));
     rec._cat='superseded';
-    rec.remarks='superseded by a later amendment';
-    rec.note='The supplier restated this document in a later return (2B’s amendment table). The amended version is the live one and is reconciled above; this original is shown for the trail only and is NOT counted in the 2B total — counting both would claim the same invoice twice.';
+    rec.remarks=moved?'superseded — the supplier moved it to '+to.regn:'superseded by a later amendment';
+    rec.note=moved
+      ? 'The supplier first reported this document against '+b.regn+' and then AMENDED it to '+to.regn
+        +(to.period?' in the '+fmtYM(ymNumOfPeriod(to.period))+' return':'')
+        +'. The amended version is the live one and is reconciled above, so the credit belongs to '+to.regn
+        +'. This original is shown for the trail only and is NOT counted in the 2B total. If your books carry it under '+to.regn+', they are right.'
+      : 'The supplier restated this document in a later return (2B’s amendment table). The amended version is the live one and is reconciled above; this original is shown for the trail only and is NOT counted in the 2B total — counting both would claim the same invoice twice.';
     (b.isCN?cn:recs).push(rec);
   });
   // Latest 2B return period loaded — a books entry dated in or after it can't be

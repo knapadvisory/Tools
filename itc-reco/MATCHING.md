@@ -184,6 +184,15 @@ Every one of these was a bug that presented as a wall of false findings:
   Four documents in the CGST run were counted twice for ₹3,55,466.25 — and the
   portal's own tool did the same, so the two sheets agreed on a figure that was
   wrong in both. Agreement is not correctness.
+
+  In a multi-GSTIN group the commonest amendment is not a change of figures at
+  all: the supplier reported the invoice against the **wrong registration** of
+  yours and moved it. SS Associates reported 23/2025-26 and 38/2025-26 against
+  06 in the April 2B and amended both to 37 in May's. So the match is made on
+  supplier GSTIN + document number, deliberately ignoring which registration's
+  2B a row came from, and the remark names where the credit went. It also
+  resolves the wrong-registration flag raised on the original: the books, which
+  had it under 37, were right and the first 2B was not.
 - **TDS and round off.** Neither belongs in the taxable base. A voucher's TDS
   deduction was inflating it; the giveaway was that 18% of the base without
   TDS equalled the IGST exactly.
@@ -229,10 +238,23 @@ year does not end there — and any month missing from the middle of the loaded
 range is named. The periods loaded are printed on the report itself, because a
 month nobody noticed was absent looks exactly like a year of clean books.
 
-The remaining three documents (Kaushik 110, 121, 125 — ₹2,86,644.96) are in our
-2B and in neither the portal download nor the other tool's sheet. Two of them
-carry the same amounts as invoices 127 and 130, which both sheets do have. That
-needs the source JSON to settle and is **open**.
+The remaining three documents (Kaushik Enterprises 110, 121, 125 —
+₹2,86,644.96) were settled against the source file: the **May 2025 2B of
+06AAGCE4293A1ZX carries eight invoices** from `06EOMPK3595A1ZU` — 110, 111,
+117, 118, 121, 122, 125, 126. Our sheet has all eight; the portal's 2A-vs-2B
+download has five. **The tool is right and that download is short of the
+return it claims to summarise.** The three are not duplicates of 127 and 130
+either: this vendor bills ~₹10.5 lakh repeatedly, so equal values recur.
+
+Each of the four real files also parses to the total GSTN itself states inside
+it, which is the check worth running on any new dialect:
+
+| file | our parse | the file's own `itcsumm` |
+|---|---|---|
+| 06 Apr-25 | 9,96,140.25 | 9,96,145.66 less the 5.41 credit note ✓ |
+| 06 May-25 | 17,12,032.97 | 17,10,970.47 + 1,062.50 (rev. charge) ✓ |
+| 37 Apr-25 | 6,74,893.80 | 6,74,893.80 ✓ |
+| 37 May-25 | 94,317.75 | 54,292.50 (b2b) + 40,025.25 (b2ba) ✓ |
 
 ## 12. Recall gaps are not all matcher gaps
 
@@ -274,11 +296,6 @@ Always separate the two before concluding the matching is weak.
 - **Nothing ages the unmatched.** A document unbooked for five months is
   reported the same as one unbooked for five days, and the Sec 16(4) cut-off
   (30 Nov after the FY) is mentioned in notes but not computed.
-- **Three documents unexplained.** Kaushik Enterprises 110, 121 and 125
-  (₹2,86,644.96 of CGST) are in our 2B and in neither the portal's 2A/2B
-  download nor the other tool's sheet; two share amounts with invoices 127 and
-  130, which both of those do have. Needs the May and June 2025 2B JSON to
-  settle.
 - **Nothing reconciles the total to GSTR-3B.** The tool ties 2B to the books;
   it does not tie either to the ITC actually claimed in 3B, which is the number
   a notice is raised on.

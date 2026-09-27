@@ -445,6 +445,28 @@ await t('the original is not counted twice when a later 2B amends it', async () 
   assert(/amended/.test(live[0].remarks), 'the live one is the amendment: ' + live[0].remarks);
   assert(/not counted/i.test(dead[0].note), 'and the original says it is not counted: ' + dead[0].note);
 });
+await t('an amendment that moves the invoice to another registration says so', async () => {
+  /* The real SS Associates 23/2025-26 and 38/2025-26: reported against 06 in the
+     April 2B, amended to 37 in the May 2B. Not a change of figures at all — the
+     supplier had the wrong registration of the group's, and the books (which
+     carried it under 37) were right. */
+  const out = await runJson([
+    { name: '2B_06_042025.json', json: { data: { gstin: '06AAGCE4293A1ZX', rtnprd: '042025', docdata: {
+        b2b: [{ ctin: '37AEAFS6902D1Z8', trdnm: 'SS ASSOCIATES',
+          inv: [{ inum: '23/2025-26', dt: '10-04-2025', val: 522120.5, txval: 442475,
+                  cgst: 39822.75, sgst: 39822.75, itcavl: 'Y' }] }] } } } },
+    { name: '2B_37_052025.json', json: { data: { gstin: '37AAGCE4293A1ZS', rtnprd: '052025', docdata: {
+        b2ba: [{ ctin: '37AEAFS6902D1Z8', trdnm: 'SS ASSOCIATES',
+          inv: [{ inum: '23/2025-26', oinum: '23/2025-26', dt: '10-04-2025', val: 522120.5,
+                  txval: 442475, cgst: 39822.75, sgst: 39822.75, itcavl: 'Y' }] }] } } } },
+  ], []);
+  const dead = out.recs.find((r) => r.cat === 'superseded');
+  assert(dead, 'the 06 original must be superseded: ' + out.recs.map((r) => r.cat).join(','));
+  assert(/moved it to 37AAGCE4293A1ZS/.test(dead.remarks),
+    'the remark must name where it went: ' + dead.remarks);
+  assert(/credit belongs to 37AAGCE4293A1ZS/.test(dead.note) && /they are right/.test(dead.note),
+    'and the note must say the books under 37 are right: ' + dead.note);
+});
 await t('a superseded original cannot take the voucher the live one needs', async () => {
   const out = await runJson([
     { name: '2B_062025.json', json: { data: { gstin: '06AAGCE4293A1ZX', rtnprd: '062025', docdata: {
