@@ -512,6 +512,79 @@ await t('no gap, no warning', async () => {
   assert(html === '', 'nothing is missing, so nothing should be said: ' + html.slice(0, 120));
 });
 
+await t('one registration having every month says nothing about another', async () => {
+  /* The real set: Haryana and Andhra had all twelve returns, Odisha had four.
+     Pooled, every month looked covered and no gap was reported — while eight of
+     Odisha's months were simply absent. */
+  const mk = (gstin, p, dt, no) => ({ name: '2B_' + gstin.slice(0, 2) + '_' + p + '.json',
+    json: { data: { gstin, rtnprd: p, docdata: { b2b: [{ ctin: '07BICPL2786D1ZB', trdnm: 'DEEPALI ENGINEERING',
+      inv: [{ inum: no, dt, txval: 100000, igst: 18000, itcavl: 'Y' }] }] } } } });
+  await runJson([
+    mk('06AAGCE4293A1ZX', '042025', '10-04-2025', 'H/1'),
+    mk('06AAGCE4293A1ZX', '052025', '10-05-2025', 'H/2'),
+    mk('06AAGCE4293A1ZX', '062025', '10-06-2025', 'H/3'),
+    mk('21AAGCE4293A1Z5', '042025', '10-04-2025', 'O/1'),
+    mk('21AAGCE4293A1Z5', '062025', '10-06-2025', 'O/3'),   // May missing for Odisha only
+  ], []);
+  const pooled = await page.evaluate(() => periods2b().gaps);
+  assert(pooled.length === 0, 'pooled, nothing looks missing — that is the trap');
+  const html = await page.evaluate(() => periodGapWarning());
+  assert(/21AAGCE4293A1Z5/.test(html), 'the warning must name the registration: ' + html.slice(0, 300));
+  assert(/May 2025/.test(html), 'and the month it is missing: ' + html.slice(0, 300));
+  assert(!/06AAGCE4293A1ZX/.test(html), 'and must not accuse the complete one: ' + html.slice(0, 300));
+});
+
+console.log('\n── a file that does not add up to its own stated total ──');
+await t('a 2B file is checked against the itcsumm inside it', async () => {
+  const j = { data: { gstin: '06AAGCE4293A1ZX', rtnprd: '042025',
+    itcsumm: { itcavl: { nonrevsup: { b2b: { txval: 100000, igst: 18000, cgst: 0, sgst: 0, cess: 0 } } } },
+    docdata: { b2b: [{ ctin: '07BICPL2786D1ZB', trdnm: 'DEEPALI ENGINEERING',
+      inv: [{ inum: 'X/1', dt: '10-04-2025', txval: 100000, igst: 18000, itcavl: 'Y' }] }] } } };
+  const ok = await page.evaluate((j_) => fileCheck(j_, parseGstJson(j_, '2B', 'x.json')), j);
+  assert(ok.state === 'ok', `it ties, so expected ok, got ${ok.state} (${JSON.stringify(ok.d)})`);
+  // now hide half the return from the documents but leave the stated total alone
+  const j2 = JSON.parse(JSON.stringify(j));
+  j2.data.itcsumm.itcavl.nonrevsup.b2b.igst = 36000;
+  const off = await page.evaluate((j_) => fileCheck(j_, parseGstJson(j_, '2B', 'x.json')), j2);
+  assert(off.state === 'off' && Math.abs(off.worst + 18000) < 0.01,
+    `a file that does not add up must say so, got ${off.state} ${JSON.stringify(off.d)}`);
+});
+await t('an amendment line is a differential and is left out of the check', async () => {
+  /* June 2025, for real: the supplier cut three invoices from ₹2,86,644.96 of
+     CGST to ₹66,990.52, and itcsumm's b2ba line reads negative. Comparing gross
+     documents against a differential would fail every amended return. */
+  const j = { data: { gstin: '06AAGCE4293A1ZX', rtnprd: '062025',
+    itcsumm: { itcavl: { nonrevsup: { b2b: { cgst: 540462.92, igst: 0, sgst: 540462.92, cess: 0 },
+                                      b2ba: { cgst: -220654.44, igst: 0, sgst: -220654.44, cess: 0 } } } },
+    docdata: {
+      b2b: [{ ctin: '06EOMPK3595A1ZU', trdnm: 'M/S KAUSHIK ENTERPRISES',
+        inv: [{ inum: '127', dt: '10-06-2025', txval: 6005143.55, cgst: 540462.92, sgst: 540462.92, itcavl: 'Y' }] }],
+      b2ba: [{ ctin: '06EOMPK3595A1ZU', trdnm: 'M/S KAUSHIK ENTERPRISES',
+        inv: [{ inum: '30/05/2025', oinum: '125', dt: '30-05-2025', txval: 733220,
+                cgst: 65989.80, sgst: 65989.80, itcavl: 'Y' }] }] } } };
+  const c = await page.evaluate((j_) => fileCheck(j_, parseGstJson(j_, '2B', 'x.json')), j);
+  assert(c.state === 'ok', `the non-amendment documents tie; expected ok, got ${c.state} ${JSON.stringify(c.d)}`);
+});
+await t('an amendment that renumbers the document still supersedes the original', async () => {
+  // 110 -> "26/05/2025" at ₹4, 121 -> "29/05/2025" at ₹4, 125 -> "30/05/2025"
+  const out = await runJson([
+    { name: '2B_052025.json', json: { data: { gstin: '06AAGCE4293A1ZX', rtnprd: '052025', docdata: {
+        b2b: [{ ctin: '06EOMPK3595A1ZU', trdnm: 'M/S KAUSHIK ENTERPRISES',
+          inv: [{ inum: '125', dt: '30-05-2025', txval: 1056440, cgst: 95079.60, sgst: 95079.60, itcavl: 'Y' }] }] } } } },
+    { name: '2B_062025.json', json: { data: { gstin: '06AAGCE4293A1ZX', rtnprd: '062025', docdata: {
+        b2ba: [{ ctin: '06EOMPK3595A1ZU', trdnm: 'M/S KAUSHIK ENTERPRISES',
+          inv: [{ inum: '30/05/2025', oinum: '125', dt: '30-05-2025', txval: 733220,
+                  cgst: 65989.80, sgst: 65989.80, itcavl: 'Y' }] }] } } } },
+  ], []);
+  const dead = out.recs.find((r) => r.cat === 'superseded');
+  assert(dead && dead.doc === '125',
+    'the original 125 must be superseded by the renumbered amendment: '
+      + out.recs.map((r) => r.doc + ':' + r.cat).join(', '));
+  const live = out.recs.find((r) => r.cat !== 'superseded');
+  assert(Math.abs(live.gst2b - 131979.6) < 0.01,
+    `and only the amended value counts, got ${live.gst2b}`);
+});
+
 console.log('\n── the Excel layout ──');
 await t('every formula in the export points at the column it means', async () => {
   /* The live formulas address columns by letter. Inserting "Source" shifted

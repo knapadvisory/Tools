@@ -231,6 +231,25 @@ our reconciled sheet                          3,13,31,436.10   ✓
 and the notes the same way: portal ₹4,60,132.52 = our ₹7,210.67 + two Yankit
 notes worth ₹4,52,921.85 sitting in the April 2026 2B.
 
+### Make the file prove itself
+
+Every 2B file states its own ITC totals in `itcsumm`. That is a check the tool
+runs on itself at load: the documents parsed must add up to what GSTN says the
+return holds, and the file chip shows `= ✓` or `≠ <amount>`. Across the client's
+28 real returns, 27 tie **to the paisa**; the 28th carries no `itcsumm` at all
+and is reported as unchecked rather than assumed good.
+
+This is the cheapest guard in the tool and it would have caught the credit-note
+dialect bug the moment a file was loaded. Run it against a new dialect before
+trusting anything else.
+
+One subtlety it has to respect: **the `b2ba` / `cdnra` lines in `itcsumm` are
+differentials** (amended value less the original), not gross. June 2025 reads
+`-2,20,654.44` because of the three Kaushik amendments above. So the comparison
+is made on the non-amendment documents only, where it ties exactly.
+
+### Coverage is per registration
+
 **A financial year's GSTR-2B is not twelve returns.** A supplier who files his
 March GSTR-1 after the 2B cut-off appears in April's 2B; a quarterly filer in
 May's. So when the last 2B loaded is a March, the report says outright that the
@@ -238,23 +257,37 @@ year does not end there — and any month missing from the middle of the loaded
 range is named. The periods loaded are printed on the report itself, because a
 month nobody noticed was absent looks exactly like a year of clean books.
 
+And the count is taken **per registration**. In the client's 28 files, Haryana
+and Andhra had all twelve returns and Odisha had four. Pooled, every month of
+the year was covered and the check reported no gap at all — while Odisha's
+February was missing and every Odisha purchase in it would have read "booked,
+but not in 2B". One registration having every month says nothing about another.
+
+Gaps are reported only *inside* each registration's own loaded range: Odisha
+starting at November may mean the registration began then, and the tool does not
+guess. That the range starts late is visible on the report; whether it should
+have is the preparer's call.
+
 The remaining three documents (Kaushik Enterprises 110, 121, 125 —
-₹2,86,644.96) were settled against the source file: the **May 2025 2B of
-06AAGCE4293A1ZX carries eight invoices** from `06EOMPK3595A1ZU` — 110, 111,
-117, 118, 121, 122, 125, 126. Our sheet has all eight; the portal's 2A-vs-2B
-download has five. **The tool is right and that download is short of the
-return it claims to summarise.** The three are not duplicates of 127 and 130
-either: this vendor bills ~₹10.5 lakh repeatedly, so equal values recur.
+₹2,86,644.96) were settled against the source files, and the answer reversed
+twice. On the May 2025 file alone they look like ordinary invoices the portal's
+download had simply missed. With the **June** file in hand they are amendments:
 
-Each of the four real files also parses to the total GSTN itself states inside
-it, which is the check worth running on any new dialect:
+```
+b2ba  inum "26/05/2025"  oinum 110   CGST 95,054.40 → 0.36
+b2ba  inum "29/05/2025"  oinum 121   CGST 96,510.96 → 0.36
+b2ba  inum "30/05/2025"  oinum 125   CGST 95,079.60 → 65,989.80
+```
 
-| file | our parse | the file's own `itcsumm` |
-|---|---|---|
-| 06 Apr-25 | 9,96,140.25 | 9,96,145.66 less the 5.41 credit note ✓ |
-| 06 May-25 | 17,12,032.97 | 17,10,970.47 + 1,062.50 (rev. charge) ✓ |
-| 37 Apr-25 | 6,74,893.80 | 6,74,893.80 ✓ |
-| 37 May-25 | 94,317.75 | 54,292.50 (b2b) + 40,025.25 (b2ba) ✓ |
+The supplier cut all three to almost nothing **and renumbered them**, and the
+June return's own `itcsumm` carries the negative differential to prove it. So
+the portal download was right to show only the live positions, our old sheet was
+overstated by ₹2,86,644.96, and the ITC the books claim on those three is no
+longer supported by 2B — a material finding the old sheet buried. It is caught
+now only because `origNo` is parsed: the amendment's own number matches nothing.
+
+**One month is not enough evidence about any document.** A document can only be
+read against the whole year, because the return that overturns it comes later.
 
 ## 12. Recall gaps are not all matcher gaps
 

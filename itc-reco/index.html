@@ -589,13 +589,14 @@ function handleFiles(files){
     var file=arr[i++],fr=new FileReader();
     fr.onload=function(){
       try{
-        var rows,src='2B';
+        var rows,src='2B',chk={state:'none'};
         if(/\.json$/i.test(file.name)){
           var j=JSON.parse(fr.result);
           src=srcOfJson(j,file.name);
           rows=parseGstJson(j,src,file.name);
+          chk=fileCheck(j,rows);
         }else{ rows=parseCsv(fr.result); src=(rows[0]&&rows[0].src)||'2B'; }
-        loadedFiles.push({name:file.name,count:rows.length,rows:rows,src:src});
+        loadedFiles.push({name:file.name,count:rows.length,rows:rows,src:src,check:chk});
       }catch(err){loadedFiles.push({name:file.name,count:0,rows:[],error:err.message});}
       next();
     };
@@ -667,7 +668,11 @@ function renderFiles(){
     // The source decides how the document is treated, so it is shown on the
     // chip and can be corrected in one click — never silently assumed.
     var srcChip=f.error?'':' <a href="#" onclick="setFileSrc('+idx+',\''+other+'\');return false" title="Read as GSTR-'+other+' instead" class="k" style="text-decoration:none;border-bottom:1px dotted currentColor">'+src+'</a>';
-    return '<span class="pchip">'+(f.error?'⚠ ':'✓ ')+esc(f.name)+srcChip+' <span class="k">'+(f.error?'error':(f.count+' inv'))+'</span> <a href="#" onclick="removeFile('+idx+');return false" style="margin-left:5px;color:var(--bad)">✕</a></span>';}).join('');
+    // Did the documents we read add up to what the file itself says it holds?
+    var ck=f.check||{state:'none'},tick='';
+    if(ck.state==='ok')tick=' <span class="k" style="color:var(--ok)" title="The documents parsed add up to the totals GSTN states inside this file">= ✓</span>';
+    else if(ck.state==='off')tick=' <span class="k" style="color:var(--bad)" title="Our total differs from the total stated inside this file by '+inr(ck.worst)+' — something in it is not being read">≠ '+inr(ck.worst)+'</span>';
+    return '<span class="pchip">'+(f.error?'⚠ ':'✓ ')+esc(f.name)+srcChip+tick+' <span class="k">'+(f.error?'error':(f.count+' inv'))+'</span> <a href="#" onclick="removeFile('+idx+');return false" style="margin-left:5px;color:var(--bad)">✕</a></span>';}).join('');
   var tot=twoBRows.reduce(function(a,r){return a+r.igst+r.cgst+r.sgst;},0);
   if(loadedFiles.length){
     $('drop').classList.add('has');
@@ -679,6 +684,11 @@ function renderFiles(){
       bits.push('<b>These are 2A files only.</b> ITC is claimable through 2B — load the 2B months as well, or every document will read “in 2A only”.');
     }
     if(mergeStats.dupDropped)bits.push(mergeStats.dupDropped+' duplicate document(s) within the same return were dropped (the same GSTIN and document number twice).');
+    if(mergeStats.superseded)bits.push(mergeStats.superseded+' document(s) were restated by a later amendment — the originals are shown but not counted.');
+    var off=loadedFiles.filter(function(f){return f.check&&f.check.state==='off';});
+    var unchecked=loadedFiles.filter(function(f){return f.check&&f.check.state==='none'&&!f.error;});
+    if(off.length)bits.push('<b style="color:var(--bad)">⚠ '+off.length+' file(s) do not add up to the totals stated inside them</b> ('+off.map(function(f){return esc(f.name)+' by '+inr(f.check.worst);}).join('; ')+'). Something in those returns is not being read — send the file before relying on the figures.');
+    if(unchecked.length)bits.push(unchecked.length+' file(s) carry no <code>itcsumm</code> block, so their totals could not be checked against the return itself.');
     setMsg('msg2b',bits.join(' '), twoBRows.length?'ok':'warn');
   }else{ $('drop').classList.remove('has'); $('drop').innerHTML=DROP_HTML; setMsg('msg2b','',''); }
   $('btnReco').disabled=twoBRows.length===0;
@@ -777,6 +787,52 @@ function srcOfJson(j,fileName){
   }
   if(/2a/i.test(String(fileName||''))&&!/2b/i.test(String(fileName||'')))return '2A';
   return '2B';
+}
+/* Every 2B file states its own ITC totals in `itcsumm`, split by whether the
+   credit is available, by supply type, and by table. That is a check the tool can
+   run on itself: if the documents we parsed do not add up to what GSTN says the
+   return contains, something is being missed — and saying nothing is how the
+   credit-note dialect bug survived (blank numbers, wrong sign, totals nobody
+   compared).
+
+   One subtlety, confirmed against the real files: the b2ba / cdnra lines in
+   itcsumm are DIFFERENTIALS (amended value less the original), not gross. In the
+   June 2025 return the supplier cut three invoices from ₹28.66 lakh of CGST to
+   ₹66,990.52 and that line reads -2,20,654.44. So the comparison is made on the
+   non-amendment documents only, where it ties to the paisa. */
+function statedTotals(j){
+  var s=(j&&j.data&&j.data.itcsumm)||null;
+  if(!s)return null;
+  var t={igst:0,cgst:0,sgst:0,cess:0},found=false;
+  Object.keys(s).forEach(function(avl){                 // itcavl / itcunavl
+    var g=s[avl]||{};
+    Object.keys(g).forEach(function(sup){                // nonrevsup / revsup / othersup / …
+      var o=g[sup]||{};
+      Object.keys(o).forEach(function(tbl){
+        if(!o[tbl]||typeof o[tbl]!=='object')return;
+        if(tbl!=='b2b'&&tbl!=='cdnr')return;             // amendment lines are differentials
+        found=true;
+        var sign=(tbl==='cdnr')?-1:1;
+        ['igst','cgst','sgst','cess'].forEach(function(h){t[h]=r2(t[h]+sign*(num(o[tbl][h])));});
+      });
+    });
+  });
+  return found?t:null;
+}
+/* Our own gross, over the documents that are not amendments — the same basis. */
+function parsedTotals(rows){
+  var t={igst:0,cgst:0,sgst:0,cess:0};
+  (rows||[]).forEach(function(r){
+    if(r.isAmend)return;
+    ['igst','cgst','sgst','cess'].forEach(function(h){t[h]=r2(t[h]+(+r[h]||0));});
+  });
+  return t;
+}
+function fileCheck(j,rows){
+  var st=statedTotals(j); if(!st)return {state:'none'};
+  var ours=parsedTotals(rows),d={},worst=0;
+  ['igst','cgst','sgst','cess'].forEach(function(h){d[h]=r2(ours[h]-st[h]);if(Math.abs(d[h])>Math.abs(worst))worst=d[h];});
+  return {state:Math.abs(worst)<=1?'ok':'off',d:d,worst:worst,stated:st,ours:ours};
 }
 function parseGstJson(j,src,fileName){
   var out=[];
@@ -1363,10 +1419,7 @@ function secOnly(title,recs,side){
 /* Which return periods the loaded files actually are, and any month missing from
    the middle of them. A total is only as complete as the files behind it, and a
    month nobody noticed was absent looks exactly like a year of clean books. */
-function periods2b(){
-  var set={};
-  twoBRows.concat(setAside2b,superseded2b).forEach(function(b){
-    var n=ymNumOfPeriod(b.period||periodOf(b.invDate));if(n)set[n]=1;});
+function gapsIn(set){
   var list=Object.keys(set).map(Number).sort(function(a,b){return a-b;});
   if(!list.length)return {list:[],gaps:[],text:''};
   var gaps=[],a=list[0],z=list[list.length-1];
@@ -1376,11 +1429,37 @@ function periods2b(){
   }
   return {list:list,gaps:gaps,text:fmtYM(a)+' → '+fmtYM(z)+' ('+list.length+' return'+(list.length===1?'':'s')+')'};
 }
+function periods2b(){
+  var set={};
+  twoBRows.concat(setAside2b,superseded2b).forEach(function(b){
+    var n=ymNumOfPeriod(b.period||periodOf(b.invDate));if(n)set[n]=1;});
+  return gapsIn(set);
+}
+/* Coverage has to be measured PER REGISTRATION, not over the files pooled.
+   In the real set, Haryana and Andhra had all twelve returns and Odisha had
+   four — and a pooled check saw every month covered and reported no gap at all,
+   while eight of Odisha's months were simply absent. Every Odisha purchase in
+   those months would have read "booked, but not in 2B". */
+function periodsByRegn(){
+  var by={};
+  twoBRows.concat(setAside2b,superseded2b).forEach(function(b){
+    var k=normGstin(b.regn)||'(unstated)';
+    var n=ymNumOfPeriod(b.period||periodOf(b.invDate));if(!n)return;
+    (by[k]||(by[k]={}))[n]=1;
+  });
+  return Object.keys(by).sort().map(function(k){var g=gapsIn(by[k]);g.regn=k;return g;});
+}
 function periodGapWarning(){
-  var p=periods2b(); if(!p.gaps.length)return '';
+  var all=periods2b(),per=periodsByRegn();
+  var bad=per.filter(function(p){return p.gaps.length;});
+  // With one registration the pooled view IS the per-registration view.
+  if(!bad.length&&!all.gaps.length)return '';
+  var rows=(bad.length?bad:[all]).map(function(p){
+    return '<li><b>'+esc(p.regn||'the files loaded')+'</b> — '+esc(p.text)+', missing <b>'+p.gaps.map(fmtYM).join(', ')+'</b></li>';}).join('');
   return '<div class="repsec"><div class="conn-banner off" style="margin:0"><span class="cdot"></span><div>'
-    +'<div class="ctitle">'+p.gaps.length+' return period(s) inside the range you loaded are missing</div>'
-    +'<div class="csub">The files cover '+esc(p.text)+', but nothing was loaded for <b>'+p.gaps.map(fmtYM).join(', ')+'</b>. Every document in those months will read “booked, but not in 2B”, and the 2B total below is short by their whole value. Load them and reconcile again.</div>'
+    +'<div class="ctitle">A return period is missing from the middle of what you loaded</div>'
+    +'<div class="csub">Coverage is counted per registration, because one registration having every month says nothing about another.<ul style="margin:6px 0 0 18px">'+rows+'</ul>'
+    +'Every document in those months will read “booked, but not in 2B”, and the 2B total below is short by their whole value. Load them and reconcile again.</div>'
     +'</div></div></div>';
 }
 function spilloverWarning(){
