@@ -59,6 +59,37 @@ years. The other **109 are numbers that genuinely differ by a digit or two** —
 `BB/17538` — matched on party and amount, and every one a real thing for a
 preparer to check.
 
+### The books number vouchers in their own series
+
+A supplier numbers his invoice; the books number the purchase in the COMPANY's
+own voucher series — 43, 27, 574, 1245. So a 2B invoice numbered 43 will sooner
+or later meet the buyer's own voucher 43, raised for an entirely different
+supplier, and an exact number match on its own will pair them. It did, on the
+first full run:
+
+| 2B | books |
+|---|---|
+| SANGEETHA ELECTRICALS, `582/2025-26` | SS Associates, voucher `582/2025-26` |
+| SRI BALAJI CONSTRUCTIONS, `43` | LAKSHMI AGENCIES, voucher `43` |
+| ANANDHA TIMBER DEPOT, `27` | MSB INDUSTRIES, voucher `27` |
+| OM STEEL & FABRICATION, `1245` | SREE MARUTI CHEMICALS, voucher `1245` |
+
+Different GSTIN, different name, reported as *booked with an amount difference*
+rather than as two unrelated documents — which also inflated the
+amount-mismatch findings with pure fiction.
+
+So: **an invoice number is evidence only while nothing contradicts it.** A
+supplier's GSTIN is his identity and his name is the next best thing; when
+either contradicts the pairing, the number has to be a coincidence unless the
+party *and* the money both say otherwise. GSTIN agreement outranks a name that
+merely reads differently — a trade name against a legal name is not a conflict.
+
+The rule is narrow on purpose. Of 4,680 paired rows in that run, 26 had a
+contradicted identity: **nine separated** (all four above among them) and
+**seventeen stayed matched** — Tata AIG, Sunderdas, Epack Durable — suppliers
+billing under a second GSTIN, or a GSTIN mistyped in Tally, where the name
+agrees and the tax ties to the paisa.
+
 ## 2. A short number is a number, but it is not evidence on its own
 
 Candidates under two characters used to be dropped, so Maa Kalyani's invoice

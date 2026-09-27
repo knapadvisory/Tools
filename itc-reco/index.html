@@ -1358,7 +1358,28 @@ function reconcile(){
          enough to be distinctive; "6" agreeing with "6" needs the party or the
          tax to agree as well, or two unrelated suppliers' sixth bills pair up. */
       var invAlone=im>=2&&ib.len>=2;
-      var accept=invAlone||(im>=1&&(gstNear||nameStrong))||(gstEq&&gstNear)||(nameStrong&&gstClose);
+      /* An invoice number is only evidence while nothing contradicts it.
+
+         The books do not number a purchase the way the supplier does — they
+         number it in the COMPANY's own voucher series, 43, 27, 574, 1245. So a
+         2B invoice numbered 43 will sooner or later meet the buyer's own
+         voucher 43, raised for an entirely different supplier, and an exact
+         number match on its own will pair them. It did: SANGEETHA ELECTRIC's
+         582/2025-26 was married to SS Associates' voucher 582/2025-26, SRI
+         BALAJI's 43 to LAKSHMAN AGENCIES' 43, ANANDHA TIMBER's 27 to MSS
+         INDUSTRIES' 27 — different GSTIN, different name, reported as booked
+         with an amount difference rather than as two unrelated documents.
+
+         A supplier's GSTIN is his identity; his name is the next best thing.
+         When either contradicts the pairing, the number has to be a
+         coincidence unless the party AND the money both say otherwise. GSTIN
+         agreement outranks a name that merely reads differently — a trade name
+         and a legal name are not a conflict. */
+      var gstinConflict=!!(g&&rg&&g!==rg);
+      var nameConflict=!gstEq&&!!(String(b.party||'').trim()&&String(r.party||'').trim()&&ns===0);
+      var accept=(gstinConflict||nameConflict)
+        ? ((nameStrong&&gstClose)||(gstEq&&gstClose))
+        : (invAlone||(im>=1&&(gstNear||nameStrong))||(gstEq&&gstNear)||(nameStrong&&gstClose));
       if(im<floor) return;              // this pass wants firmer evidence than that
       if(!accept)return;
       // Rank: SAME registration first (so a 06 invoice takes its 06 book, not an

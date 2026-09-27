@@ -616,6 +616,44 @@ await t('an amendment that renumbers the document still supersedes the original'
     `and only the amended value counts, got ${live.gst2b}`);
 });
 
+console.log('\n── the books number vouchers in their own series ──');
+await t('a shared number does not pair two different suppliers', async () => {
+  /* The real pair from the first full run: 2B says SANGEETHA ELECTRIC
+     37HKMPS3954L, document 582/2025-26; the books hold SS Associates
+     37AEAFS6902D1Z8, voucher 582/2025-26. Different GSTIN, different name,
+     nothing in common but a number the company assigned itself — and it was
+     reported as booked with an amount difference. */
+  const r = await label(doc({ invNo: '582/2025-26', party: 'SANGEETHA ELECTRICALS',
+                              gstin: '37HKMPS3954L1ZR', taxable: 52603, igst: 9468.54 }),
+                        book({ voucherNo: '582/2025-26', supplierInvNo: '582/2025-26', ref: '',
+                               party: 'SS ASSOCIATES', gstin: '37AEAFS6902D1Z8',
+                               taxable: 4905250, igst: 0, cgst: 441174.25, sgst: 441174.25 }));
+  assert(r.cat === 'only2b',
+    `two different suppliers must not be paired by a voucher number: got ${r.cat} (${r.remarks})`);
+});
+await t('nor when the books carry no GSTIN but the names share nothing', async () => {
+  const r = await label(doc({ invNo: '43', party: 'SRI BALAJI CONSTRUCTIONS',
+                              gstin: '37AXIPA7550E1ZK', taxable: 127522, igst: 6376.10 }),
+                        book({ voucherNo: '43', supplierInvNo: '43', ref: '',
+                               party: 'LAKSHMAN AGENCIES', gstin: '',
+                               taxable: 4500, igst: 810 }));
+  assert(r.cat === 'only2b', `expected unbooked, got ${r.cat} (${r.remarks})`);
+});
+await t('but one supplier under two names is still one supplier', async () => {
+  // same GSTIN, trade name against legal name — that is not a conflict
+  const r = await label(doc({ invNo: 'PIO/AP164/25-26', party: 'PIONEER ENGINEERING & CONTRACTS',
+                              gstin: '37AAZFP9780B1ZG', taxable: 1528324.2, igst: 275098.36 }),
+                        book({ voucherNo: 'PIO/AP164/25-26', supplierInvNo: 'PIO/AP164/25-26', ref: '',
+                               party: 'M/s VJR ENTERPRISE', gstin: '37AAZFP9780B1ZG',
+                               taxable: 1528324.2, igst: 275098.36 }));
+  assert(r.cat === 'matched', `the GSTIN settles it — expected booked, got ${r.cat} (${r.remarks})`);
+});
+await t('and a real amount mismatch under one GSTIN is still reported', async () => {
+  const r = await label(doc({ invNo: '2557', taxable: 74170, igst: 13350.60 }),
+                        book({ voucherNo: '2557', supplierInvNo: '2557', taxable: 74170, igst: 12666.60 }));
+  assert(r.cat === 'mismatch', `expected mismatch, got ${r.cat} (${r.remarks})`);
+});
+
 console.log('\n── invoice numbers restart every April ──');
 await t('three invoices numbered 003 from one supplier are three documents', async () => {
   /* The real trio, from Haryana's returns: 003 dated 15-03-2025 (FY24-25,
