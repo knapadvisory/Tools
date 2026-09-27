@@ -1000,6 +1000,82 @@ await t('a document that is both reverse charge and blocked is counted once', as
     `adding both back must not double-count: rcm ${out.rcm} + blocked ${out.blocked} vs ${out.live}`);
 });
 
+/* ---------------------------------------------------------------------------
+ * The portal's ZIP, dropped as downloaded. Nobody downloads loose JSON from
+ * GSTN — you get a ZIP per registration per month, and a year of three
+ * registrations was twenty-eight drags. These run the real drop path, not a
+ * helper: build a ZIP in the page, hand it to handleFiles, and check that what
+ * comes out is indistinguishable from the same files dropped one by one.
+ * ------------------------------------------------------------------------- */
+console.log('\n── the portal ZIP, dropped as downloaded ──');
+const dropZip = (entries, zipName) => page.evaluate(async ([entries, zipName]) => {
+  await ensureJszip();
+  const zip = new JSZip();
+  entries.forEach((e) => zip.file(e.path, e.text));
+  const blob = await zip.generateAsync({ type: 'blob' });
+  loadedFiles = [];
+  await handleFiles([new File([blob], zipName)]);
+  return loadedFiles.map((f) => ({ name: f.name, count: f.count, src: f.src, error: f.error }));
+}, [entries, zipName]);
+
+await t('a ZIP of 2B files is read as if each had been dropped on its own', async () => {
+  const got = await dropZip([
+    { path: 'returns_R2B_06AAGCE4293A1ZX_052025.json', text: JSON.stringify(j2b([{ no: 'A/1', txval: 1000, igst: 180 }])) },
+    { path: 'returns_R2B_06AAGCE4293A1ZX_042025.json', text: JSON.stringify(j2b([{ no: 'A/2', txval: 2000, igst: 360 }])) },
+  ], 'GSTR_2B.zip');
+  assert(got.length === 2, `both members must be read, got ${got.length}`);
+  assert(got.every((f) => !f.error && f.count === 1 && f.src === '2B'),
+    `each must parse as one 2B document: ${JSON.stringify(got)}`);
+  assert(/042025/.test(got[0].name) && /052025/.test(got[1].name),
+    `members must come out in name order so April precedes May, got ${got.map((f) => f.name)}`);
+  assert(got[0].name.indexOf('GSTR_2B.zip') === 0,
+    `a member must say which ZIP it came from, got ${got[0].name}`);
+});
+await t('a ZIP holding 2A and 2B together still tells them apart', async () => {
+  const got = await dropZip([
+    { path: 'a/2A_112025.json', text: JSON.stringify(j2a([{ no: 'B/1', txval: 1000, camt: 90, samt: 90 }])) },
+    { path: 'b/2B_112025.json', text: JSON.stringify(j2b([{ no: 'B/2', txval: 1000, cgst: 90, sgst: 90 }])) },
+  ], 'both.zip');
+  assert(got.length === 2, `nested folders must be walked, got ${got.length}`);
+  const by = {}; got.forEach((f) => { by[f.src] = f.name; });
+  assert(by['2A'] && by['2B'], `each must be detected from its own shape, got ${JSON.stringify(got)}`);
+});
+await t('rubbish inside a ZIP is ignored, not read as a return', async () => {
+  const got = await dropZip([
+    { path: 'returns_R2B_06AAGCE4293A1ZX_052025.json', text: JSON.stringify(j2b([{ no: 'A/1', txval: 1000, igst: 180 }])) },
+    { path: 'readme.txt', text: 'downloaded from the portal' },
+    { path: '__MACOSX/._returns_R2B_06AAGCE4293A1ZX_052025.json', text: 'resource fork' },
+  ], 'GSTR_2B.zip');
+  assert(got.length === 1, `only the return is a return: ${JSON.stringify(got.map((f) => f.name))}`);
+  assert(!got[0].error && got[0].count === 1, `and it must parse: ${JSON.stringify(got[0])}`);
+});
+await t('a ZIP with nothing readable in it says so, and loses no other file', async () => {
+  const got = await dropZip([{ path: 'notes.txt', text: 'nothing here' }], 'wrong.zip');
+  assert(got.length === 1 && got[0].error, `an empty ZIP must report itself: ${JSON.stringify(got)}`);
+  assert(/no \.json or \.csv/.test(got[0].error), `and say what was wrong, got "${got[0].error}"`);
+  assert(got[0].name === 'wrong.zip', `named by the ZIP, got ${got[0].name}`);
+});
+await t('a broken ZIP is reported without taking the page down', async () => {
+  const got = await page.evaluate(async () => {
+    loadedFiles = [];
+    await handleFiles([new File([new Blob(['PK\u0003\u0004 and then nonsense'])], 'torn.zip')]);
+    return loadedFiles.map((f) => ({ name: f.name, count: f.count, error: !!f.error }));
+  });
+  assert(got.length === 1 && got[0].error && got[0].count === 0,
+    `a torn ZIP is one failed file, not a crash: ${JSON.stringify(got)}`);
+});
+await t('loose JSON still works exactly as before', async () => {
+  const got = await page.evaluate(async ([text]) => {
+    loadedFiles = [];
+    await handleFiles([new File([text], 'returns_R2B_06AAGCE4293A1ZX_052025.json')]);
+    return loadedFiles.map((f) => ({ name: f.name, count: f.count, src: f.src, error: f.error }));
+  }, [JSON.stringify(j2b([{ no: 'A/1', txval: 1000, igst: 180 }]))]);
+  assert(got.length === 1 && !got[0].error && got[0].count === 1 && got[0].src === '2B',
+    `the plain path must not have regressed: ${JSON.stringify(got)}`);
+  assert(got[0].name === 'returns_R2B_06AAGCE4293A1ZX_052025.json',
+    `and keep its own name, got ${got[0].name}`);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (errs.length) { console.log('\nBROWSER ERRORS:'); errs.slice(0, 5).forEach((e) => console.log('  ' + e)); }
 await browser.close(); srv.close();
