@@ -1029,6 +1029,22 @@ function normInv(x){
     .replace(/(^|[^0-9])0+(\d)/g,'$1$2')   // 00111 → 111, /0123 → /123, INV005 → INV5
     .replace(/[^A-Z0-9]/g,'');
 }
+/* BOTH readings of a number, because stripping padding can only be applied where
+   a separator survives to mark where a digit group begins — and the two sides
+   do not always carry the same separators.
+
+   EIPL/AP/202504 and EIPL/AP/2025/04 are one invoice. Squeezed flat they are
+   identical; strip the padding first and only the second changes, to
+   EIPLAP20254, and a document that had always matched stops. So a number is
+   carried in both forms and the best agreement between any pair wins: the
+   padded reading finds SG/25-26/00111 ↔ SG/25-26/0111, the flat one keeps
+   EIPL/AP/202504 ↔ EIPL/AP/2025/04, and neither costs the other. */
+function invForms(x){
+  var raw=String(x||'').toUpperCase();
+  var flat=raw.replace(/[^A-Z0-9]/g,'');
+  var unpadded=normInv(raw);
+  return (unpadded&&unpadded!==flat)?[flat,unpadded]:(flat?[flat]:[]);
+}
 function bTax(r){return {igst:r.igst+(r.rcmIgst||0),cgst:r.cgst+(r.rcmCgst||0),sgst:r.sgst+(r.rcmSgst||0)};}
 function bGstTotal(r){var t=bTax(r);return t.igst+t.cgst+t.sgst;}
 function uniq(a){var s={},o=[];a.forEach(function(x){if(x&&!s[x]){s[x]=1;o.push(x);}});return o;}
@@ -1037,13 +1053,21 @@ function uniq(a){var s={},o=[];a.forEach(function(x){if(x&&!s[x]){s[x]=1;o.push(
    was reported unbooked for no other reason than that its number was one
    digit long). They are kept here and corroborated at the point of use —
    see `invBest` — because on its own "6" is not evidence of anything. */
-function invCands(r){return uniq([r.supplierInvNo,r.voucherNo,r.ref].map(normInv)).filter(function(x){return x.length>=1;});}
+function invCands(r){
+  var out=[];[r.supplierInvNo,r.voucherNo,r.ref].forEach(function(x){out=out.concat(invForms(x));});
+  return uniq(out).filter(function(x){return x.length>=1;});
+}
 /* The strongest invoice-number agreement between a 2B number and a books row,
    with the length of the shorter side of that agreement, so the caller can tell
    "INV-2526-0441 both sides" from "6 both sides". */
-function invBest(bInv,r){
-  var im=0,len=0;
-  invCands(r).forEach(function(c){var s=invMatch(bInv,c);if(s>im){im=s;len=Math.min(bInv.length,c.length);}});
+function invBest(bForms,r){
+  var im=0,len=0,fs=(typeof bForms==='string')?[bForms]:(bForms||[]);
+  invCands(r).forEach(function(c){
+    fs.forEach(function(bf){
+      var s=invMatch(bf,c);
+      if(s>im){im=s;len=Math.min(bf.length,c.length);}
+    });
+  });
   return {im:im,len:len};
 }
 /* The tail a books voucher usually loses: the financial year the supplier puts
@@ -1173,7 +1197,7 @@ function buildRec(b,br){
   rec.nameChk=(b.party&&br.party)?(nameScore(b.party,br.party)>=0.5):'—';
   rec.taxChk=r2(rec.tax2b-rec.taxBk);
   rec.gstChk=r2(rec.gst2b-rec.gstBk);
-  var im=invBest(normInv(b.invNo),br).im;
+  var im=invBest(invForms(b.invNo),br).im;
   rec.vchChk=im>=3;
   rec.spill=monthGap(b.invDate,br.date);
   var gstOff=Math.abs(rec.gstChk)>GSTTOL;
@@ -1218,7 +1242,7 @@ function buildRec(b,br){
        voucher, so it is worth a human eye. */
     rec.remarks='probable match — verify';rec._cat='probable';
     rec.note='Purchase '+rec.vchBk+' ('+rec.partyBk+'): GST matches but books taxable ₹'+inr(rec.taxBk)+' vs ₹'+inr(rec.tax2b)+' in 2B, and the invoice number does not confirm the match — verify.';
-  } else if(im===0 && invCands(br).length && normInv(b.invNo)){
+  } else if(im===0 && invCands(br).length && invForms(b.invNo).length){
     /* Both sides carry an invoice number and they are plainly different, so the
        only thing joining these two is the party and the amount. That is exactly
        how a run of identical invoices from one supplier gets cross-matched —
@@ -1352,10 +1376,10 @@ function reconcile(){
      3 = the same number, 2 = one is the other's tail, 0 = anything goes. */
   function findMatch(b,floor){
     floor=floor||0;
-    var bInv=normInv(b.invNo),g=normGstin(b.gstin),bg=b.igst+b.cgst+b.sgst;
+    var bForms=invForms(b.invNo),g=normGstin(b.gstin),bg=b.igst+b.cgst+b.sgst;
     var pool={};
     function add(list){(list||[]).forEach(function(i){if(!used[i])pool[i]=1;});}
-    add(invIdx[bInv]);if(g)add(gstinIdx[g]);add(gstAmtIdx[Math.round(bg)]);
+    bForms.forEach(function(k){add(invIdx[k]);});if(g)add(gstinIdx[g]);add(gstAmtIdx[Math.round(bg)]);
     var best=-1,bestKey=null;
     Object.keys(pool).forEach(function(ks){
       var i=+ks,r=booksRows[i];
@@ -1368,7 +1392,7 @@ function reconcile(){
       var rgst=bGst(r);
       var bSign=bg>0.005?1:(bg<-0.005?-1:0),rSign=rgst>0.005?1:(rgst<-0.005?-1:0);
       if(bSign&&rSign&&bSign!==rSign)return;
-      var ib=invBest(bInv,r),im=ib.im;
+      var ib=invBest(bForms,r),im=ib.im;
       var rg=normGstin(r.gstin),gstEq=!!(g&&rg&&g===rg);
       var dg=Math.abs(bg-bGst(r)),gstClose=dg<=2,gstNear=dg<=50;
       var dt=Math.abs((b.taxable||0)-(r.taxable||0)),taxClose=dt<=Math.max(10,Math.abs(b.taxable||0)*0.005);

@@ -48,6 +48,13 @@ zeros wherever a digit group starts, so `005` ↔ `5`, `INV/005` ↔ `INV/5` and
 `SG/25-26/00111` ↔ `SG/25-26/0111` all reduce alike. The pair is still short
 after stripping, so rule 2 still applies and it does not carry the match alone.
 
+But a number is carried in **both** readings, padded and flat, and the best
+agreement between any pair wins. `EIPL/AP/202504` and `EIPL/AP/2025/04` are one
+invoice: squeezed flat they are identical, and stripping padding changes only
+the second — so a padding rule applied alone *broke* a document that had always
+matched. The padded reading finds `SG/25-26/00111` ↔ `SG/25-26/0111`, the flat
+one keeps `EIPL/AP/202504` ↔ `EIPL/AP/2025/04`, and neither costs the other.
+
 A books voucher that has simply lost the financial year — `694` against the
 supplier's `694/25-26` — counts as strong evidence (2), not conclusive: the
 prefix alone could belong to another of his documents.

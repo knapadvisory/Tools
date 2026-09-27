@@ -404,6 +404,17 @@ await t('padding inside the number is not a difference either', async () => {
                                taxable: 1430000, igst: 257400 }));
   assert(r.cat === 'matched', `expected booked, got ${r.cat} (${r.remarks})`);
 });
+await t('stripping padding must not break a number that already agreed', async () => {
+  /* EIPL/AP/202504 and EIPL/AP/2025/04 are one invoice. Squeezed flat they are
+     identical; strip the padding first and only the second changes, so a
+     document that had always matched stopped. Both readings are carried now. */
+  const r = await label(doc({ invNo: 'EIPL/AP/202504', party: 'SS INFRA DEVELOPERS AND CONSTRUCTIONS',
+                              gstin: '36ADTFS6602C1ZY', taxable: 215000, igst: 38700 }),
+                        book({ voucherNo: 'EIPL/AP/2025/04', supplierInvNo: 'EIPL/AP/2025/04', ref: '',
+                               party: 'SS INFRA DEVELOPERS AND CONSTRUCTIONS', gstin: '36ADTFS6602C1ZY',
+                               taxable: 215000, igst: 38700 }));
+  assert(r.cat === 'matched', `expected booked, got ${r.cat} (${r.remarks})`);
+});
 await t('a books voucher with the financial year dropped still matches', async () => {
   // the real 694/25-26 in 2B against 694 in the books
   const r = await label(doc({ invNo: '694/25-26', party: 'MADRAS STEELS & TUBES',
