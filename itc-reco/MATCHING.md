@@ -40,6 +40,13 @@ Anything added to the scoring must keep this shape: a new signal that can
 accept a pair must also be able to say how firm it is, or it belongs in the
 ranking key rather than in `accept`.
 
+Zero padding is not a difference either. The supplier reports `005`, the books
+hold voucher `5`, and a preparer writes "different invoice no." against every
+one of them — 27 in the CGST run. `invPlain` strips the padding at the start of
+a number and after any letter, so `005` ↔ `5` and `INV/005` ↔ `INV/5` are the
+same number. The pair is still short after stripping, so rule 2 still applies
+and it does not carry the match alone.
+
 ## 2. A short number is a number, but it is not evidence on its own
 
 Candidates under two characters used to be dropped, so Maa Kalyani's invoice
@@ -80,7 +87,30 @@ The reverse — in 2B but not in 2A — is **not** flagged. Loading twelve month
 of each still leaves the two sets ending on different documents, so the
 "finding" would be an artefact of which files were loaded.
 
-## 5. The credit follows the tax, not the taxable value
+## 5. Read the dialect the file is actually written in
+
+2B and 2A/GSTR-1 name a credit note's fields differently, and the difference is
+silent:
+
+| | 2B | 2A / GSTR-1 |
+|---|---|---|
+| number | `ntnum` | `nt_num` |
+| type (C/D) | `typ` | `ntty` |
+| date | `dt` | `nt_dt` |
+
+Reading only the 2A names left every 2B credit note with a **blank document
+number** and, the type being unreadable, a **positive sign** — so a reversal was
+carried through the whole reconciliation as an extra invoice. Nothing failed;
+the sheet just quietly said the opposite of the truth. It surfaced only by
+comparing a real CGST run against the same books reconciled by hand, where the
+notes appeared with their numbers and as negatives.
+
+Both dialects are read now, and the test builds a note in each. When adding a
+table, check the key names against a real file of **both** returns — and against
+`downloads/gstr2b-tally-poster.mjs`, which has been reading real 2B files for
+longer than this tool has.
+
+## 6. The credit follows the tax, not the taxable value
 
 GST tolerance is **₹1**; taxable tolerance is **max(₹10, 0.5%)**.
 
@@ -96,7 +126,7 @@ A taxable gap matters only when the invoice number does *not* vouch for the
 pairing: there the gap is evidence about whether this is even the right
 voucher, and it earns *verify*.
 
-## 6. A remark must be a finding, not a hedge
+## 7. A remark must be a finding, not a hedge
 
 The second tool the client compared against was, in their words, "more
 reliable and concise with no extra comments". That is the standard. Every
@@ -108,7 +138,7 @@ hedge spends the preparer's attention, and there is a fixed amount of it.
   Ultratech billed ₹8,424.00 eleven times over, and `913900250` paired with
   voucher `913900258` on nothing but the party and the value.
 
-## 7. Each kind of wrong gets its own bucket
+## 8. Each kind of wrong gets its own bucket
 
 *ITC taken in the wrong registration* is not an amount mismatch. Three ECLAT
 documents had identical figures on both sides and read "booked — amount
@@ -134,7 +164,7 @@ apportionment, an ineligible credit written back — and the note says so. It is
 reported because the same reversal passed twice looks identical, and because
 the supplier's note may be sitting in a month nobody loaded.
 
-## 8. Nothing in the input may be silently dropped
+## 9. Nothing in the input may be silently dropped
 
 Every one of these was a bug that presented as a wall of false findings:
 
@@ -152,7 +182,21 @@ Every one of these was a bug that presented as a wall of false findings:
   deduction was inflating it; the giveaway was that 18% of the base without
   TDS equalled the IGST exactly.
 
-## 9. Recall gaps are not all matcher gaps
+## 10. Noise is a finding about the input, not 674 findings
+
+In the CGST run, **674 of the 722 documents "not in books" were one supplier** —
+Kotak Mahindra Bank, ₹25,280.72 of GST between them, against ₹13 lakh on the
+other 48. The preparer hand-labelled the whole run "bank charges/finance cost"
+in one go, and was right to: the GST on bank and card charges is normally
+expensed along with it, so no input ledger ever holds it. Read as 674 separate
+lines it buries the 48 that matter.
+
+So a run of ten or more unbooked documents from one supplier is summarised —
+on screen and on its own sheet — with the count, the GST, and what it usually
+means. One supplier's whole run missing is a question about the ledgers that
+were fetched, not about 674 omissions.
+
+## 11. Recall gaps are not all matcher gaps
 
 142 documents worth ₹12.37 lakh appeared in the other tool's sheet and not in
 ours. Before touching the matcher: **119 of them were dated March 2026**, and
@@ -173,9 +217,16 @@ Always separate the two before concluding the matching is weak.
   with the fastest shape failing has still not been seen, so tier 1 is
   untested in the field.
 - **A credit note is not tied to the invoice it relates to.** It is matched to
-  the reversal in the books, which is the question that decides the tax; the
-  original document number the supplier put on the note (`onum`/`oinum` in the
-  return) is not read, so the note is not linked back to its invoice.
+  the reversal in the books, which is the question that decides the tax. The
+  original document number is now parsed (`origNo`, from `oinum`/`ontnum`) but
+  nothing uses it yet, so the note is still not linked back to its invoice.
+- **Blocked credit still needs a human.** Where 2B says `itcavl = N` we say so.
+  Where it does not, judgement is required and we do not attempt it: in the CGST
+  run the preparer marked five documents "ineligible" that 2B had not flagged — a
+  Honda dealer (motor vehicle, Sec 17(5)) and hotel stays. Guessing from the
+  supplier's name would be wrong more often than it is useful, so a "not booked"
+  that was a deliberate non-claim reads the same as an omission. Worth a tick
+  column the preparer can fill once per supplier.
 - **Cess is parsed and then ignored.** `csamt`/`cess` is read into the row, but
   there is no cess head to reconcile it against because the connector has no
   cess ledger kind. Cess ITC is real credit and currently goes unchecked.

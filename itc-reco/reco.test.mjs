@@ -360,6 +360,66 @@ await t('a reversal in the books with no supplier note gets its own bucket', asy
   assert(/Rule 37/.test(rev.note), 'and the usual innocent explanations given: ' + rev.note);
 });
 
+console.log('\n── the dialect GSTR-2B actually speaks ──');
+await t('a 2B credit note keeps its number and reduces the credit', async () => {
+  /* 2B names a note's fields ntnum / typ / dt; 2A and GSTR-1 use nt_num / ntty /
+     nt_dt. Reading only the 2A names left every 2B credit note with a blank
+     document number and — the type being unreadable — a POSITIVE sign, so a
+     reversal looked like an extra invoice. Found by comparing a real CGST run
+     against the same books reconciled by hand. */
+  const out = await runJson([{ name: '2B_072025.json', json: { data: { gstin: '06AAGCE4293A1ZX', rtnprd: '072025',
+      docdata: { cdnr: [{ ctin: '06ALSPB8304K1ZX', trdnm: 'Sachkhand Enterprises',
+        nt: [{ ntnum: 'SE/CN/1', typ: 'C', dt: '01-07-2025', val: 24718, txval: 20947.5,
+               cgst: 1885.28, sgst: 1885.28, itcavl: 'Y' }] }] } } } }],
+    [book({ voucherNo: 'DN/4', voucherType: 'Debit Note', supplierInvNo: 'SE/CN/1', ref: '',
+            date: '2025-07-01', party: 'Sachkhand Enterprises', gstin: '06ALSPB8304K1ZX',
+            taxable: -20947.5, igst: 0, cgst: -1885.28, sgst: -1885.28 })]);
+  assert(out.cn.length === 1, `expected one note, got ${out.cn.length}`);
+  assert(out.cn[0].doc === 'SE/CN/1', `the note number must survive, got "${out.cn[0].doc}"`);
+  assert(out.cn[0].gst2b < 0, `a credit note must reduce the credit, got ${out.cn[0].gst2b}`);
+  assert(out.cn[0].cat === 'cnok', `and it should find its reversal: got ${out.cn[0].cat} (${out.cn[0].remarks})`);
+});
+await t('zero padding is not a different invoice number', async () => {
+  // 2B document 005, books voucher 5 — 27 of these in the CGST run were
+  // hand-labelled "booked - different invoice no." in the other tool.
+  const r = await label(doc({ invNo: '005', party: 'Shree Ganesh Construction & Fabrication',
+                              gstin: '06AABCS1429B1ZX', taxable: 4252170, igst: 765390.6 }),
+                        book({ voucherNo: '5', supplierInvNo: '', ref: '',
+                               party: 'Shree Ganesh Construction & Fabrication', gstin: '06AABCS1429B1ZX',
+                               taxable: 4252170, igst: 765390.6 }));
+  assert(r.cat === 'matched', `expected booked, got ${r.cat} (${r.remarks})`);
+  assert(!/verify/.test(r.remarks), 'nothing needs verifying: ' + r.remarks);
+});
+await t('but padding alone still does not pair two suppliers', async () => {
+  const r = await label(doc({ invNo: '005', party: 'Shree Ganesh Construction', gstin: '06AABCS1429B1ZX',
+                              taxable: 4252170, igst: 765390.6 }),
+                        book({ voucherNo: '5', supplierInvNo: '', ref: '',
+                               party: 'PARAMOUNT INFRATECH', gstin: '07AAACP9999Q1ZZ',
+                               taxable: 9100, igst: 1638 }));
+  assert(r.cat === 'only2b', `a bare "5" is not evidence — expected unbooked, got ${r.cat} (${r.remarks})`);
+});
+await t('TDS deducted on the voucher is shown, not folded into the taxable', async () => {
+  const r = await page.evaluate(() => {
+    booksRows = [{ _ownGstin: '06AAGCE4293A1ZX', date: '2025-11-05', voucherNo: '80/YT-HR/25-26',
+      supplierInvNo: '80/YT-HR/25-26', ref: '', party: 'YANKIT TECHNO FLOORING SYSTEMS',
+      gstin: '06AAAFY1234C1ZL', taxable: 8175705.22, igst: 0, cgst: 735813.47, sgst: 735813.47,
+      rcmIgst: 0, rcmCgst: 0, rcmSgst: 0, tds: 163514.10 }];
+    twoBRows = [{ regn: '06AAGCE4293A1ZX', period: '112025', gstin: '06AAAFY1234C1ZL',
+      party: 'YANKIT TECHNO FLOORING SYSTEMS', invNo: '80/YT-HR/25-26', invDate: '2025-11-05',
+      invoiceValue: 9647332, taxable: 8175705.22, igst: 0, cgst: 735813.47, sgst: 735813.47,
+      rcm: false, isCN: false, itcBlocked: false }];
+    loadedFiles = [{ name: 'x.json', count: 1, rows: twoBRows, src: '2B' }];
+    ['hIGST', 'hINTRA', 'hNIL'].forEach((id) => { const e = document.getElementById(id); if (e) e.checked = true; });
+    reconcile();
+    const x = report.recs[0];
+    return { cat: x._cat, taxChk: x.taxChk, tdsBk: x.tdsBk };
+  });
+  assert(Math.abs(r.taxChk) < 0.01,
+    `the taxable must tie once TDS is out of it, differs by ${r.taxChk}`);
+  assert(Math.abs(r.tdsBk - 163514.10) < 0.01, `the TDS should be shown, got ${r.tdsBk}`);
+  assert(r.cat === 'matched', `expected booked, got ${r.cat}`);
+});
+
 console.log('\n── the Excel layout ──');
 await t('every formula in the export points at the column it means', async () => {
   /* The live formulas address columns by letter. Inserting "Source" shifted
@@ -370,11 +430,11 @@ await t('every formula in the export points at the column it means', async () =>
   const want = { 7: 'Taxable (2B)', 11: 'GST (2B)', 14: 'Source', 15: 'GSTIN check',
     17: 'taxable check', 18: 'GST check', 20: 'spillover (mth)', 21: 'remarks',
     22: 'Regn (books)', 23: 'GSTIN (books)', 27: 'IGST (books)', 29: 'SGST (books)',
-    30: 'GST as per Books', 31: 'Taxable (books)' };
+    30: 'GST as per Books', 31: 'Taxable (books)', 32: 'TDS (books)' };
   Object.keys(want).forEach((n) => assert(at(+n) === want[n],
     `column ${n} should be "${want[n]}", it is "${at(+n)}"`));
   const amt = await page.evaluate(() => AMT_COLS);
-  amt.forEach((ci) => assert(/Value|Taxable|IGST|CGST|SGST|GST|check/.test(at(ci)),
+  amt.forEach((ci) => assert(/Value|Taxable|IGST|CGST|SGST|GST|TDS|check/.test(at(ci)),
     `column ${ci} ("${at(ci)}") is number-formatted but is not an amount`));
 });
 
@@ -420,7 +480,7 @@ await t('the workbook builds, with a sheet for the 2A-only documents', async () 
   assert(x.sheets.join(',') === 'reconciled,Credit Notes,2A only',
     'expected three sheets, got ' + x.sheets.join(','));
   assert(x.hdr[13] === 'Source', `column N should be Source, it is "${x.hdr[13]}"`);
-  assert(x.hdr.length === 32, `expected 32 columns, got ${x.hdr.length}`);
+  assert(x.hdr.length === 33, `expected 33 columns, got ${x.hdr.length}`);
   // the matched row carries the live remark formula; it must address R/Q/A/V
   const f = x.formulas.find((s) => /booked/.test(s)) || '';
   assert(/ABS\(R\d+\)/.test(f) && /ABS\(Q\d+\)/.test(f) && /TRIM\(V\d+\)/.test(f),

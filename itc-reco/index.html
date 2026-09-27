@@ -772,7 +772,15 @@ function parseGstJson(j,src,fileName){
     var itcavl=String(inv.itcavl||inv.itc_avl||(items[0]&&(items[0].itc_avl||items[0].itcavl))||'').toUpperCase();
     var rsn=String(inv.rsn||(items[0]&&items[0].rsn)||'').trim();
     out.push({src:src,regn:regn,period:period,gstin:String(s.ctin||'').toUpperCase(),party:s.trdnm||'',
-      invNo:String(inv.inum||inv.nt_num||'').trim(),invDate:inv.dt||inv.idt||inv.nt_dt||'',
+      /* 2B and 2A/GSTR-1 name a credit note's fields differently: 2B uses
+         ntnum / typ / dt, 2A uses nt_num / ntty / nt_dt. Reading only the 2A
+         names left every 2B credit note with a BLANK number and — because the
+         type was unreadable — a POSITIVE sign, so it looked like an extra
+         invoice instead of a reversal. Both dialects are read here. */
+      invNo:String(inv.inum||inv.ntnum||inv.nt_num||'').trim(),
+      // The document this one revises or relates to, when the return says.
+      origNo:String(inv.oinum||inv.ontnum||inv.onum||'').trim(),
+      invDate:inv.dt||inv.idt||inv.ntdt||inv.nt_dt||'',
       invoiceValue:num(inv.val),taxable:sign*tx,igst:sign*ig,cgst:sign*cg,sgst:sign*sg,cess:sign*cs,
       rcm:(String(inv.rev||inv.rchrg||'').toUpperCase()==='Y'),isCN:!!isCN,isAmend:!!isAmend,
       // 2A carries the supplier's filing status per counter-party; 2B does not
@@ -785,8 +793,11 @@ function parseGstJson(j,src,fileName){
   // mismatch; the reconciliation uses the amended (latest) figures.
   (d.b2b||[]).forEach(function(s){(s.inv||[]).forEach(function(inv){pushInv(s,inv,1,false,false);});});
   (d.b2ba||[]).forEach(function(s){(s.inv||[]).forEach(function(inv){pushInv(s,inv,1,false,true);});});
-  (d.cdnr||[]).forEach(function(s){(s.nt||[]).forEach(function(nt){pushInv(s,nt,(String(nt.ntty||'').toUpperCase()==='C'?-1:1),true,false);});});
-  (d.cdnra||[]).forEach(function(s){(s.nt||[]).forEach(function(nt){pushInv(s,nt,(String(nt.ntty||'').toUpperCase()==='C'?-1:1),true,true);});});
+  // 'C' = the supplier's credit note, which takes credit away; 'D' = his debit
+  // note, which adds to it. 2B calls the field typ, 2A calls it ntty.
+  function noteSign(nt){return String(nt.typ||nt.ntty||'').toUpperCase()==='C'?-1:1;}
+  (d.cdnr||[]).forEach(function(s){(s.nt||[]).forEach(function(nt){pushInv(s,nt,noteSign(nt),true,false);});});
+  (d.cdnra||[]).forEach(function(s){(s.nt||[]).forEach(function(nt){pushInv(s,nt,noteSign(nt),true,true);});});
   return out;
 }
 function parse2bJson(j){return parseGstJson(j,null,'');}
@@ -836,11 +847,20 @@ function invBest(bInv,r){
   invCands(r).forEach(function(c){var s=invMatch(bInv,c);if(s>im){im=s;len=Math.min(bInv.length,c.length);}});
   return {im:im,len:len};
 }
+// A number with its zero padding removed: "005" → "5", "INV005" → "INV5".
+function invPlain(s){return String(s||'').replace(/^0+(\d)/,'$1').replace(/([A-Z])0+(\d)/g,'$1$2');}
 // Invoice-number similarity: 3 exact, 2 one is a suffix of the other (len≥3 —
 // catches "100" ↔ "26-27/100"), 1 one contains the other (len≥5), else 0.
 function invMatch(a,b){
   if(!a||!b)return 0;
   if(a===b)return 3;
+  /* Zero-padding is not a difference. The supplier reports 005, the books hold
+     voucher 5, and a preparer then writes "different invoice no." against every
+     one of them by hand. Stripping the padding — at the start, and after any
+     letter — makes 005 and 5, or INV/005 and INV/5, the same number. The pair
+     is still only two characters long after stripping, so it does not carry the
+     match on its own (see invBest / invAlone). */
+  if(invPlain(a)===invPlain(b))return 3;
   var mn=Math.min(a.length,b.length);
   if(mn>=3&&(a.slice(-mn)===b.slice(-mn)))return 2;
   if(mn>=5&&(a.indexOf(b)>=0||b.indexOf(a)>=0))return 1;
@@ -902,7 +922,7 @@ function buildRec(b,br){
     invVal:b.invoiceValue||0,tax2b:r2(b.taxable),igst2b:r2(b.igst),cgst2b:r2(b.cgst),sgst2b:r2(b.sgst),gst2b:r2(bg2),
     rcm:b.rcm?'Yes':'',period:b.period||periodOf(b.invDate),
     gstinChk:'—',nameChk:'—',taxChk:'',gstChk:'',vchChk:'—',spill:'',remarks:'',
-    regnBk:'',gstinBk:'',dateBk:'',partyBk:'',vchBk:'',igstBk:'',cgstBk:'',sgstBk:'',gstBk:'',taxBk:'',
+    regnBk:'',gstinBk:'',dateBk:'',partyBk:'',vchBk:'',igstBk:'',cgstBk:'',sgstBk:'',gstBk:'',taxBk:'',tdsBk:'',
     note:'',_cat:'',_b:b,_bk:br,_isCN:!!b.isCN};
   if(!br){
     var cov=coverageNote(b.invDate),tag=coverageTag(b.invDate);
@@ -938,6 +958,11 @@ function buildRec(b,br){
   var bt=bTax(br);
   rec.regnBk='';rec.gstinBk=br.gstin||'';rec.dateBk=br.date||'';rec.partyBk=br.party||'';rec.vchBk=br.voucherNo||br.supplierInvNo||'';
   rec.igstBk=r2(bt.igst);rec.cgstBk=r2(bt.cgst);rec.sgstBk=r2(bt.sgst);rec.gstBk=r2(bt.igst+bt.cgst+bt.sgst);rec.taxBk=r2(br.taxable);
+  /* The TDS withheld on the voucher. It is NOT in the taxable above — it is not
+     consideration and never forms part of what the supplier reports in GSTR-1 —
+     but it is shown, because a preparer tying our figure back to the ledger has
+     to see where the difference between the two went. */
+  rec.tdsBk=Math.abs(+br.tds||0)>0.005?r2(Math.abs(br.tds)):'';
   var rg=normGstin(br.gstin);
   rec.gstinChk=(g&&rg)?(g===rg):'—';
   rec.nameChk=(b.party&&br.party)?(nameScore(b.party,br.party)>=0.5):'—';
@@ -1183,6 +1208,7 @@ function reconcile(){
         gstinChk:'—',nameChk:'—',taxChk:'',gstChk:'',vchChk:'—',spill:'',remarks:'ITC reversed in books — no supplier credit note',
         regnBk:r._ownGstin||(chosen&&chosen.gstin)||'',gstinBk:r.gstin||'',dateBk:r.date||'',partyBk:r.party||'',vchBk:ref,
         igstBk:r2(bt.igst),cgstBk:r2(bt.cgst),sgstBk:r2(bt.sgst),gstBk:r2(bt.igst+bt.cgst+bt.sgst),taxBk:r2(r.taxable),
+        tdsBk:Math.abs(+r.tds||0)>0.005?r2(Math.abs(r.tds)):'',
         note:'Voucher '+(r.voucherType?r.voucherType+' ':'')+ref+' ('+(r.party||'')+') gives back ITC of ₹'+inr(Math.abs(bt.igst+bt.cgst+bt.sgst))+', and no credit note from this supplier in the 2A/2B loaded asks for it. That is correct for a reversal you passed yourselves (Rule 37 non-payment, Rule 42/43 apportionment, an ineligible credit written back) — check only that it is not the same reversal passed twice, and that a supplier credit note for it is not sitting in a month you have not loaded.',
         _cat:'onlybkCN',_bk:r,_isCN:true});
       return;
@@ -1191,6 +1217,7 @@ function reconcile(){
       gstinChk:'—',nameChk:'—',taxChk:'',gstChk:'',vchChk:'—',spill:'',remarks:later?'booked — expected in a later 2B':'booked, but not in 2B',
       regnBk:r._ownGstin||(chosen&&chosen.gstin)||'',gstinBk:r.gstin||'',dateBk:r.date||'',partyBk:r.party||'',vchBk:ref,
       igstBk:r2(bt.igst),cgstBk:r2(bt.cgst),sgstBk:r2(bt.sgst),gstBk:r2(bt.igst+bt.cgst+bt.sgst),taxBk:r2(r.taxable),
+      tdsBk:Math.abs(+r.tds||0)>0.005?r2(Math.abs(r.tds)):'',
       note:later
         ? ('Booked in your books ('+ref+') dated '+(r.date||'?')+', in/after the latest 2B period you loaded ('+fmtYM(maxTwoBYM)+') — the supplier most likely reports it in a later GSTR-1, so it should surface in a later month’s 2B. Normal filing lag, not an ITC loss — only revisit if it is still missing near the Sec 16(4) cut-off (30 Nov after the FY).')
         : ('Booked in your books ('+ref+') but not found in the 2B uploaded — the supplier may not have filed it, or it is in a different period.'),
@@ -1235,6 +1262,7 @@ function renderReport(){
   html+=secMM('Amount mismatch — matched invoice, GST or split differs',by.mismatch);
   html+=secMM('🚩 Wrong registration — the invoice is booked under a different GSTIN of yours',by.wrongreg);
   html+=secMM('Probable match — verify',by.probable);
+  html+=secRuns(by.only2b);
   var pi=by.only2b.filter(function(r){return r._periodIssue;}).length;
   if(pi)html+='<div class="repsec"><div class="conn-banner off" style="margin:0"><span class="cdot"></span><div><div class="ctitle">'+pi+' of the “not in books” documents fall outside the period you fetched</div><div class="csub">Their invoice dates are before/after '+esc(COV.from)+' → '+esc(COV.to)+', or in a month Tally returned no vouchers for (shown in red). Widen the fetch — Step&nbsp;2 dates, and Alt+F2 in Tally to open the right period/company — then reconcile again. Only the rest are genuinely unrecorded. In the Excel these are tagged in <b>remarks</b> (“not booked — before/after fetched period”, or “month not fetched”) — filter on them; the full reason is in each row’s Note.</div></div></div></div>';
   html+=secOnly('In GSTR-'+(mergeStats.has2a&&mergeStats.has2b?'2B/2A':(mergeStats.has2a?'2A':'2B'))+' but NOT in your books',by.only2b,'2b');
@@ -1269,6 +1297,40 @@ function secOnly(title,recs,side){
     return '<tr><td class="mono">'+esc(g||'—')+'</td><td>'+esc(p||'')+(r.rcm?' <span class="pill rcm">RCM</span>':'')+'</td><td>'+esc(no||'')+'</td><td'+dcls+' style="white-space:nowrap" title="'+esc(r.note||'')+'">'+esc((''+dt).slice(0,10))+'</td><td class="r">'+inr(tx)+'</td><td class="r">'+inr(ig)+'</td><td class="r">'+inr(cg)+'</td><td class="r">'+inr(sg)+'</td></tr>';
   }).join('');
   return sec(title,String(recs.length),'<thead><tr><th>GSTIN</th><th>Party</th><th>Doc / Vch</th><th>Date</th><th class="r">Taxable</th><th class="r">IGST</th><th class="r">CGST</th><th class="r">SGST</th></tr></thead><tbody>'+body+'</tbody>');
+}
+/* Who the unbooked documents belong to.
+
+   In the CGST run the client checked, 674 of the 722 documents "not in books"
+   were Kotak Mahindra Bank — bank charges, ₹25,280.72 of GST between them,
+   against ₹13 lakh on the other 48. One supplier's entire run missing is one
+   fact, not 674 findings: the GST on those documents is not posted to an input
+   ledger at all (bank and card charges are usually expensed with the tax on
+   them). Read as 674 separate lines it buries the 48 that matter, which is
+   exactly why the preparer hand-labelled them in bulk. So say it once. */
+var FIN_RX=/\b(BANK|BANKING|FINANC\w*|NBFC|CAPITAL|CARDS?|INSURANCE|ASSURANCE|SECURITIES|MUTUAL|DEPOSITOR\w*)\b/i;
+function secRuns(recs){
+  if(recs.length<20)return '';
+  var by={};
+  recs.forEach(function(r){
+    var k=normGstin(r.gstin2b)||('~'+String(r.party2b||''));
+    (by[k]||(by[k]={gstin:r.gstin2b,party:r.party2b,n:0,gst:0,tax:0})).n++;
+    by[k].gst+=(+r.gst2b||0);by[k].tax+=(+r.tax2b||0);
+  });
+  var runs=Object.keys(by).map(function(k){return by[k];})
+    .filter(function(s){return s.n>=10;}).sort(function(a,b){return b.n-a.n;});
+  if(!runs.length)return '';
+  var covered=runs.reduce(function(a,s){return a+s.n;},0);
+  var body=runs.map(function(s){
+    return '<tr><td class="mono">'+esc(s.gstin||'—')+'</td><td>'+esc(s.party||'')+'</td>'
+      +'<td class="r">'+s.n+'</td><td class="r">'+inr(s.tax)+'</td><td class="r">'+inr(s.gst)+'</td>'
+      +'<td style="white-space:normal;font-size:12px;color:var(--muted)">'
+      +(FIN_RX.test(String(s.party||''))
+        ? 'A bank or financial institution. Charges like these are usually posted with the GST on them to the expense, so no input ledger ever sees them — the credit is simply unclaimed, not mis-posted.'
+        : 'A whole run from one supplier is missing. Check whether this supplier’s purchases go to an input ledger that was not fetched, or to a different company/registration, before treating them as '+s.n+' separate omissions.')
+      +'</td></tr>';}).join('');
+  return sec('Unbooked documents that come from one supplier — '+covered+' of '+recs.length+' in '+runs.length+' run(s)',
+    String(runs.length),
+    '<thead><tr><th>GSTIN</th><th>Party</th><th class="r">Docs</th><th class="r">Taxable</th><th class="r">GST</th><th>What this usually means</th></tr></thead><tbody>'+body+'</tbody>');
 }
 /* 2A-only documents: what the return says, whether the books have it, and the
    verdict — because the two questions ("is it booked?" and "can the credit be
@@ -1306,8 +1368,8 @@ function secBooked(title,recs){
 }
 
 /* ============================ excel export (reference layout) ============================ */
-var RECO_HDR=['Regn (your GSTIN)','GSTIN (2B)','Party (2B)','Doc No','Doc Date','Invoice Value','Taxable (2B)','IGST (2B)','CGST (2B)','SGST (2B)','GST (2B)','RCM','Period','Source','GSTIN check','name check','taxable check','GST check','voucher check','spillover (mth)','remarks','Regn (books)','GSTIN (books)','Date (books)','Particulars (books)','Vch / Bill No','IGST (books)','CGST (books)','SGST (books)','GST as per Books','Taxable (books)','Note'];
-function recToRow(r){return [r.regn2b,r.gstin2b,r.party2b,r.docNo,(''+r.docDate).slice(0,10),r.invVal,r.tax2b,r.igst2b,r.cgst2b,r.sgst2b,r.gst2b,r.rcm,r.period,r.src||'',r.gstinChk,r.nameChk,r.taxChk,r.gstChk,r.vchChk,r.spill,r.remarks,r.regnBk,r.gstinBk,(''+r.dateBk).slice(0,10),r.partyBk,r.vchBk,r.igstBk,r.cgstBk,r.sgstBk,r.gstBk,r.taxBk,r.note];}
+var RECO_HDR=['Regn (your GSTIN)','GSTIN (2B)','Party (2B)','Doc No','Doc Date','Invoice Value','Taxable (2B)','IGST (2B)','CGST (2B)','SGST (2B)','GST (2B)','RCM','Period','Source','GSTIN check','name check','taxable check','GST check','voucher check','spillover (mth)','remarks','Regn (books)','GSTIN (books)','Date (books)','Particulars (books)','Vch / Bill No','IGST (books)','CGST (books)','SGST (books)','GST as per Books','Taxable (books)','TDS (books)','Note'];
+function recToRow(r){return [r.regn2b,r.gstin2b,r.party2b,r.docNo,(''+r.docDate).slice(0,10),r.invVal,r.tax2b,r.igst2b,r.cgst2b,r.sgst2b,r.gst2b,r.rcm,r.period,r.src||'',r.gstinChk,r.nameChk,r.taxChk,r.gstChk,r.vchChk,r.spill,r.remarks,r.regnBk,r.gstinBk,(''+r.dateBk).slice(0,10),r.partyBk,r.vchBk,r.igstBk,r.cgstBk,r.sgstBk,r.gstBk,r.taxBk,r.tdsBk,r.note];}
 function colLetter(n){var s='';while(n>0){var m=(n-1)%26;s=String.fromCharCode(65+m)+s;n=(n-m-1)/26;}return s;}
 // Three colour bands, like the HTML sheet: the 2B side, the reconciliation
 // columns in the middle, and the books side — so it reads at a glance which
@@ -1318,7 +1380,7 @@ var BAND_2B={hdr:'FF2E75B6',cell:'FFDDEBF7'},   // blue   — from GSTR-2B
 // column index (1-based) → band. 1..14 = the return (2B/2A), 15..21 = checks,
 // 22..32 = books.
 function bandOf(ci){return ci<=14?BAND_2B:(ci<=21?BAND_RC:BAND_BK);}
-var AMT_COLS=[6,7,8,9,10,11,17,18,27,28,29,30,31]; // #,##0.00
+var AMT_COLS=[6,7,8,9,10,11,17,18,27,28,29,30,31,32]; // #,##0.00
 function exportXlsx(){
   if(!report||typeof ExcelJS==='undefined'){alert('Report or Excel library not ready.');return;}
   var wb=new ExcelJS.Workbook();
@@ -1358,7 +1420,7 @@ function exportXlsx(){
       // ---- band tints on the body
       for(var ci=1;ci<=RECO_HDR.length;ci++){row.getCell(ci).fill={type:'pattern',pattern:'solid',fgColor:{argb:bandOf(ci).cell}};}
     });
-    ws.columns.forEach(function(c,i){c.width=[16,17,26,16,12,13,13,11,11,11,12,6,11,8,10,10,11,10,11,10,20,16,17,12,26,16,11,11,11,13,13,60][i]||12;});
+    ws.columns.forEach(function(c,i){c.width=[16,17,26,16,12,13,13,11,11,11,12,6,11,8,10,10,11,10,11,10,20,16,17,12,26,16,11,11,11,13,13,11,60][i]||12;});
     AMT_COLS.forEach(function(ci){ws.getColumn(ci).numFmt='#,##0.00';});
     ws.getColumn(20).numFmt='0'; // spillover (mth)
     ws.views=[{state:'frozen',ySplit:1,xSplit:0}];
@@ -1376,6 +1438,31 @@ function exportXlsx(){
   // same rows on their own, because what to do about them is a separate job.
   var o2a=report.recs.concat(report.cn).filter(function(r){return r._only2a;});
   if(o2a.length)sheet('2A only',o2a);
+  /* One supplier accounting for a run of unbooked documents is one fact. On its
+     own sheet it can be dealt with in one decision instead of scrolling past
+     hundreds of rows to reach the findings that matter. */
+  var runs={},unbooked=report.recs.filter(function(r){return r._cat==='only2b';});
+  if(unbooked.length<20)unbooked=[];          // nothing to group; the rows say it themselves
+  unbooked.forEach(function(r){
+    var k=normGstin(r.gstin2b)||('~'+String(r.party2b||''));
+    (runs[k]||(runs[k]={gstin:r.gstin2b,party:r.party2b,n:0,tax:0,gst:0})).n++;
+    runs[k].tax+=(+r.tax2b||0);runs[k].gst+=(+r.gst2b||0);
+  });
+  var runList=Object.keys(runs).map(function(k){return runs[k];}).sort(function(a,b){return b.n-a.n;});
+  if(runList.length){
+    var ws=wb.addWorksheet('Not in books by supplier');
+    var hr2=ws.addRow(['GSTIN (2B)','Party (2B)','Documents','Taxable','GST','Likely reason']);
+    for(var c2=1;c2<=6;c2++){var cc=hr2.getCell(c2);cc.font={bold:true,color:{argb:'FFFFFFFF'}};
+      cc.fill={type:'pattern',pattern:'solid',fgColor:{argb:BAND_2B.hdr}};}
+    runList.forEach(function(s){
+      ws.addRow([s.gstin||'',s.party||'',s.n,r2(s.tax),r2(s.gst),
+        FIN_RX.test(String(s.party||''))?'Bank / financial institution — charges are usually expensed with the GST on them, so no input ledger holds them; the credit is unclaimed'
+          :(s.n>=10?'A whole run from one supplier — check for an input ledger not fetched, or another company/registration, before treating these as separate omissions':'')]);
+    });
+    ws.columns.forEach(function(c3,i){c3.width=[17,30,11,14,14,80][i]||12;});
+    [4,5].forEach(function(ci){ws.getColumn(ci).numFmt='#,##0.00';});
+    ws.views=[{state:'frozen',ySplit:1}];
+  }
   wb.xlsx.writeBuffer().then(function(buf){dl('itc-reconciliation.xlsx',new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));});
 }
 
