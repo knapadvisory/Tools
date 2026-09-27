@@ -1121,7 +1121,7 @@ function buildRec(b,br){
     invVal:b.invoiceValue||0,tax2b:r2(b.taxable),igst2b:r2(b.igst),cgst2b:r2(b.cgst),sgst2b:r2(b.sgst),gst2b:r2(bg2),
     rcm:b.rcm?'Yes':'',period:b.period||periodOf(b.invDate),
     gstinChk:'—',nameChk:'—',taxChk:'',gstChk:'',vchChk:'—',spill:'',remarks:'',
-    regnBk:'',gstinBk:'',dateBk:'',partyBk:'',vchBk:'',igstBk:'',cgstBk:'',sgstBk:'',gstBk:'',taxBk:'',tdsBk:'',
+    regnBk:'',gstinBk:'',dateBk:'',partyBk:'',vchBk:'',billBk:'',igstBk:'',cgstBk:'',sgstBk:'',gstBk:'',taxBk:'',tdsBk:'',
     note:'',_cat:'',_b:b,_bk:br,_isCN:!!b.isCN};
   if(!br){
     var cov=coverageNote(b.invDate),tag=coverageTag(b.invDate);
@@ -1156,6 +1156,12 @@ function buildRec(b,br){
   }
   var bt=bTax(br);
   rec.regnBk='';rec.gstinBk=br.gstin||'';rec.dateBk=br.date||'';rec.partyBk=br.party||'';rec.vchBk=br.voucherNo||br.supplierInvNo||'';
+  /* The supplier's own bill number as the books recorded it, shown beside the
+     company's voucher number. They are different fields and the match may have
+     been made on either, so a sheet that prints only one cannot be audited: 21
+     Shree Rajasthan Gases rows showed voucher SRG/25-26/S1218 against document
+     2025-26/S6569 with no way to see which number, if any, had agreed. */
+  rec.billBk=br.supplierInvNo||br.ref||'';
   rec.igstBk=r2(bt.igst);rec.cgstBk=r2(bt.cgst);rec.sgstBk=r2(bt.sgst);rec.gstBk=r2(bt.igst+bt.cgst+bt.sgst);rec.taxBk=r2(br.taxable);
   /* The TDS withheld on the voucher. It is NOT in the taxable above — it is not
      consideration and never forms part of what the supplier reports in GSTR-1 —
@@ -1377,6 +1383,13 @@ function reconcile(){
          and a legal name are not a conflict. */
       var gstinConflict=!!(g&&rg&&g!==rg);
       var nameConflict=!gstEq&&!!(String(b.party||'').trim()&&String(r.party||'').trim()&&ns===0);
+      /* A document dated before the books were read cannot have its voucher in
+         them. Shree Ganesh's invoice 003 of 15-03-2025 — last year's, reported
+         late in the April 2025 2B — was married to a books voucher 003 dated
+         30-10-2025, which is a different invoice of the same number in the next
+         year, and the ₹3,83,482.62 "difference" between them was the largest
+         finding in the sheet. It was not a finding at all. */
+      if(COV&&COV.fromYM){var bd=ymd(b.invDate);if(bd&&(bd.y*100+bd.mo)<COV.fromYM)return;}
       var accept=(gstinConflict||nameConflict)
         ? ((nameStrong&&gstClose)||(gstEq&&gstClose))
         : (invAlone||(im>=1&&(gstNear||nameStrong))||(gstEq&&gstNear)||(nameStrong&&gstClose));
@@ -1384,7 +1397,14 @@ function reconcile(){
       if(!accept)return;
       // Rank: SAME registration first (so a 06 invoice takes its 06 book, not an
       // identical 37 one), then amount-tie (GST, taxable), then invoice number.
-      var key=[sameReg?1:0,gstEq?1:0,gstClose?1:0,taxClose?1:0,im,ns,-dg,-dt];
+      /* Among candidates that are otherwise equal, the nearest in date wins.
+         Shree Rajasthan Gases bills ₹216 twenty-one times a year, so every one
+         of its documents ties with every one of its vouchers on amount and the
+         choice fell to file order — pairing a January invoice with a May
+         voucher eight months away. The date is the only thing left that
+         distinguishes them, and it should not be the one thing ignored. */
+      var gp=monthGap(b.invDate,r.date),gapAbs=(typeof gp==='number')?Math.abs(gp):99;
+      var key=[sameReg?1:0,gstEq?1:0,gstClose?1:0,taxClose?1:0,im,ns,-gapAbs,-dg,-dt];
       if(best<0||cmpKey(key,bestKey)>0){best=i;bestKey=key;}
     });
     return best;
@@ -1464,7 +1484,7 @@ function reconcile(){
     if(r2(bt.igst+bt.cgst+bt.sgst)<-0.005){
       recs.push({regn2b:'',gstin2b:'',party2b:'',docNo:'',docDate:'',invVal:'',tax2b:'',igst2b:'',cgst2b:'',sgst2b:'',gst2b:'',rcm:r.rcm?'Yes':'',period:periodOf(r.date),
         gstinChk:'—',nameChk:'—',taxChk:'',gstChk:'',vchChk:'—',spill:'',remarks:'ITC reversed in books — no supplier credit note',
-        regnBk:r._ownGstin||(chosen&&chosen.gstin)||'',gstinBk:r.gstin||'',dateBk:r.date||'',partyBk:r.party||'',vchBk:ref,
+        regnBk:r._ownGstin||(chosen&&chosen.gstin)||'',gstinBk:r.gstin||'',dateBk:r.date||'',partyBk:r.party||'',vchBk:ref,billBk:r.supplierInvNo||r.ref||'',
         igstBk:r2(bt.igst),cgstBk:r2(bt.cgst),sgstBk:r2(bt.sgst),gstBk:r2(bt.igst+bt.cgst+bt.sgst),taxBk:r2(r.taxable),
         tdsBk:Math.abs(+r.tds||0)>0.005?r2(Math.abs(r.tds)):'',
         note:'Voucher '+(r.voucherType?r.voucherType+' ':'')+ref+' ('+(r.party||'')+') gives back ITC of ₹'+inr(Math.abs(bt.igst+bt.cgst+bt.sgst))+', and no credit note from this supplier in the 2A/2B loaded asks for it. That is correct for a reversal you passed yourselves (Rule 37 non-payment, Rule 42/43 apportionment, an ineligible credit written back) — check only that it is not the same reversal passed twice, and that a supplier credit note for it is not sitting in a month you have not loaded.',
@@ -1473,7 +1493,7 @@ function reconcile(){
     }
     recs.push({regn2b:'',gstin2b:'',party2b:'',docNo:'',docDate:'',invVal:'',tax2b:'',igst2b:'',cgst2b:'',sgst2b:'',gst2b:'',rcm:r.rcm?'Yes':'',period:periodOf(r.date),
       gstinChk:'—',nameChk:'—',taxChk:'',gstChk:'',vchChk:'—',spill:'',remarks:later?'booked — expected in a later 2B':'booked, but not in 2B',
-      regnBk:r._ownGstin||(chosen&&chosen.gstin)||'',gstinBk:r.gstin||'',dateBk:r.date||'',partyBk:r.party||'',vchBk:ref,
+      regnBk:r._ownGstin||(chosen&&chosen.gstin)||'',gstinBk:r.gstin||'',dateBk:r.date||'',partyBk:r.party||'',vchBk:ref,billBk:r.supplierInvNo||r.ref||'',
       igstBk:r2(bt.igst),cgstBk:r2(bt.cgst),sgstBk:r2(bt.sgst),gstBk:r2(bt.igst+bt.cgst+bt.sgst),taxBk:r2(r.taxable),
       tdsBk:Math.abs(+r.tds||0)>0.005?r2(Math.abs(r.tds)):'',
       note:later
@@ -1721,8 +1741,8 @@ function secBooked(title,recs){
 }
 
 /* ============================ excel export (reference layout) ============================ */
-var RECO_HDR=['Regn (your GSTIN)','GSTIN (2B)','Party (2B)','Doc No','Doc Date','Invoice Value','Taxable (2B)','IGST (2B)','CGST (2B)','SGST (2B)','GST (2B)','RCM','Period','Source','GSTIN check','name check','taxable check','GST check','voucher check','spillover (mth)','remarks','Regn (books)','GSTIN (books)','Date (books)','Particulars (books)','Vch / Bill No','IGST (books)','CGST (books)','SGST (books)','GST as per Books','Taxable (books)','TDS (books)','Note'];
-function recToRow(r){return [r.regn2b,r.gstin2b,r.party2b,r.docNo,(''+r.docDate).slice(0,10),r.invVal,r.tax2b,r.igst2b,r.cgst2b,r.sgst2b,r.gst2b,r.rcm,r.period,r.src||'',r.gstinChk,r.nameChk,r.taxChk,r.gstChk,r.vchChk,r.spill,r.remarks,r.regnBk,r.gstinBk,(''+r.dateBk).slice(0,10),r.partyBk,r.vchBk,r.igstBk,r.cgstBk,r.sgstBk,r.gstBk,r.taxBk,r.tdsBk,r.note];}
+var RECO_HDR=['Regn (your GSTIN)','GSTIN (2B)','Party (2B)','Doc No','Doc Date','Invoice Value','Taxable (2B)','IGST (2B)','CGST (2B)','SGST (2B)','GST (2B)','RCM','Period','Source','GSTIN check','name check','taxable check','GST check','voucher check','spillover (mth)','remarks','Regn (books)','GSTIN (books)','Date (books)','Particulars (books)','Vch No (books)','Bill No (books)','IGST (books)','CGST (books)','SGST (books)','GST as per Books','Taxable (books)','TDS (books)','Note'];
+function recToRow(r){return [r.regn2b,r.gstin2b,r.party2b,r.docNo,(''+r.docDate).slice(0,10),r.invVal,r.tax2b,r.igst2b,r.cgst2b,r.sgst2b,r.gst2b,r.rcm,r.period,r.src||'',r.gstinChk,r.nameChk,r.taxChk,r.gstChk,r.vchChk,r.spill,r.remarks,r.regnBk,r.gstinBk,(''+r.dateBk).slice(0,10),r.partyBk,r.vchBk,r.billBk,r.igstBk,r.cgstBk,r.sgstBk,r.gstBk,r.taxBk,r.tdsBk,r.note];}
 function colLetter(n){var s='';while(n>0){var m=(n-1)%26;s=String.fromCharCode(65+m)+s;n=(n-m-1)/26;}return s;}
 // Three colour bands, like the HTML sheet: the 2B side, the reconciliation
 // columns in the middle, and the books side — so it reads at a glance which
@@ -1733,7 +1753,7 @@ var BAND_2B={hdr:'FF2E75B6',cell:'FFDDEBF7'},   // blue   — from GSTR-2B
 // column index (1-based) → band. 1..14 = the return (2B/2A), 15..21 = checks,
 // 22..32 = books.
 function bandOf(ci){return ci<=14?BAND_2B:(ci<=21?BAND_RC:BAND_BK);}
-var AMT_COLS=[6,7,8,9,10,11,17,18,27,28,29,30,31,32]; // #,##0.00
+var AMT_COLS=[6,7,8,9,10,11,17,18,28,29,30,31,32,33]; // #,##0.00
 function exportXlsx(){
   if(!report||typeof ExcelJS==='undefined'){alert('Report or Excel library not ready.');return;}
   var wb=new ExcelJS.Workbook();
@@ -1749,31 +1769,32 @@ function exportXlsx(){
       var hasBoth=!!(r._b&&r._bk);
       // ---- live formulas: change any figure and the checks + remarks recompute
       if(r._b) row.getCell(11).value={formula:'SUM(H'+rn+':J'+rn+')',result:r.gst2b};        // K  GST (2B)
-      if(r._bk) row.getCell(30).value={formula:'SUM(AA'+rn+':AC'+rn+')',result:r.gstBk};     // AD GST as per Books
+      if(r._bk) row.getCell(31).value={formula:'SUM(AB'+rn+':AD'+rn+')',result:r.gstBk};     // AD GST as per Books
       /* The live formulas rebuild the VERDICT from the figures, so they only fit
          rows whose verdict is arithmetic. A credit/debit note is judged as a
          reversal, not as a purchase, and its remark would be rewritten into
          nonsense — so notes keep the text this tool computed. */
       if(hasBoth&&!r._isCN){
         row.getCell(15).value={formula:'IF(OR(B'+rn+'="",W'+rn+'=""),"—",UPPER(TRIM(B'+rn+'))=UPPER(TRIM(W'+rn+')))',result:r.gstinChk}; // O GSTIN check
-        row.getCell(17).value={formula:'G'+rn+'-AE'+rn,result:r.taxChk};                     // Q taxable check
-        row.getCell(18).value={formula:'K'+rn+'-AD'+rn,result:r.gstChk};                     // R GST check
-        // U remarks — wrong-registration wins, else amount/tax tolerance, else booked;
-        // the 2A / amended / [ITC blocked] tags stay appended (facts from the
-        // return, not arithmetic results).
-        var reg='IF(AND(A'+rn+'<>"",V'+rn+'<>"",UPPER(TRIM(A'+rn+'))<>UPPER(TRIM(V'+rn+'))),"booked - amount mismatch 🚩 wrong registration",'
-               +'IF(ABS(R'+rn+')>'+GSTTOL+',"booked - amount mismatch",'
-               +'IF(ABS(Q'+rn+')>MAX(10,ABS(G'+rn+')*0.005),"probable match — verify","booked")))';
-        var blocked=!!(r._b&&r._b.itcBlocked);
-        var amended=!!(r._b&&r._b.isAmend);
-        var only2a=!!(r._b&&r._b._only2a);
-        // Keep the suffix order identical to buildRec: base → · in 2A only → · amended → [ITC blocked].
-        row.getCell(21).value={formula:reg+(only2a?'&" · in 2A only"':'')+(amended?'&" · amended"':'')+(blocked?'&" [ITC blocked]"':''),result:r.remarks};// U remarks
+        row.getCell(17).value={formula:'G'+rn+'-AF'+rn,result:r.taxChk};                     // Q taxable check
+        row.getCell(18).value={formula:'K'+rn+'-AE'+rn,result:r.gstChk};                     // R GST check
+        /* The remark is NOT a formula, and must never be one again.
+           It used to recompute itself in Excel from three numbers — the
+           registration, the GST check and the taxable check — which is not how
+           the verdict is reached. A document the tool called "probable match —
+           verify" BECAUSE THE INVOICE NUMBERS DIFFER has a GST check of zero and
+           a taxable check of zero, so the formula overwrote it with "booked" the
+           moment the file was opened. Twenty-one Shree Rajasthan Gases documents
+           read "booked" beside a note that said, in the same row, "matched on
+           party and amount alone — this can pair the wrong two".
+           A cell that can contradict the tool's own reasoning is worse than a
+           static one. The arithmetic columns stay live, because they are the
+           arithmetic and cannot disagree with it. */
       }
       // ---- band tints on the body
       for(var ci=1;ci<=RECO_HDR.length;ci++){row.getCell(ci).fill={type:'pattern',pattern:'solid',fgColor:{argb:bandOf(ci).cell}};}
     });
-    ws.columns.forEach(function(c,i){c.width=[16,17,26,16,12,13,13,11,11,11,12,6,11,8,10,10,11,10,11,10,20,16,17,12,26,16,11,11,11,13,13,11,60][i]||12;});
+    ws.columns.forEach(function(c,i){c.width=[16,17,26,16,12,13,13,11,11,11,12,6,11,8,10,10,11,10,11,10,20,16,17,12,26,16,16,11,11,11,13,13,11,60][i]||12;});
     AMT_COLS.forEach(function(ci){ws.getColumn(ci).numFmt='#,##0.00';});
     ws.getColumn(20).numFmt='0'; // spillover (mth)
     ws.views=[{state:'frozen',ySplit:1,xSplit:0}];

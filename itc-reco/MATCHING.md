@@ -205,6 +205,46 @@ A taxable gap matters only when the invoice number does *not* vouch for the
 pairing: there the gap is evidence about whether this is even the right
 voucher, and it earns *verify*.
 
+### A cell that can contradict the tool is worse than a static one
+
+The exported remark used to be a live Excel formula, recomputing itself from
+three numbers: the registration, the GST check and the taxable check. That is
+not how the verdict is reached. A document the tool called **"probable match —
+verify" because the invoice numbers differ** has a GST check of zero and a
+taxable check of zero — so Excel overwrote it with "booked" the moment the file
+was opened.
+
+Twenty-one Shree Rajasthan Gases documents read `booked` beside a note that
+said, in the same row, *"matched on party and amount alone — this can pair the
+wrong two"*. The tool's real verdict survived only in the Note, and every count
+taken off that column — including two of my own comparisons between runs — was
+counting Excel's arithmetic, not the tool's reasoning.
+
+The remark is text now, and a test asserts it is never a formula again. The
+arithmetic columns stay live, because they *are* the arithmetic and cannot
+disagree with it.
+
+### Dates are evidence too
+
+Two rules came out of the same run:
+
+- **A document dated before the books were read cannot have its voucher in
+  them.** Shree Ganesh's `003` of 15-03-2025 — last year's, reported late in the
+  April 2025 2B — was married to a books voucher `003` dated 30-10-2025, a
+  different invoice of the same number in the next year. The ₹3,83,482.62
+  "difference" between them was the largest finding in the sheet and was not a
+  finding at all.
+- **Among candidates that are otherwise equal, the nearest in date wins.** Shree
+  Rajasthan Gases bills ₹216 twenty-one times a year, so every document ties
+  with every voucher on amount and the choice fell to file order — pairing a
+  January invoice with a May voucher eight months away.
+
+And the export now carries **Bill No (books)** beside **Vch No (books)**. They
+are different fields, a match may have been made on either, and a sheet printing
+only one cannot be audited: those 21 rows showed voucher `SRG/25-26/S1218`
+against document `2025-26/S6569` with no way to see which number, if any, had
+agreed.
+
 ## 7. A remark must be a finding, not a hedge
 
 The second tool the client compared against was, in their words, "more

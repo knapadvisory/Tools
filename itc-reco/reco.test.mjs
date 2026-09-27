@@ -56,6 +56,7 @@ const runAll = (bs, bks) => page.evaluate(([bs, bks]) => {
 const label = (b, bk) => page.evaluate(([b, bk]) => {
   booksRows = [bk];
   twoBRows = [b];
+  lastBooksMeta = { from: '', to: '' };
   loadedFiles = [{ name: 'x.json', count: 1, rows: [b] }];
   ['hIGST', 'hINTRA', 'hNIL'].forEach((id) => { const e = document.getElementById(id); if (e) e.checked = true; });
   reconcile();
@@ -73,6 +74,7 @@ const runJson = (files, bks) => page.evaluate(([files, bks]) => {
   });
   rebuild2b();
   booksRows = bks;
+  lastBooksMeta = { from: '', to: '' };   // no window known unless a test sets one
   ['hIGST', 'hINTRA', 'hNIL'].forEach((id) => { const e = document.getElementById(id); if (e) e.checked = true; });
   reconcile();
   const pick = (r) => ({ doc: r.docNo, src: r.src, cat: r._cat, remarks: r.remarks, note: r.note,
@@ -616,6 +618,53 @@ await t('an amendment that renumbers the document still supersedes the original'
     `and only the amended value counts, got ${live.gst2b}`);
 });
 
+console.log('\n── evidence the books cannot supply ──');
+await t('an invoice dated before the books were read is not matched to them', async () => {
+  /* Shree Ganesh's 003 of 15-03-2025 — last year's invoice, reported late in the
+     April 2025 2B — was married to a books voucher 003 dated 30-10-2025, a
+     different invoice of the same number in the next year. The ₹3,83,482.62
+     "difference" between them was the largest finding in the sheet, and it was
+     not a finding at all. */
+  const out = await page.evaluate(([b, bk]) => {
+    booksRows = [bk]; twoBRows = [b];
+    loadedFiles = [{ name: 'x.json', count: 1, rows: [b], src: '2B' }];
+    lastBooksMeta = { from: '2025-04-01', to: '2026-03-31' };
+    ['hIGST', 'hINTRA', 'hNIL'].forEach((id) => { const e = document.getElementById(id); if (e) e.checked = true; });
+    reconcile();
+    return report.recs.map((r) => ({ cat: r._cat, rem: r.remarks, vch: r.vchBk }));
+  }, [doc({ invNo: '003', party: 'Shree Ganesh Construction', gstin: '06AABCS1429B1ZX',
+            invDate: '2025-03-15', taxable: 1019541, igst: 0, cgst: 91758.69, sgst: 91758.69 }),
+      book({ voucherNo: '003', supplierInvNo: '003', ref: '', date: '2025-10-30',
+             party: 'Shree Ganesh Construction', gstin: '06AABCS1429B1ZX',
+             taxable: 3150000, igst: 0, cgst: 283500, sgst: 283500 })]);
+  const r = out.find((x) => x.cat !== 'superseded');
+  assert(!r.vch, `it must not take a voucher from a year that was not read, got "${r.vch}"`);
+  assert(/before fetched period/.test(r.rem), 'and must say why: ' + r.rem);
+});
+await t('among equal candidates the nearest in date wins', async () => {
+  /* Shree Rajasthan Gases bills ₹216 twenty-one times a year, so every document
+     ties with every voucher on amount and the choice fell to file order — a
+     January invoice paired with a May voucher eight months away. */
+  const gas = (no, date) => book({ voucherNo: no, supplierInvNo: '', ref: '', date,
+    party: 'Shree Rajasthan Gases', gstin: '08AABCS9999R1ZT',
+    taxable: 1200, igst: 216, cgst: 0, sgst: 0 });
+  const out = await page.evaluate(([bs, bks]) => {
+    booksRows = bks; twoBRows = bs;
+    loadedFiles = [{ name: 'x.json', count: bs.length, rows: bs, src: '2B' }];
+    lastBooksMeta = { from: '2025-04-01', to: '2026-03-31' };
+    ['hIGST', 'hINTRA', 'hNIL'].forEach((id) => { const e = document.getElementById(id); if (e) e.checked = true; });
+    reconcile();
+    return report.recs.map((r) => ({ doc: r.docNo, vch: r.vchBk, gap: r.spill }));
+  }, [[doc({ invNo: 'S/1', party: 'Shree Rajasthan Gases', gstin: '08AABCS9999R1ZT',
+             invDate: '2026-01-02', taxable: 1200, igst: 216 }),
+       doc({ invNo: 'S/2', party: 'Shree Rajasthan Gases', gstin: '08AABCS9999R1ZT',
+             invDate: '2025-05-22', taxable: 1200, igst: 216 })],
+      [gas('SRG/A', '2025-05-22'), gas('SRG/B', '2026-01-02')]]);
+  const jan = out.find((r) => r.doc === 'S/1'), may = out.find((r) => r.doc === 'S/2');
+  assert(jan.vch === 'SRG/B', `the January document belongs to the January voucher, got "${jan.vch}"`);
+  assert(may.vch === 'SRG/A', `and May's to May's, got "${may.vch}"`);
+});
+
 console.log('\n── the books number vouchers in their own series ──');
 await t('a shared number does not pair two different suppliers', async () => {
   /* The real pair from the first full run: 2B says SANGEETHA ELECTRIC
@@ -783,8 +832,9 @@ await t('every formula in the export points at the column it means', async () =>
   const at = (n) => hdr[n - 1];
   const want = { 7: 'Taxable (2B)', 11: 'GST (2B)', 14: 'Source', 15: 'GSTIN check',
     17: 'taxable check', 18: 'GST check', 20: 'spillover (mth)', 21: 'remarks',
-    22: 'Regn (books)', 23: 'GSTIN (books)', 27: 'IGST (books)', 29: 'SGST (books)',
-    30: 'GST as per Books', 31: 'Taxable (books)', 32: 'TDS (books)' };
+    22: 'Regn (books)', 23: 'GSTIN (books)', 26: 'Vch No (books)', 27: 'Bill No (books)',
+    28: 'IGST (books)', 30: 'SGST (books)', 31: 'GST as per Books',
+    32: 'Taxable (books)', 33: 'TDS (books)' };
   Object.keys(want).forEach((n) => assert(at(+n) === want[n],
     `column ${n} should be "${want[n]}", it is "${at(+n)}"`));
   const amt = await page.evaluate(() => AMT_COLS);
@@ -810,7 +860,8 @@ const xlsxOut = () => page.evaluate(() => new Promise((res, rej) => {
           res({ sheets: w.worksheets.map((s) => s.name),
                 hdr: ws.getRow(1).values.slice(1),
                 rows: ws.rowCount - 1,
-                formulas: [2, 3, 4, 5].map((n) => (ws.getRow(n).getCell(21).formula || '')) });
+                remarkIsFormula: [2, 3, 4, 5].some((n) => !!ws.getRow(n).getCell(21).formula),
+                formulas: [2, 3, 4, 5].map((n) => (ws.getRow(n).getCell(18).formula || '')) });
         }, function (e) { rej(String(e)); });
       };
       fr.readAsArrayBuffer(window.__blob);
@@ -834,11 +885,16 @@ await t('the workbook builds, with a sheet for the 2A-only documents', async () 
   assert(x.sheets.join(',') === 'reconciled,Credit Notes,2A only',
     'expected three sheets, got ' + x.sheets.join(','));
   assert(x.hdr[13] === 'Source', `column N should be Source, it is "${x.hdr[13]}"`);
-  assert(x.hdr.length === 33, `expected 33 columns, got ${x.hdr.length}`);
-  // the matched row carries the live remark formula; it must address R/Q/A/V
-  const f = x.formulas.find((s) => /booked/.test(s)) || '';
-  assert(/ABS\(R\d+\)/.test(f) && /ABS\(Q\d+\)/.test(f) && /TRIM\(V\d+\)/.test(f),
-    'the remark formula must follow the shifted columns: ' + f);
+  assert(x.hdr.length === 34, `expected 34 columns, got ${x.hdr.length}`);
+  /* The GST check stays a live formula — it is the arithmetic, and the columns
+     it addresses must be the right ones after every insertion. */
+  const f = x.formulas.find((s) => /K\d+/.test(s)) || '';
+  assert(/K\d+-AE\d+/.test(f), 'the GST check must be GST (2B) less GST per books: ' + f);
+  /* The remark must NOT be a formula. It used to recompute itself from three
+     numbers and overwrite the tool's verdict: a "probable match — verify" whose
+     amounts tie became "booked" the moment Excel opened the file. */
+  assert(x.remarkIsFormula === false,
+    'the remark must be the text the tool computed, not a formula that can contradict it');
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);
