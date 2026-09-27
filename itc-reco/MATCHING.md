@@ -330,6 +330,34 @@ on screen and on its own sheet — with the count, the GST, and what it usually
 means. One supplier's whole run missing is a question about the ledgers that
 were fetched, not about 674 omissions.
 
+### The three sources, reconciled exactly
+
+Three independent statements of the same year's 2B, and every rupee between
+them accounted for:
+
+```
+GSTN portal, "ITC auto-drafted in GSTR-2B",
+returns Apr-25 to Mar-26, all three registrations
+                                          IGST 11,07,87,376.84   CGST 3,06,23,349.03
+  add reverse charge and blocked ITC
+      (the portal's column excludes both)        +42,531.00          +3,42,265.19
+  add FY 2025-26 invoices filed late, in
+      the April and May 2026 returns            +8,24,214.83         +9,55,077.10
+                                          ----------------------------------------
+  = this tool                             IGST 11,16,54,122.67   CGST 3,19,20,691.32
+
+  less 2 supplier DEBIT notes Computax
+      subtracts instead of adding                -24,336.00                  0.00
+  add 3 amendment originals Computax
+      counts twice                                     0.00          +71,966.25
+                                          ----------------------------------------
+  = Computax 2A-vs-2B sheet               IGST 11,16,29,786.67   CGST 3,19,92,657.57
+```
+
+Both differences from Computax are ones where the tool is right: an amendment
+*restates* a document rather than adding one (rule 9), and a supplier's debit
+note *increases* the tax rather than reducing it (rule 5).
+
 ### Verified against the GST portal's own figures
 
 The client supplied the portal's *Tax liability and ITC comparison* report for
@@ -337,7 +365,10 @@ all three registrations — the GSTN's own month-wise statement of ITC auto-draf
 in GSTR-2B. Our parse was compared to it for every one of the 27 return periods:
 
 **In all 27, the difference is exactly the file's reverse-charge block.** No
-exceptions, no residue. The portal's auto-drafted column excludes inward supplies
+exceptions, no residue. Put on the portal's own basis — excluding reverse charge
+and blocked ITC, counting each document once — the tool's figure ties to the
+portal's **per registration, per month, to 0.00**, including Haryana's March
+2026, the one file with no `itcsumm` to check itself against. The portal's auto-drafted column excludes inward supplies
 liable to reverse charge (they sit in its own RCM sheet); we include them. Add
 them back and every period ties to the paisa.
 
