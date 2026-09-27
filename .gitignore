@@ -8,3 +8,6 @@ data/
 *.db
 *.db-wal
 *.db-shm
+
+# Connector runtime logs — written beside the connector, never committed.
+connector/knap-connector-*.log

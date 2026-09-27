@@ -16,6 +16,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import http from 'node:http';
 
 const SELF = path.dirname(new URL(import.meta.url).pathname);
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'knap-conn-'));
@@ -24,7 +25,8 @@ fs.copyFileSync(path.join(SELF, 'knap-tally-connector.mjs'), copy);
 
 const PORT = 8798 + (process.pid % 50);
 const proc = spawn(process.execPath, [copy], {
-  env: { ...process.env, PORT: String(PORT) }, stdio: ['ignore', 'pipe', 'pipe'],
+  // a small cap so the oversize test does not need 350 MB to prove the point
+  env: { ...process.env, PORT: String(PORT), KNAP_MAX_TALLY_MB: '8' }, stdio: ['ignore', 'pipe', 'pipe'],
 });
 let log = '';
 proc.stdout.on('data', (d) => { log += d; });
@@ -83,6 +85,39 @@ try {
   t('no request timeout caps a long read', /server\.requestTimeout\s*=\s*0/.test(src));
   t('uncaught errors are trapped rather than fatal',
     /process\.on\('uncaughtException'/.test(src) && /process\.on\('unhandledRejection'/.test(src));
+  /* The trail that has to survive the death itself. */
+  const traceFile = path.join(dir, 'knap-connector-trace.log');
+  t('a trace file is written at startup', fs.existsSync(traceFile));
+  const tr = fs.existsSync(traceFile) ? fs.readFileSync(traceFile, 'utf8') : '';
+  t('it records the heap ceiling, which decides whether a big read survives',
+    /heapLimitMB/.test(tr), tr.slice(0, 200));
+  t('and it recorded the failed read, with where it got to',
+    /ITC read START/.test(tr) && /READ FAILED/.test(tr), tr.slice(-300));
+
+  /* A Tally that answers with more than the connector will hold. The point is
+     that this is an ERROR the preparer can act on, not a process that vanishes. */
+  const big = http.createServer((q, s2) => {
+    s2.writeHead(200, { 'content-type': 'text/xml' });
+    const chunk = Buffer.alloc(1024 * 1024, 0x20);
+    let sent = 0;
+    const pump = () => {
+      while (sent < 12 * 1024 * 1024) { sent++; if (!s2.write(chunk)) return s2.once('drain', pump); }
+      s2.end();
+    };
+    pump();
+  });
+  await new Promise((r) => big.listen(0, '127.0.0.1', r));
+  const bigPort = big.address().port;
+  const r2 = await fetch(base + '/api/itc/register', { method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ url: 'http://127.0.0.1:' + bigPort, company: 'X',
+      from: '2025-04-01', to: '2026-03-31', taxLedgers: [{ name: 'Input IGST', kind: 'igst' }] }) });
+  const j2 = await r2.json();
+  big.close();
+  t('an oversized Tally answer is refused with a message, not a crash',
+    j2 && j2.ok === false && /more than \d+ MB/.test(j2.error || ''), JSON.stringify(j2).slice(0, 200));
+  t('the connector is still alive after refusing it',
+    await until(() => get('/api/dc/progress').then(() => true), 3000));
 } finally {
   proc.kill();
 }

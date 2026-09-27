@@ -26,8 +26,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import v8 from 'node:v8';
 
-const VERSION = '4.64';
+const VERSION = '4.65';
 // Bumped WITH connector/version.json — the two are compared to decide a
 // self-update, so a mismatch either loops every connector in the field or
 // hides the build. connector/version.test.mjs fails the pair apart.
@@ -36,6 +37,26 @@ const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
 // Where an unexpected death is written down, so it outlives the console window.
 const CRASH_LOG = path.join(path.dirname(SELF), 'knap-connector-errors.log');
+/* A breadcrumb trail, written SYNCHRONOUSLY as the work happens.
+   The connector runs invisibly under a run-loop that restarts it five seconds
+   after it dies, so console output goes nowhere and a crash leaves the page
+   looking at a connector that is simply "not answering". Worse, the deaths that
+   matter most — V8 running out of heap on a very large Tally response — abort
+   the process without ever reaching an uncaughtException handler. Nothing
+   written after the fact can survive that. Only something written BEFORE. */
+const TRACE_LOG = path.join(path.dirname(SELF), 'knap-connector-trace.log');
+function trace(msg, extra) {
+  const mem = process.memoryUsage();
+  const line = `[${new Date().toISOString()}] rss=${(mem.rss / 1048576) | 0}M heap=${(mem.heapUsed / 1048576) | 0}M  ${msg}`
+    + (extra ? '  ' + JSON.stringify(extra) : '') + '\n';
+  try {
+    // Keep it small; the last run is what matters, not every run ever.
+    if (fs.existsSync(TRACE_LOG) && fs.statSync(TRACE_LOG).size > 2 * 1024 * 1024) {
+      fs.writeFileSync(TRACE_LOG, '(trimmed)\n');
+    }
+    fs.appendFileSync(TRACE_LOG, line);
+  } catch { /* tracing must never be the thing that kills it */ }
+}
 // The last uncaught error, handed to the page so a dead read can explain itself.
 let lastFatal = null;
 const HUB = process.env.KNAP_HUB || 'https://apps.knapadvisory.com';
@@ -307,13 +328,35 @@ const finProgress = { active: false, phase: '', step: 0, steps: 3 };
 // to free a Tally that's busy serving a heavy request (aborting our wait alone
 // leaves Tally computing). Also lets us cancel cleanly when a tab is closed.
 let currentTallyAbort = null;
+/* How much XML we will take from Tally in one answer before refusing it.
+   `res.text()` buffers the whole body with no limit: ask a big company for a
+   wide window and Tally will happily send hundreds of megabytes, which V8 kills
+   the process over — no exception, no log, just a connector that vanished. The
+   body is streamed and counted now, so an answer that big becomes an error the
+   preparer can act on instead of a disappearance nobody can explain. */
+const MAX_TALLY_MB = Number(process.env.KNAP_MAX_TALLY_MB || 350);
 async function tallyFetch(tallyUrl, body, ms) {
   const ctl = new AbortController();
   currentTallyAbort = ctl;
   const timer = ms ? setTimeout(() => ctl.abort(new Error('Tally request timed out')), ms) : null;
   try {
     const res = await fetch(tallyUrl, { method: 'POST', body, headers: { 'content-type': 'text/xml' }, signal: ctl.signal });
-    return await res.text();
+    if (!res.body) return await res.text();
+    const cap = MAX_TALLY_MB * 1024 * 1024;
+    const chunks = []; let bytes = 0;
+    for await (const chunk of res.body) {
+      bytes += chunk.length;
+      if (bytes > cap) {
+        try { ctl.abort(); } catch { /* already gone */ }
+        trace('TALLY RESPONSE OVER CAP — refused', { mb: Math.round(bytes / 1048576), capMb: MAX_TALLY_MB });
+        throw new Error(`Tally sent more than ${MAX_TALLY_MB} MB for one request. That is too much to hold in memory — read a shorter period, or fewer ledgers at a time. (Raise the cap with KNAP_MAX_TALLY_MB if this machine has the memory.)`);
+      }
+      chunks.push(chunk);
+    }
+    const buf = Buffer.concat(chunks, bytes);
+    chunks.length = 0;                       // let the pieces go before decoding
+    if (bytes > 20 * 1024 * 1024) trace('large Tally response', { mb: Math.round(bytes / 1048576) });
+    return buf.toString('utf8');
   } finally {
     if (timer) clearTimeout(timer);
     if (currentTallyAbort === ctl) currentTallyAbort = null;
@@ -2954,8 +2997,14 @@ const ROUNDOFF_LEDGER_RX = /round(ing)?\s*-?\s*off|\brounding\b/i;
 // Voucher-dense books fail fast (never freeze Tally).
 async function readItcRegister(url, company, from, to, taxLedgers) {
   const saved = state.settings.company; state.settings.company = company || '';
+  trace('ITC read START', { company, url,
+    from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10),
+    ledgers: taxLedgers.map((t) => t.name) });
   try {
-    const masters = parseLedgerMasters(await askTallyFast(url, LEDGER_MASTERS_REQUEST(), 180000));
+    const mastersXml = await askTallyFast(url, LEDGER_MASTERS_REQUEST(), 180000);
+    trace('ledger masters read', { chars: mastersXml.length });
+    const masters = parseLedgerMasters(mastersXml);
+    trace('ledger masters parsed', { ledgers: Object.keys(masters).length });
     const kindOf = new Map();
     for (const t of taxLedgers) if (t && t.name && t.kind) kindOf.set(norm(t.name), t.kind);
     const fromKey = from.getUTCFullYear() * 10000 + (from.getUTCMonth() + 1) * 100 + from.getUTCDate();
@@ -2989,9 +3038,11 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
       const probeEnd = new Date(Math.min(to.getTime(), from.getTime() + 20 * DAY_MS));
       let want = null, plainCount = 0;
       try {
+        trace('probe: day book, 20 days', { to: probeEnd.toISOString().slice(0, 10) });
         const plain = await tallyFetch(url, dcVoucherRequest(from, probeEnd, ITC_FETCH), 90000);
         want = itcGuids(plain);
         plainCount = (plain.match(/<VOUCHER[\s>]/gi) || []).length;
+        trace('probe done', { chars: plain.length, vouchers: plainCount, itcVouchers: want.size });
       } catch (e) {
         if (/released/i.test(String(e && e.message))) throw e;
       }
@@ -3012,7 +3063,10 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
             for (const nm of ledgerNames) {
               if (dcCancel) throw new Error('released by user');
               dcProgress.sub = `trying ${shape.what} on “${nm}”…`;
-              probeParts.push(await tallyFetch(url, ledgerVouchersRequest(nm, from, probeEnd, shape), 90000));
+              trace('probe shape', { shape: shape.what, ledger: nm });
+              const part = await tallyFetch(url, ledgerVouchersRequest(nm, from, probeEnd, shape), 90000);
+              trace('probe shape done', { shape: shape.what, ledger: nm, chars: part.length });
+              probeParts.push(part);
             }
             const got = itcGuids(probeParts.join(''));
             if (!got.size) continue;                       // this build will not answer that way
@@ -3022,9 +3076,14 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
             for (const nm of ledgerNames) {
               if (dcCancel) throw new Error('released by user');
               dcProgress.sub = `reading the vouchers of “${nm}”…`;
-              parts.push(await tallyFetch(url, ledgerVouchersRequest(nm, from, to, shape), 180000));
+              trace('full period read', { shape: shape.what, ledger: nm });
+              const part = await tallyFetch(url, ledgerVouchersRequest(nm, from, to, shape), 180000);
+              trace('full period read done', { shape: shape.what, ledger: nm, chars: part.length });
+              parts.push(part);
             }
             const full = parts.join('');
+            parts.length = 0;                 // one copy is enough to hold
+            trace('ledger-index read complete', { chars: full.length });
             if (!itcGuids(full).size) continue;
             ledgerXml = full;
             filterNote = `read straight from Tally's ledger index (${shape.what}) — ${ledgerNames.length} ledger request(s) instead of scanning the day book`;
@@ -4974,6 +5033,8 @@ const server = http.createServer(async (req, res) => {
         dcProgress.phase = 'Reading ledger masters from Tally…';
         const one = await readItcRegister(String(body.url || state.settings.tallyUrl), String(body.company || ''), from, to, taxLedgers);
         dcProgress.active = false;
+        trace('ITC read DONE', { rows: one.rows.length });
+        // (failures below are traced too — see the catch)
         // Distinct own-registrations seen in this company's vouchers, so the
         // tool can tell the user a single company holds several GST registrations.
         const registrations = [...new Set(one.rows.map((r) => r.ownGstin).filter(Boolean))].sort();
@@ -4983,6 +5044,7 @@ const server = http.createServer(async (req, res) => {
         const msg = /AGEING_TOO_DENSE/.test(String((e && e.message) || e))
           ? 'This company has too many vouchers to read invoice-by-invoice. Try a shorter period.'
           : ('Could not read Tally: ' + String((e && e.message) || e));
+        trace('READ FAILED', { error: String((e && e.message) || e) });
         json(res, 502, { ok: false, error: msg });
       }
       return;
@@ -5072,6 +5134,7 @@ const server = http.createServer(async (req, res) => {
         const msg = /AGEING_TOO_DENSE/.test(String((e && e.message) || e))
           ? 'This company has too many vouchers to read invoice-by-invoice. Try a shorter period.'
           : ('Could not read Tally: ' + String((e && e.message) || e));
+        trace('READ FAILED', { error: String((e && e.message) || e) });
         json(res, 502, { ok: false, error: msg });
       }
       return;
@@ -5409,6 +5472,44 @@ function noteFatal(kind, e) {
 }
 process.on('uncaughtException', (e) => noteFatal('uncaughtException', e));
 process.on('unhandledRejection', (e) => noteFatal('unhandledRejection', e));
+
+/* The installer starts the connector INVISIBLY, under a batch loop that brings
+   it back five seconds after it dies. Two consequences that cost a whole day of
+   diagnosis: everything printed goes nowhere, and a crash looks from the page
+   exactly like a connector that is merely "not answering" — by the time anyone
+   checks, it is up again.
+
+   So the connector repairs its own launcher on startup: a bigger heap, because
+   the deaths that reach here at all are V8 giving up on a large Tally response,
+   and stdout captured to a file so the next one leaves its own last words. The
+   file is only rewritten when it is the one we generated and has not already
+   been upgraded, and it takes effect on the next restart — which, given the
+   loop, is the next crash or the next self-update. */
+function ensureLauncher() {
+  try {
+    const dir = path.dirname(SELF);
+    const out = path.join(dir, 'knap-connector-out.log');
+    if (fs.existsSync(out) && fs.statSync(out).size > 2 * 1024 * 1024) fs.writeFileSync(out, '');
+    const bat = path.join(dir, 'run-loop.bat');
+    if (!fs.existsSync(bat)) return;                      // not an installed layout
+    const cur = fs.readFileSync(bat, 'utf8');
+    if (!/knap-tally-connector\.mjs/i.test(cur)) return;  // not ours to touch
+    if (/max-old-space-size/i.test(cur)) return;          // already upgraded
+    fs.writeFileSync(bat,
+      '@echo off\r\ntitle KNAP Tally Connector\r\ncd /d "' + dir + '"\r\n:loop\r\n'
+      + 'node --max-old-space-size=4096 knap-tally-connector.mjs >> knap-connector-out.log 2>&1\r\n'
+      + 'timeout /t 5 /nobreak >nul\r\ngoto loop\r\n');
+    trace('run-loop.bat upgraded — 4 GB heap, output captured to knap-connector-out.log (takes effect on the next restart)');
+  } catch (e) {
+    trace('could not upgrade run-loop.bat', { error: String((e && e.message) || e) });
+  }
+}
+ensureLauncher();
+// The heap ceiling is the number that decides whether a big read survives, so it
+// is the first thing in the trace.
+trace('connector started', { version: VERSION, node: process.version,
+  heapLimitMB: Math.round(v8.getHeapStatistics().heap_size_limit / 1048576),
+  maxTallyMB: MAX_TALLY_MB });
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log('');

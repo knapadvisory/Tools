@@ -489,7 +489,11 @@ function fetchItc(){
             errs.push((c.company||'company')+': the connector stopped answering mid-read. It is running now, so it was restarted or the read was interrupted — check its window, then try again.');
           next();
         }).catch(function(){
-          errs.push((c.company||'company')+': the connector is not answering at all. Its window has closed or it crashed — start it again and retry.');
+          /* Nothing is listening. The installer runs the connector under a loop
+             that brings it back five seconds after it dies, so the useful thing
+             to say is not "start it again" — by the time anyone looks it is up.
+             It is that the read killed it, and where the evidence is. */
+          errs.push((c.company||'company')+': the connector <b>died during this read</b> — nothing is listening now. It restarts itself within a few seconds, so try once more; if it dies again, send the two files beside the connector in <code>%LOCALAPPDATA%\\KnapTallyConnector</code> — <code>knap-connector-trace.log</code> (how far the read got) and <code>knap-connector-out.log</code> (its last words). A read that outgrows the memory it was given dies exactly like this.');
           next();
         });
       });

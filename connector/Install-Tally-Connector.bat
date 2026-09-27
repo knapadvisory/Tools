@@ -63,12 +63,16 @@ if not exist "%DIR%\gstr2b-tally-data.json" (
 )
 
 rem The run-loop: restarts the connector after a self-update (it exits 0).
+rem --max-old-space-size: a year of vouchers from a large company is a lot of
+rem XML to hold, and V8's default ceiling kills the process outright when it is
+rem reached - no error, no log, the connector simply vanishes mid-read.
+rem The redirect keeps its last words, since the launcher runs it invisibly.
 > "%DIR%\run-loop.bat" (
   echo @echo off
   echo title KNAP Tally Connector
   echo cd /d "%DIR%"
   echo :loop
-  echo node knap-tally-connector.mjs
+  echo node --max-old-space-size=4096 knap-tally-connector.mjs ^>^> knap-connector-out.log 2^>^&1
   echo timeout /t 5 /nobreak ^>nul
   echo goto loop
 )
