@@ -226,6 +226,7 @@
         <label class="lbl">To <input type="date" id="toDate" class="kdate"></label>
         <span id="fyQuick" class="fyq"></span>
         <button class="btn primary" id="btnFetch" onclick="fetchItc()">Fetch books ITC →</button>
+        <button class="btn ghost sm" onclick="downloadDiag()" title="Collect the connector's version, memory ceiling and logs into one file to send">⬇ Diagnostics</button>
       </div>
       <div class="prog" id="fetchProg" style="display:none"><i id="fetchBar"></i></div>
       <div class="prog-line" id="fetchLine" style="display:none"></div>
@@ -314,6 +315,28 @@ function doUpdate(){
    does nothing for a page still waiting on a request that will never answer,
    which is what made the button feel dead. The page abandons its own request
    first, so the screen frees immediately whatever the connector is doing. */
+/* One button instead of an errand. The two logs that explain a connector death
+   live inside %LOCALAPPDATA%, which is not a place to send someone mid-task. */
+function downloadDiag(){
+  fetch(API+'/api/diag').then(function(r){return r.json();}).then(function(d){
+    var L=[];
+    L.push('KNAP Tally Connector — diagnostics');
+    L.push('taken            : '+new Date().toString());
+    L.push('connector version: '+(d.version||'?')+'   node '+(d.node||'?')+'   '+(d.platform||''));
+    L.push('heap ceiling     : '+d.heapLimitMB+' MB   (used '+d.heapUsedMB+' MB, rss '+d.rssMB+' MB)');
+    L.push('max Tally answer : '+d.maxTallyMB+' MB');
+    L.push('uptime           : '+d.uptimeSec+'s   ← short uptime after a failed read means it died and restarted');
+    L.push('folder           : '+(d.dir||''));
+    L.push('');
+    L.push('== last uncaught error =='); L.push(d.lastFatal?(d.lastFatal.at+' '+d.lastFatal.kind+'\n'+d.lastFatal.message):'(none recorded)');
+    L.push(''); L.push('== trace (knap-connector-trace.log) =='); L.push(d.trace||'');
+    L.push(''); L.push('== stdout (knap-connector-out.log) =='); L.push(d.out||'');
+    L.push(''); L.push('== errors (knap-connector-errors.log) =='); L.push(d.errors||'');
+    dl('knap-connector-diagnostics.txt',new Blob([L.join('\n')],{type:'text/plain'}));
+  }).catch(function(){
+    alert('The connector is not answering, so its diagnostics cannot be collected from here.\n\nOpen this folder and send the .log files instead:\n%LOCALAPPDATA%\\KnapTallyConnector');
+  });
+}
 function releaseTally(){
   RELEASED=true;
   if(FETCH_ABORT){ try{FETCH_ABORT.abort();}catch(e){} FETCH_ABORT=null; }
@@ -493,7 +516,7 @@ function fetchItc(){
              that brings it back five seconds after it dies, so the useful thing
              to say is not "start it again" — by the time anyone looks it is up.
              It is that the read killed it, and where the evidence is. */
-          errs.push((c.company||'company')+': the connector <b>died during this read</b> — nothing is listening now. It restarts itself within a few seconds, so try once more; if it dies again, send the two files beside the connector in <code>%LOCALAPPDATA%\\KnapTallyConnector</code> — <code>knap-connector-trace.log</code> (how far the read got) and <code>knap-connector-out.log</code> (its last words). A read that outgrows the memory it was given dies exactly like this.');
+          errs.push((c.company||'company')+': the connector <b>died during this read</b> — nothing is listening now. It restarts itself within a few seconds, so wait a moment and press <b>⬇ Diagnostics</b> below: that collects how far the read got and what killed it into one file to send. A read that outgrows the memory it was given dies exactly like this.');
           next();
         });
       });

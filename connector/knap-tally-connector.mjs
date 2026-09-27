@@ -28,7 +28,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import v8 from 'node:v8';
 
-const VERSION = '4.65';
+const VERSION = '4.66';
 // Bumped WITH connector/version.json — the two are compared to decide a
 // self-update, so a mismatch either loops every connector in the field or
 // hides the build. connector/version.test.mjs fails the pair apart.
@@ -4534,6 +4534,38 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     // Live progress for the (long) side-by-side read, polled by the page.
+    /* Everything needed to diagnose a death, in one request. Asking a preparer to
+       find two log files inside %LOCALAPPDATA% is asking them to do the tool's
+       job; a button that downloads them is the same information without the
+       errand. Tails only — the end of a log is where the failure is. */
+    if (req.method === 'GET' && url.pathname === '/api/diag') {
+      const tail = (f, kb) => {
+        try {
+          if (!fs.existsSync(f)) return '(not written yet)';
+          const size = fs.statSync(f).size, want = kb * 1024;
+          const fd = fs.openSync(f, 'r');
+          const start = Math.max(0, size - want);
+          const buf = Buffer.alloc(Math.min(size, want));
+          fs.readSync(fd, buf, 0, buf.length, start);
+          fs.closeSync(fd);
+          return (start ? `…(earlier ${Math.round(start / 1024)} KB omitted)\n` : '') + buf.toString('utf8');
+        } catch (e) { return '(could not read: ' + String((e && e.message) || e) + ')'; }
+      };
+      const h = v8.getHeapStatistics();
+      json(res, 200, { ok: true, version: VERSION, node: process.version,
+        platform: process.platform,
+        heapLimitMB: Math.round(h.heap_size_limit / 1048576),
+        heapUsedMB: Math.round(h.used_heap_size / 1048576),
+        rssMB: Math.round(process.memoryUsage().rss / 1048576),
+        uptimeSec: Math.round(process.uptime()),
+        maxTallyMB: MAX_TALLY_MB,
+        dir: path.dirname(SELF),
+        lastFatal,
+        trace: tail(TRACE_LOG, 256),
+        out: tail(path.join(path.dirname(SELF), 'knap-connector-out.log'), 128),
+        errors: tail(CRASH_LOG, 64) });
+      return;
+    }
     if (req.method === 'GET' && url.pathname === '/api/dc/progress') {
       // Overall fraction = companies fully done + fraction of the current one.
       const frac = dcProgress.monthsTotal ? dcProgress.monthsDone / dcProgress.monthsTotal : 0;

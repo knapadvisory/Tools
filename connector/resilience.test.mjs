@@ -118,6 +118,14 @@ try {
     j2 && j2.ok === false && /more than \d+ MB/.test(j2.error || ''), JSON.stringify(j2).slice(0, 200));
   t('the connector is still alive after refusing it',
     await until(() => get('/api/dc/progress').then(() => true), 3000));
+  /* The diagnostics endpoint the page's button uses — one request instead of
+     sending someone into %LOCALAPPDATA% to find two files. */
+  const d = await get('/api/diag');
+  t('diagnostics reports the version and the heap ceiling',
+    d.ok && d.version && d.heapLimitMB > 0, JSON.stringify(d).slice(0, 160));
+  t('diagnostics carries the trace, which is where a death leaves its position',
+    typeof d.trace === 'string' && /ITC read START/.test(d.trace), String(d.trace).slice(0, 200));
+  t('and names the folder the logs live in', !!d.dir);
 } finally {
   proc.kill();
 }
