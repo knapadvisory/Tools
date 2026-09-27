@@ -40,12 +40,24 @@ Anything added to the scoring must keep this shape: a new signal that can
 accept a pair must also be able to say how firm it is, or it belongs in the
 ranking key rather than in `accept`.
 
-Zero padding is not a difference either. The supplier reports `005`, the books
-hold voucher `5`, and a preparer writes "different invoice no." against every
-one of them — 27 in the CGST run. `invPlain` strips the padding at the start of
-a number and after any letter, so `005` ↔ `5` and `INV/005` ↔ `INV/5` are the
-same number. The pair is still short after stripping, so rule 2 still applies
-and it does not carry the match alone.
+Zero padding is not a difference either, and it has to be stripped **before**
+the separators are. The supplier reports `SG/25-26/00111`, the books hold
+`SG/25-26/0111`, and squeezing out the punctuation first leaves `SG252600111`
+against `SG25260111` — two numbers no rule can join. `normInv` removes a run of
+zeros wherever a digit group starts, so `005` ↔ `5`, `INV/005` ↔ `INV/5` and
+`SG/25-26/00111` ↔ `SG/25-26/0111` all reduce alike. The pair is still short
+after stripping, so rule 2 still applies and it does not carry the match alone.
+
+A books voucher that has simply lost the financial year — `694` against the
+supplier's `694/25-26` — counts as strong evidence (2), not conclusive: the
+prefix alone could belong to another of his documents.
+
+**What is left over is signal.** Of the 117 documents the first real run put in
+"probable match — verify", only five were avoidable: three padding, two dropped
+years. The other **109 are numbers that genuinely differ by a digit or two** —
+`25-26/2856` against `25-26/2849`, `17` against `16`, `BB/17638` against
+`BB/17538` — matched on party and amount, and every one a real thing for a
+preparer to check.
 
 ## 2. A short number is a number, but it is not evidence on its own
 

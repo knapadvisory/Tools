@@ -390,6 +390,37 @@ await t('zero padding is not a different invoice number', async () => {
   assert(r.cat === 'matched', `expected booked, got ${r.cat} (${r.remarks})`);
   assert(!/verify/.test(r.remarks), 'nothing needs verifying: ' + r.remarks);
 });
+await t('padding inside the number is not a difference either', async () => {
+  /* The real SG/25-26/00111 against the books' SG/25-26/0111. The padding sits
+     after a "/", which a straight alphanumeric squeeze removes first — so the
+     two arrived as SG252600111 and SG25260111 and nothing could join them.
+     Three documents, ₹4,57,734.96 of GST, all reported "verify". */
+  const r = await label(doc({ invNo: 'SG/25-26/00111', party: 'S.G. PACKAGING AND CODING',
+                              gstin: '06AABCS7777K1Z4', taxable: 1430000, igst: 257400 }),
+                        book({ voucherNo: 'SG/25-26/0111', supplierInvNo: 'SG/25-26/0111', ref: '',
+                               party: 'S.G. PACKAGING AND CODING', gstin: '06AABCS7777K1Z4',
+                               taxable: 1430000, igst: 257400 }));
+  assert(r.cat === 'matched', `expected booked, got ${r.cat} (${r.remarks})`);
+});
+await t('a books voucher with the financial year dropped still matches', async () => {
+  // the real 694/25-26 in 2B against 694 in the books
+  const r = await label(doc({ invNo: '694/25-26', party: 'MADRAS STEELS & TUBES',
+                              gstin: '33AAACM1234L1ZP', taxable: 1382820, igst: 248907.6 }),
+                        book({ voucherNo: '694', supplierInvNo: '', ref: '',
+                               party: 'MADRAS STEELS & TUBES', gstin: '33AAACM1234L1ZP',
+                               taxable: 1382820, igst: 248907.6 }));
+  assert(r.cat === 'matched', `expected booked, got ${r.cat} (${r.remarks})`);
+});
+await t('but a number that is one digit out is still worth a look', async () => {
+  /* 25-26/2856 against 25-26/2849 — 109 of the client's 117 "verify" rows were
+     this, and every one of them is a real thing to check, not noise. */
+  const r = await label(doc({ invNo: '25-26/2856', party: 'MADHAV PIPES & TUBES',
+                              gstin: '06AAFCM5555J1ZQ', taxable: 1106890, igst: 199240.2 }),
+                        book({ voucherNo: '25-26/2849', supplierInvNo: '25-26/2849', ref: '',
+                               party: 'MADHAV PIPES & TUBES', gstin: '06AAFCM5555J1ZQ',
+                               taxable: 1106890, igst: 199240.2 }));
+  assert(r.cat === 'probable', `a different number must still be flagged, got ${r.cat} (${r.remarks})`);
+});
 await t('but padding alone still does not pair two suppliers', async () => {
   const r = await label(doc({ invNo: '005', party: 'Shree Ganesh Construction', gstin: '06AABCS1429B1ZX',
                               taxable: 4252170, igst: 765390.6 }),

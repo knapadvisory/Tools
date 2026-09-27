@@ -1016,7 +1016,19 @@ function dl(name,blob){var a=document.createElement('a');a.href=URL.createObject
 var report=null;
 var TAXTOL=1, TXVTOL=5;
 function normGstin(g){return String(g||'').toUpperCase().replace(/[^A-Z0-9]/g,'');}
-function normInv(x){return String(x||'').toUpperCase().replace(/[^A-Z0-9]/g,'');}
+/* An invoice number, reduced to what is actually distinctive about it.
+
+   Zero padding is stripped BEFORE the separators are, which is the whole point:
+   the supplier reports SG/25-26/00111 and the books hold SG/25-26/0111, and the
+   padding sits after a "/" that a straight alphanumeric squeeze removes first,
+   leaving SG252600111 against SG25260111 — two numbers that no rule can join.
+   Three of the client's documents (₹4,57,734.96 of GST) were reported as
+   "probable match — verify" for exactly this. */
+function normInv(x){
+  return String(x||'').toUpperCase()
+    .replace(/(^|[^0-9])0+(\d)/g,'$1$2')   // 00111 → 111, /0123 → /123, INV005 → INV5
+    .replace(/[^A-Z0-9]/g,'');
+}
 function bTax(r){return {igst:r.igst+(r.rcmIgst||0),cgst:r.cgst+(r.rcmCgst||0),sgst:r.sgst+(r.rcmSgst||0)};}
 function bGstTotal(r){var t=bTax(r);return t.igst+t.cgst+t.sgst;}
 function uniq(a){var s={},o=[];a.forEach(function(x){if(x&&!s[x]){s[x]=1;o.push(x);}});return o;}
@@ -1034,20 +1046,20 @@ function invBest(bInv,r){
   invCands(r).forEach(function(c){var s=invMatch(bInv,c);if(s>im){im=s;len=Math.min(bInv.length,c.length);}});
   return {im:im,len:len};
 }
-// A number with its zero padding removed: "005" → "5", "INV005" → "INV5".
-function invPlain(s){return String(s||'').replace(/^0+(\d)/,'$1').replace(/([A-Z])0+(\d)/g,'$1$2');}
+/* The tail a books voucher usually loses: the financial year the supplier puts
+   on his invoice and the accountant does not type. 694/25-26 in 2B against 694
+   in the books, 106/2025-26 against 106. */
+var FY_TAIL=/^(20)?\d{2}(20)?\d{2}$/;
 // Invoice-number similarity: 3 exact, 2 one is a suffix of the other (len≥3 —
 // catches "100" ↔ "26-27/100"), 1 one contains the other (len≥5), else 0.
 function invMatch(a,b){
   if(!a||!b)return 0;
   if(a===b)return 3;
-  /* Zero-padding is not a difference. The supplier reports 005, the books hold
-     voucher 5, and a preparer then writes "different invoice no." against every
-     one of them by hand. Stripping the padding — at the start, and after any
-     letter — makes 005 and 5, or INV/005 and INV/5, the same number. The pair
-     is still only two characters long after stripping, so it does not carry the
-     match on its own (see invBest / invAlone). */
-  if(invPlain(a)===invPlain(b))return 3;
+  /* One is the other with the financial year dropped — a books voucher typed
+     as 694 against the supplier's 694/25-26. Strong evidence, not conclusive,
+     because the prefix alone could belong to another document of his. */
+  var lo=a.length<b.length?a:b, hi=a.length<b.length?b:a;
+  if(lo.length>=3&&hi.indexOf(lo)===0&&FY_TAIL.test(hi.slice(lo.length)))return 2;
   var mn=Math.min(a.length,b.length);
   if(mn>=3&&(a.slice(-mn)===b.slice(-mn)))return 2;
   if(mn>=5&&(a.indexOf(b)>=0||b.indexOf(a)>=0))return 1;
