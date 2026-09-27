@@ -365,6 +365,30 @@ Both differences from Computax are ones where the tool is right: an amendment
 *restates* a document rather than adding one (rule 9), and a supplier's debit
 note *increases* the tax rather than reducing it (rule 5).
 
+### The workbook ties itself out now
+
+Everything above was done by hand. The Excel carries a **Tie-out** sheet that
+does it every run: enter the portal's Total for "ITC auto-drafted in GSTR-2B"
+once per registration in step 4, and the sheet walks from that figure to this
+tool's, line by line —
+
+```
+portal: ITC auto-drafted in GSTR-2B                     (entered)
+  add reverse charge                        (portal reports it separately)
+  add ITC blocked in 2B, itcavl = N         (portal excludes it)
+  add invoices filed late, in a return after the year
+  add amendments restating a year not read  (portal shows only the change)
+  = expected on this tool's basis
+  this tool
+  difference — nil, or a question
+```
+
+Against the client's 34 returns and their three portal reports the difference is
+**0.00 on every head of every registration**. The last line of that bridge was
+earned: ₹125.82 sat unexplained until it turned out to be a Bharti Airtel
+invoice the supplier amended in October 2025 whose original belongs to
+FY 2024-25 — a year none of the loaded returns covers.
+
 ### Verified against the GST portal's own figures
 
 The client supplied the portal's *Tax liability and ITC comparison* report for

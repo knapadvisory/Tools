@@ -267,6 +267,11 @@
         <label class="chk" style="display:inline-flex"><input type="checkbox" id="hNIL" checked> <span>no tax (nil-rated / exempt) <i id="cNIL" class="k"></i></span></label>
         <div id="headWhy" class="lbl" style="margin-top:8px"></div>
       </div>
+      <div id="portalTie" class="hide" style="margin:0 0 14px;padding:12px 14px;border:1px solid #d8d8d8;border-radius:10px;background:#fafafa;width:100%">
+        <b>Tie out to the GST portal <span class="k" style="font-weight:400">— optional</span></b>
+        <div class="lbl" style="margin:4px 0 8px">From the portal’s <b>Tax liability and ITC comparison</b> report, the <b>Total</b> row of <b>“ITC auto-drafted in GSTR-2B”</b> (sheet: ITC other than IMPG). Enter it once per registration and the Excel gains a <b>Tie-out</b> sheet that reconciles this tool’s 2B figure to GSTN’s, line by line. Leave blank to skip — the sheet is still produced, showing what the total is made of.</div>
+        <div id="portalRows"></div>
+      </div>
       <button class="btn primary" id="btnReco" onclick="reconcile()" disabled>RECONCILE →</button>
       <button class="btn ghost sm" id="btnClear2b" onclick="clear2b()" style="display:none">Clear 2B files</button>
     </div>
@@ -780,6 +785,7 @@ function renderFiles(){
   $('btnReco').disabled=twoBRows.length===0;
   $('btnClear2b').style.display=loadedFiles.length?'':'none';
   renderHeadPick();
+  renderPortalTie();
 }
 
 /* Which tax head a 2B invoice fell under. An invoice is either inter-state
@@ -827,6 +833,95 @@ function renderHeadPick(){
   else if($('hIGST').checked&&booksRows.length&&!bh2.IGST) warn='⚠ The books you fetched hold no IGST at all — every IGST 2B invoice will read as “not in books”. Fetch the IGST input ledger too, or untick this head.';
   $('headWhy').innerHTML=(left? left+' 2B invoice(s) will be set aside as outside the heads you picked. ':'')
     +(warn?'<span style="color:var(--bad)">'+warn+'</span>':'');
+}
+/* ---- tie-out to the portal ------------------------------------------------
+   The GST portal publishes, per registration, the ITC its own systems drafted
+   into GSTR-2B for the year. That is the only outside figure this tool can be
+   checked against, and checking against it by hand is how the last four
+   differences were found — so the workbook does it every run instead.
+
+   The two are not on the same basis, and the whole value of the sheet is that
+   it says exactly how they differ rather than hiding it:
+     · the portal's column excludes reverse charge (it has its own sheet for it)
+       and excludes ITC it has marked unavailable;
+     · the portal's year is the twelve RETURNS April to March, while a proper
+       reconciliation also reads the April and May returns after it, where the
+       year's late-filed invoices land.
+   Add those back and the two must agree. Anything left over is a question. */
+var portalFig={};
+function renderPortalTie(){
+  var box=$('portalTie'); if(!box) return;
+  var regns=[];
+  twoBRows.forEach(function(r){var k=normGstin(r.regn);if(k&&regns.indexOf(k)<0)regns.push(k);});
+  if(!regns.length){box.classList.add('hide');return;}
+  box.classList.remove('hide');
+  regns.sort();
+  $('portalRows').innerHTML='<table class="mtx" style="width:auto"><thead><tr><th>Registration</th>'
+    +'<th class="r">IGST</th><th class="r">CGST</th><th class="r">SGST</th></tr></thead><tbody>'
+    +regns.map(function(g){
+      var v=portalFig[g]||{};
+      return '<tr><td class="mono">'+esc(g)+'</td>'
+        +['igst','cgst','sgst'].map(function(h){
+          return '<td><input type="text" inputmode="decimal" style="width:130px;text-align:right" '
+            +'data-regn="'+esc(g)+'" data-head="'+h+'" class="portalIn" value="'+(v[h]==null?'':esc(String(v[h])))+'"></td>';
+        }).join('')+'</tr>';}).join('')
+    +'</tbody></table>';
+  Array.prototype.forEach.call(document.querySelectorAll('.portalIn'),function(el){
+    el.addEventListener('change',function(){
+      var g=el.getAttribute('data-regn'),h=el.getAttribute('data-head');
+      (portalFig[g]||(portalFig[g]={}))[h]=num(el.value);
+    });
+  });
+}
+/* Which financial year the returns loaded are mostly about — the year the
+   portal's figure covers. Named by its starting calendar year. */
+function fyOfReturns(rows){
+  var c={};
+  rows.forEach(function(r){
+    var n=ymNumOfPeriod(r.period);if(!n)return;
+    var y=Math.floor(n/100),m=n%100,fy=(m>=4?y:y-1);
+    c[fy]=(c[fy]||0)+1;
+  });
+  var best=null;Object.keys(c).forEach(function(k){if(best===null||c[k]>c[best])best=k;});
+  return best===null?null:Number(best);
+}
+/* Every line of the bridge, per registration. Works off every document parsed,
+   whatever bucket the reconciliation put it in, because the portal's figure
+   covers the return whole. */
+function tieOutRows(){
+  var all=twoBRows.concat(setAside2b||[],superseded2b||[],rcmAside2b||[],nextPeriod2b||[]);
+  var fy=fyOfReturns(all);
+  var byRegn={};
+  var Z=function(){return {n:0,igst:0,cgst:0,sgst:0};};
+  var add=function(o,r,sign){sign=sign||1;o.n++;
+    o.igst=r2(o.igst+sign*(+r.igst||0));o.cgst=r2(o.cgst+sign*(+r.cgst||0));o.sgst=r2(o.sgst+sign*(+r.sgst||0));};
+  /* Every document that is NOT an amendment, by the identity an amendment would
+     reach for. An amendment whose original is missing from this set is restating
+     something reported in a year we did not read — the portal's figure then
+     carries only the change in value while this tool carries the document, and
+     that is a line of the bridge rather than a residue nobody can explain. */
+  var known={};
+  all.forEach(function(r){
+    if(r.isAmend)return;
+    known[normGstin(r.gstin)+'|'+normInv(r.invNo)+'|'+(r.isCN?'C':'I')+'|'+fyOf(r.invDate,r.period)]=1;
+  });
+  all.forEach(function(r){
+    var k=normGstin(r.regn)||'(unstated)';
+    var o=byRegn[k]||(byRegn[k]={all:Z(),sup:Z(),nextFy:Z(),live:Z(),rcm:Z(),blocked:Z(),late:Z(),amendOut:Z()});
+    add(o.all,r);
+    if(r._superseded){add(o.sup,r);return;}
+    var d=ymd(r.invDate),iy=d?(d.mo>=4?d.y:d.y-1):null;
+    if(fy!=null&&iy!=null&&iy>fy){add(o.nextFy,r);return;}
+    add(o.live,r);
+    var p=ymNumOfPeriod(r.period),py=p?(p%100>=4?Math.floor(p/100):Math.floor(p/100)-1):null;
+    if(fy!=null&&py!=null&&py>fy){add(o.late,r);return;}     // filed in a later return
+    if(r.isAmend&&!known[normGstin(r.gstin)+'|'+normInv(r.origNo||r.invNo)+'|'+(r.isCN?'C':'I')+'|'+fyOf(r.origDt||r.invDate,r.period)]){
+      add(o.amendOut,r);return;                              // restates a year we did not read
+    }
+    if(r.rcm)add(o.rcm,r);
+    else if(r.itcBlocked)add(o.blocked,r);                   // each document counted once
+  });
+  return {fy:fy,byRegn:byRegn};
 }
 function selectedHeads(){
   var out=[];
@@ -1795,6 +1890,77 @@ var BAND_2B={hdr:'FF2E75B6',cell:'FFDDEBF7'},   // blue   — from GSTR-2B
 // 22..32 = books.
 function bandOf(ci){return ci<=14?BAND_2B:(ci<=21?BAND_RC:BAND_BK);}
 var AMT_COLS=[6,7,8,9,10,11,17,18,28,29,30,31,32,33]; // #,##0.00
+/* The tie-out, written whether or not a portal figure was entered: without one
+   it still says what the total is made of, which is half the answer. */
+function addTieOutSheet(wb){
+  var t=tieOutRows(),regns=Object.keys(t.byRegn).sort();
+  if(!regns.length)return;
+  var ws=wb.addWorksheet('Tie-out');
+  var HEAD={hdr:'FF2E75B6',cell:'FFDDEBF7'};
+  function row(label,vals,opt){
+    opt=opt||{};
+    var r=ws.addRow([label,vals?vals.igst:'',vals?vals.cgst:'',vals?vals.sgst:'',vals?vals.n:'']);
+    if(opt.bold)r.font={bold:true};
+    if(opt.fill)for(var i=1;i<=5;i++)r.getCell(i).fill={type:'pattern',pattern:'solid',fgColor:{argb:opt.fill}};
+    return r;
+  }
+  var hr=ws.addRow(['Tie-out to the GST portal','IGST','CGST','SGST','documents']);
+  hr.font={bold:true,color:{argb:'FFFFFFFF'}};
+  for(var c=1;c<=5;c++)hr.getCell(c).fill={type:'pattern',pattern:'solid',fgColor:{argb:HEAD.hdr}};
+  ws.addRow([]);
+  ws.addRow(['The portal figure is the Total row of "ITC auto-drafted in GSTR-2B" in its Tax liability and ITC comparison report.']);
+  ws.addRow(['It excludes reverse charge and ITC it has marked unavailable, and its year is the twelve returns April to March.']);
+  ws.addRow(['This tool also reads the April and May returns after the year, where that year’s late-filed invoices land.']);
+  ws.addRow([]);
+  var grand={p:{igst:0,cgst:0,sgst:0},exp:{igst:0,cgst:0,sgst:0},ours:{igst:0,cgst:0,sgst:0},any:false};
+  regns.forEach(function(g){
+    var o=t.byRegn[g],pf=portalFig[g]||{};
+    var P={igst:num(pf.igst),cgst:num(pf.cgst),sgst:num(pf.sgst),n:''};
+    var any=!!(P.igst||P.cgst||P.sgst);
+    var exp={n:'',igst:0,cgst:0,sgst:0};
+    ['igst','cgst','sgst'].forEach(function(h){
+      exp[h]=r2(P[h]+o.rcm[h]+o.blocked[h]+o.late[h]+o.amendOut[h]);
+      grand.p[h]=r2(grand.p[h]+P[h]);grand.exp[h]=r2(grand.exp[h]+exp[h]);grand.ours[h]=r2(grand.ours[h]+o.live[h]);
+    });
+    if(any)grand.any=true;
+    row(g+(t.fy!=null?'   (FY '+t.fy+'-'+String(t.fy+1).slice(2)+')':''),null,{bold:true,fill:'FFF2F2F2'});
+    row('  documents in the returns loaded',o.all);
+    row('  less superseded by a later amendment',neg(o.sup));
+    row('  less invoices dated in the next financial year',neg(o.nextFy));
+    row('  = 2B for the year, on this tool’s basis',o.live,{bold:true});
+    row('      of which reverse charge',o.rcm);
+    row('      of which ITC blocked in 2B (itcavl = N)',o.blocked);
+    row('      of which filed late, in a return after the year',o.late);
+    row('      of which amend a document from a year not read',o.amendOut);
+    ws.addRow([]);
+    row('  portal: ITC auto-drafted in GSTR-2B',any?P:{igst:'not entered',cgst:'',sgst:'',n:''});
+    if(any){
+      row('  add reverse charge',o.rcm);
+      row('  add ITC blocked in 2B',o.blocked);
+      row('  add filed late, in a return after the year',o.late);
+      row('  add amendments restating a year not read (portal shows only the change)',o.amendOut);
+      row('  = expected on this tool’s basis',exp,{bold:true});
+      var diff={n:'',igst:r2(o.live.igst-exp.igst),cgst:r2(o.live.cgst-exp.cgst),sgst:r2(o.live.sgst-exp.sgst)};
+      var nil=!diff.igst&&!diff.cgst&&!diff.sgst;
+      row(nil?'  difference — nil, the two agree':'  DIFFERENCE — look into this',diff,
+          {bold:true,fill:nil?'FFE2EFDA':'FFFCE4E4'});
+    }
+    ws.addRow([]);
+  });
+  if(regns.length>1&&grand.any){
+    row('ALL REGISTRATIONS',null,{bold:true,fill:'FFF2F2F2'});
+    row('  portal: ITC auto-drafted in GSTR-2B',Object.assign({n:''},grand.p));
+    row('  = expected on this tool’s basis',Object.assign({n:''},grand.exp),{bold:true});
+    row('  this tool',Object.assign({n:''},grand.ours),{bold:true});
+    var d={n:'',igst:r2(grand.ours.igst-grand.exp.igst),cgst:r2(grand.ours.cgst-grand.exp.cgst),sgst:r2(grand.ours.sgst-grand.exp.sgst)};
+    var ok=!d.igst&&!d.cgst&&!d.sgst;
+    row(ok?'  difference — nil, the two agree':'  DIFFERENCE — look into this',d,{bold:true,fill:ok?'FFE2EFDA':'FFFCE4E4'});
+  }
+  ws.columns.forEach(function(c,i){c.width=[54,18,18,18,12][i]||12;});
+  [2,3,4].forEach(function(ci){ws.getColumn(ci).numFmt='#,##0.00';});
+  ws.views=[{state:'frozen',ySplit:1}];
+}
+function neg(o){return {n:o.n,igst:r2(-o.igst),cgst:r2(-o.cgst),sgst:r2(-o.sgst)};}
 function exportXlsx(){
   if(!report||typeof ExcelJS==='undefined'){alert('Report or Excel library not ready.');return;}
   var wb=new ExcelJS.Workbook();
@@ -1856,6 +2022,7 @@ function exportXlsx(){
   /* One supplier accounting for a run of unbooked documents is one fact. On its
      own sheet it can be dealt with in one decision instead of scrolling past
      hundreds of rows to reach the findings that matter. */
+  addTieOutSheet(wb);
   var runs={},unbooked=report.recs.filter(function(r){return r._cat==='only2b';});
   if(unbooked.length<20)unbooked=[];          // nothing to group; the rows say it themselves
   unbooked.forEach(function(r){

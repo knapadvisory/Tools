@@ -922,8 +922,8 @@ await t('the workbook builds, with a sheet for the 2A-only documents', async () 
         { no: 'DEE/2025-26/214', txval: 200000, iamt: 36000, dt: '28-11-2025' }]) },
   ], [book({})]);
   const x = await xlsxOut();
-  assert(x.sheets.join(',') === 'reconciled,Credit Notes,2A only',
-    'expected three sheets, got ' + x.sheets.join(','));
+  assert(x.sheets.join(',') === 'reconciled,Credit Notes,2A only,Tie-out',
+    'expected four sheets, got ' + x.sheets.join(','));
   assert(x.hdr[13] === 'Source', `column N should be Source, it is "${x.hdr[13]}"`);
   assert(x.hdr.length === 34, `expected 34 columns, got ${x.hdr.length}`);
   /* The GST check stays a live formula — it is the arithmetic, and the columns
@@ -935,6 +935,69 @@ await t('the workbook builds, with a sheet for the 2A-only documents', async () 
      amounts tie became "booked" the moment Excel opened the file. */
   assert(x.remarkIsFormula === false,
     'the remark must be the text the tool computed, not a formula that can contradict it');
+});
+
+console.log('\n── the tie-out to the portal ──');
+await t('the bridge reconciles the portal figure to this tool', async () => {
+  /* One registration, one year, built so every line of the bridge has something
+     in it: an ordinary invoice, one liable to reverse charge, one whose ITC 2B
+     marks unavailable, one filed late in the April return after the year, one
+     restated by an amendment, and one dated in the next year. */
+  const inv = (no, dt, igst, extra) => Object.assign({ inum: no, dt, txval: igst / 0.18,
+    igst, cgst: 0, sgst: 0, itcavl: 'Y' }, extra || {});
+  const ret = (prd, invs, amend) => ({ name: '2B_' + prd + '.json', json: { data: {
+    gstin: '06AAGCE4293A1ZX', rtnprd: prd, docdata: {
+      b2b: [{ ctin: '07BICPL2786D1ZB', trdnm: 'DEEPALI ENGINEERING', inv: invs }],
+      b2ba: amend ? [{ ctin: '07BICPL2786D1ZB', trdnm: 'DEEPALI ENGINEERING', inv: amend }] : [] } } } });
+  const out = await page.evaluate(([files, portal]) => {
+    loadedFiles = files.map((f) => ({ name: f.name, src: srcOfJson(f.json, f.name),
+      rows: parseGstJson(f.json, srcOfJson(f.json, f.name), f.name) }));
+    rebuild2b();
+    booksRows = []; lastBooksMeta = { from: '2025-04-01', to: '2026-03-31' };
+    portalFig = portal;
+    ['hIGST', 'hINTRA', 'hNIL'].forEach((id) => { const e = document.getElementById(id); if (e) e.checked = true; });
+    reconcile();
+    const t = tieOutRows(), o = t.byRegn['06AAGCE4293A1ZX'];
+    const P = portal['06AAGCE4293A1ZX'];
+    return { fy: t.fy, live: o.live.igst, rcm: o.rcm.igst, blocked: o.blocked.igst,
+      late: o.late.igst, sup: o.sup.igst, nextFy: o.nextFy.igst,
+      expected: Math.round((P.igst + o.rcm.igst + o.blocked.igst + o.late.igst) * 100) / 100 };
+  }, [[
+    ret('052025', [inv('A/1', '10-05-2025', 18000),
+                   inv('A/2', '11-05-2025', 900, { rev: 'Y' }),
+                   inv('A/3', '12-05-2025', 450, { itcavl: 'N', rsn: 'POS' }),
+                   inv('A/4', '13-05-2025', 5000)]),
+    ret('062025', [], [{ inum: 'A/4', oinum: 'A/4', oidt: '13-05-2025', dt: '13-05-2025',
+                         txval: 20000, igst: 3600, itcavl: 'Y' }]),
+    ret('042026', [inv('A/9', '28-03-2026', 7000),          // last year's, filed late
+                   inv('B/1', '10-04-2026', 11000)]),       // next year's own
+     /* the portal's figure: the ordinary invoice 18,000 plus the RESTATED value
+        of A/4, 3,600 — its amendment table carries the difference, so what the
+        portal reports for the year is the amended figure, not the original */
+  ], { '06AAGCE4293A1ZX': { igst: 21600, cgst: 0, sgst: 0 } }]);
+  assert(out.fy === 2025, `the year should be read as 2025-26, got ${out.fy}`);
+  assert(out.sup === 5000, `the restated original is excluded, got ${out.sup}`);
+  assert(out.nextFy === 11000, `next year's invoice is excluded, got ${out.nextFy}`);
+  assert(out.rcm === 900 && out.blocked === 450,
+    `reverse charge ${out.rcm} and blocked ${out.blocked} must each be identified`);
+  assert(out.late === 7000, `the late-filed invoice must be identified, got ${out.late}`);
+  assert(out.live === out.expected,
+    `the bridge must close: tool ${out.live} against expected ${out.expected}`);
+});
+await t('a document that is both reverse charge and blocked is counted once', async () => {
+  const out = await page.evaluate(() => {
+    loadedFiles = [{ name: 'x.json', src: '2B', rows: parseGstJson({ data: {
+      gstin: '06AAGCE4293A1ZX', rtnprd: '052025', docdata: { b2b: [{ ctin: '07BICPL2786D1ZB',
+        trdnm: 'D', inv: [{ inum: 'X/1', dt: '10-05-2025', txval: 5000, igst: 900,
+                            rev: 'Y', itcavl: 'N', rsn: 'POS' }] }] } } }, '2B', 'x.json') }];
+    rebuild2b(); booksRows = []; lastBooksMeta = { from: '2025-04-01', to: '2026-03-31' };
+    ['hIGST', 'hINTRA', 'hNIL'].forEach((id) => { const e = document.getElementById(id); if (e) e.checked = true; });
+    reconcile();
+    const o = tieOutRows().byRegn['06AAGCE4293A1ZX'];
+    return { rcm: o.rcm.igst, blocked: o.blocked.igst, live: o.live.igst };
+  });
+  assert(out.rcm + out.blocked === out.live,
+    `adding both back must not double-count: rcm ${out.rcm} + blocked ${out.blocked} vs ${out.live}`);
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);
