@@ -27,13 +27,17 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
-const VERSION = '4.63';
+const VERSION = '4.64';
 // Bumped WITH connector/version.json — the two are compared to decide a
 // self-update, so a mismatch either loops every connector in the field or
 // hides the build. connector/version.test.mjs fails the pair apart.
 const PORT = Number(process.env.PORT || 8797);
 const SELF = fileURLToPath(import.meta.url);
 const DATA_FILE = path.join(path.dirname(SELF), 'gstr2b-tally-data.json');
+// Where an unexpected death is written down, so it outlives the console window.
+const CRASH_LOG = path.join(path.dirname(SELF), 'knap-connector-errors.log');
+// The last uncaught error, handed to the page so a dead read can explain itself.
+let lastFatal = null;
 const HUB = process.env.KNAP_HUB || 'https://apps.knapadvisory.com';
 // Browser pages allowed to talk to this connector.
 const ORIGIN_OK = /^https:\/\/(apps|dashboard)\.knapadvisory\.com$|^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
@@ -3084,7 +3088,7 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
         // as a DEBIT NOTE (purchase return / rate difference) crediting the
         // input-tax ledger, so the reconciliation can name the voucher that
         // answers a 2A/2B credit note instead of showing a bare number.
-        const vtypeName = decodeXml(tag(block, 'VOUCHERTYPENAME')).trim();
+        const vtypeName = tag(block, 'VOUCHERTYPENAME').trim();   // tag() already decodes
         const party = tag(block, 'PARTYLEDGERNAME') || '';
         const entryBlocks = block.match(/<ALLLEDGERENTRIES\.LIST>[\s\S]*?<\/ALLLEDGERENTRIES\.LIST>/gi) || block.match(/<LEDGERENTRIES\.LIST>[\s\S]*?<\/LEDGERENTRIES\.LIST>/gi) || [];
         const tax = { igst: 0, cgst: 0, sgst: 0, rcm_igst: 0, rcm_cgst: 0, rcm_sgst: 0 };
@@ -4479,7 +4483,9 @@ const server = http.createServer(async (req, res) => {
       const etaSec = (dcProgress.active && pct > 2 && pct < 100) ? Math.round(elapsed * (100 - pct) / pct) : null;
       // elapsedSec is the proof of life a caller needs when the fraction is not
       // yet knowable: a clock that keeps counting means the read is running.
-      json(res, 200, { ...dcProgress, pct, etaSec, elapsedSec: Math.round(elapsed) });
+      // lastFatal travels with the progress so a read whose socket died can still
+      // say why — the page has no other way to learn it.
+      json(res, 200, { ...dcProgress, pct, etaSec, elapsedSec: Math.round(elapsed), lastFatal, version: VERSION });
       return;
     }
     // Learned aliases — confirmed groupings remembered across runs.
@@ -4959,7 +4965,7 @@ const server = http.createServer(async (req, res) => {
       const taxLedgers = Array.isArray(body.taxLedgers) ? body.taxLedgers.filter((t) => t && t.name && t.kind) : [];
       if (!from || !to) { json(res, 400, { ok: false, error: 'Set the from and to dates.' }); return; }
       if (!taxLedgers.length) { json(res, 400, { ok: false, error: 'Select at least one input-GST ledger.' }); return; }
-      dcCancel = false;
+      dcCancel = false; lastFatal = null;   // a new read owns the error slot
       dcProgress.active = true; dcProgress.done = 0; dcProgress.total = 1; dcProgress.phase = 'Starting…'; dcProgress.sub = ''; dcProgress.startedAt = Date.now();
       // Clear the day counters too. Left over from a previous read they make the
       // bar show that run's position, which looks like a read frozen part-way.
@@ -5055,7 +5061,7 @@ const server = http.createServer(async (req, res) => {
       const from = tallyDateOf(String(body.from || '').replace(/-/g, ''));
       const to = tallyDateOf(String(body.to || '').replace(/-/g, ''));
       if (!from || !to || from > to) { json(res, 400, { ok: false, error: 'Bad period.' }); return; }
-      dcCancel = false;
+      dcCancel = false; lastFatal = null;   // a new read owns the error slot
       dcProgress.active = true; dcProgress.done = 0; dcProgress.total = 1; dcProgress.phase = 'Starting…'; dcProgress.sub = ''; dcProgress.startedAt = Date.now();
       try {
         const out = await readErpVouchers(String(body.url || state.settings.tallyUrl), String(body.company || ''), from, to, { kind: body.kind || 'both' });
@@ -5373,6 +5379,36 @@ async function selfUpdate(force) {
 setTimeout(selfUpdate, 15 * 1000);                       // shortly after start
 setInterval(selfUpdate, 6 * 3600 * 1000).unref();        // then every 6 hours
 startAudit();                                            // run local copy immediately if present
+
+/* A read can run for minutes. Node's defaults are written for public servers
+   that must shed slow clients; here they can tear down a socket that is simply
+   waiting for Tally, and the page then shows the browser's own "Failed to
+   fetch", which says nothing about what went wrong. */
+server.keepAliveTimeout = 120_000;
+server.headersTimeout = 125_000;   // must exceed keepAliveTimeout
+server.requestTimeout = 0;         // no cap on a long read (localhost only)
+
+/* And a crash must not be silent. Until now ANY uncaught error anywhere took
+   the whole connector down mid-request: every socket died at once, the page
+   reported "Failed to fetch", and the reason existed only in a console window
+   the user had probably already closed. The connector now survives, records
+   what happened, and hands it to the page through /api/dc/progress. */
+function noteFatal(kind, e) {
+  const msg = String((e && e.stack) || (e && e.message) || e);
+  lastFatal = { at: new Date().toISOString(), kind, message: msg.split('\n').slice(0, 6).join('\n') };
+  dcProgress.active = false;
+  dcProgress.phase = '';
+  try {
+    fs.appendFileSync(CRASH_LOG, `\n[${lastFatal.at}] ${kind}\n${msg}\n`);
+  } catch { /* logging must never be the thing that kills it */ }
+  console.error('');
+  console.error('  !! ' + kind + ' — the connector stayed up, the read was abandoned.');
+  console.error('  ' + msg);
+  console.error('  Logged to ' + CRASH_LOG);
+  console.error('');
+}
+process.on('uncaughtException', (e) => noteFatal('uncaughtException', e));
+process.on('unhandledRejection', (e) => noteFatal('unhandledRejection', e));
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log('');

@@ -477,7 +477,21 @@ function fetchItc(){
         next();
       }).catch(function(e){
         if(RELEASED){return;}                 // Release already tidied up
-        errs.push((c.company||'company')+': '+e.message);next();
+        /* "Failed to fetch" is the browser saying the socket died — it names no
+           cause and never did. The connector outlives its own crashes now and
+           keeps the reason, so ask it before reporting anything. */
+        var net=/failed to fetch|networkerror|load failed/i.test(String(e&&e.message));
+        if(!net){errs.push((c.company||'company')+': '+e.message);next();return;}
+        fetch(API+'/api/dc/progress').then(function(r){return r.json();}).then(function(p){
+          if(p&&p.lastFatal&&p.lastFatal.message)
+            errs.push((c.company||'company')+': the connector hit an error mid-read — '+p.lastFatal.message.split('\n')[0]+' (full trace in knap-connector-errors.log beside the connector)');
+          else
+            errs.push((c.company||'company')+': the connector stopped answering mid-read. It is running now, so it was restarted or the read was interrupted — check its window, then try again.');
+          next();
+        }).catch(function(){
+          errs.push((c.company||'company')+': the connector is not answering at all. Its window has closed or it crashed — start it again and retry.');
+          next();
+        });
       });
   })();
 }
