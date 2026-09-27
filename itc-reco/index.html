@@ -595,6 +595,7 @@ function handleFiles(files){
           src=srcOfJson(j,file.name);
           rows=parseGstJson(j,src,file.name);
           chk=fileCheck(j,rows);
+          chk.unread=unreadTables(j);
         }else{ rows=parseCsv(fr.result); src=(rows[0]&&rows[0].src)||'2B'; }
         loadedFiles.push({name:file.name,count:rows.length,rows:rows,src:src,check:chk});
       }catch(err){loadedFiles.push({name:file.name,count:0,rows:[],error:err.message});}
@@ -636,7 +637,28 @@ function rebuild2b(){
       });
     });
   });
+  fillPartyNames();
   markSuperseded();
+}
+/* GSTR-2A carries no supplier name. Not one of the 1,093 supplier blocks in the
+   client's 29 real 2A files had a `trdnm` — 2B has it, 2A simply does not. Left
+   alone that costs twice: the report shows a blank party, and `nameScore` returns
+   0, so name evidence is unavailable for precisely the documents that need it
+   most (the 2A-only ones, which by definition have no 2B row to lean on).
+
+   So a name is borrowed from any other document of the same supplier that does
+   have one. It is the same supplier GSTIN, so this invents nothing. */
+function fillPartyNames(){
+  var byGstin={};
+  twoBRows.forEach(function(r){
+    var g=normGstin(r.gstin),nm=String(r.party||'').trim();
+    if(g&&nm&&!byGstin[g])byGstin[g]=nm;
+  });
+  twoBRows.forEach(function(r){
+    if(String(r.party||'').trim())return;
+    var nm=byGstin[normGstin(r.gstin)];
+    if(nm){r.party=nm;r._partyBorrowed=true;}
+  });
 }
 /* An amendment RESTATES a document the supplier already reported: the b2ba /
    cdnra row is the live version and the original is history. Both appear in the
@@ -688,7 +710,16 @@ function renderFiles(){
     var off=loadedFiles.filter(function(f){return f.check&&f.check.state==='off';});
     var unchecked=loadedFiles.filter(function(f){return f.check&&f.check.state==='none'&&!f.error;});
     if(off.length)bits.push('<b style="color:var(--bad)">⚠ '+off.length+' file(s) do not add up to the totals stated inside them</b> ('+off.map(function(f){return esc(f.name)+' by '+inr(f.check.worst);}).join('; ')+'). Something in those returns is not being read — send the file before relying on the figures.');
-    if(unchecked.length)bits.push(unchecked.length+' file(s) carry no <code>itcsumm</code> block, so their totals could not be checked against the return itself.');
+    /* GSTR-2A states no totals of its own, so "unchecked" there is normal and
+       saying so would be noise. A 2B without an itcsumm is worth a word. */
+    unchecked=unchecked.filter(function(f){return (f.src||'2B')==='2B';});
+    if(unchecked.length)bits.push(unchecked.length+' 2B file(s) carry no <code>itcsumm</code> block, so their totals could not be checked against the return itself ('+unchecked.map(function(f){return esc(f.name);}).join(', ')+').');
+    /* A table we do not read is a gap in the reconciliation, and it has to be
+       said out loud — ISD credit, imports and TCS are real ITC. */
+    var un={};
+    loadedFiles.forEach(function(f){(f.check&&f.check.unread||[]).forEach(function(u){un[u.table]=(un[u.table]||0)+u.docs;});});
+    var unK=Object.keys(un);
+    if(unK.length)bits.push('<b style="color:var(--warn)">This tool does not read '+unK.map(function(k){return '<code>'+esc(k)+'</code> ('+un[k]+' document'+(un[k]===1?'':'s')+')</b>';}).join(', ')+'. That credit is outside this reconciliation entirely — check it separately.');
     setMsg('msg2b',bits.join(' '), twoBRows.length?'ok':'warn');
   }else{ $('drop').classList.remove('has'); $('drop').innerHTML=DROP_HTML; setMsg('msg2b','',''); }
   $('btnReco').disabled=twoBRows.length===0;
@@ -776,8 +807,10 @@ function srcOfJson(j,fileName){
   var t=docTables(j),top=t.top,d=t.d;
   if(top.docdata||top.rtnprd)return '2B';
   var first=null;
-  ['b2b','b2ba'].forEach(function(k){if(!first&&d[k]&&d[k][0]&&d[k][0].inv&&d[k][0].inv[0])first=d[k][0].inv[0];});
-  ['cdnr','cdnra'].forEach(function(k){if(!first&&d[k]&&d[k][0]&&d[k][0].nt&&d[k][0].nt[0])first=d[k][0].nt[0];});
+  TABLES.inv.concat(TABLES.invA).forEach(function(k){if(!first&&d[k]&&d[k][0]&&d[k][0].inv&&d[k][0].inv[0])first=d[k][0].inv[0];});
+  TABLES.nt.concat(TABLES.ntA).forEach(function(k){if(!first&&d[k]&&d[k][0]&&d[k][0].nt&&d[k][0].nt[0])first=d[k][0].nt[0];});
+  // 2A names its note table `cdn`; 2B never does. That alone settles it.
+  if(d.cdn||d.cdna)return '2A';
   if(first){
     if(first.itcavl!=null||first.itc_avl!=null)return '2B';
     var it=(first.itms&&first.itms[0]&&(first.itms[0].itm_det||first.itms[0]))||null;
@@ -810,9 +843,9 @@ function statedTotals(j){
       var o=g[sup]||{};
       Object.keys(o).forEach(function(tbl){
         if(!o[tbl]||typeof o[tbl]!=='object')return;
-        if(tbl!=='b2b'&&tbl!=='cdnr')return;             // amendment lines are differentials
+        if(TABLES.inv.indexOf(tbl)<0&&TABLES.nt.indexOf(tbl)<0)return;  // amendment lines are differentials
         found=true;
-        var sign=(tbl==='cdnr')?-1:1;
+        var sign=(TABLES.nt.indexOf(tbl)>=0)?-1:1;
         ['igst','cgst','sgst','cess'].forEach(function(h){t[h]=r2(t[h]+sign*(num(o[tbl][h])));});
       });
     });
@@ -866,16 +899,35 @@ function parseGstJson(j,src,fileName){
       filed:(s.cfs==null?'':String(s.cfs).toUpperCase()),
       itcBlocked:(itcavl==='N'),rsn:rsn});
   }
-  // b2ba / cdnra are the AMENDMENT tables — the supplier revised a document
-  // already reported. Flag them so a revised invoice isn't mistaken for a plain
-  // mismatch; the reconciliation uses the amended (latest) figures.
-  (d.b2b||[]).forEach(function(s){(s.inv||[]).forEach(function(inv){pushInv(s,inv,1,false,false);});});
-  (d.b2ba||[]).forEach(function(s){(s.inv||[]).forEach(function(inv){pushInv(s,inv,1,false,true);});});
   // 'C' = the supplier's credit note, which takes credit away; 'D' = his debit
   // note, which adds to it. 2B calls the field typ, 2A calls it ntty.
   function noteSign(nt){return String(nt.typ||nt.ntty||'').toUpperCase()==='C'?-1:1;}
-  (d.cdnr||[]).forEach(function(s){(s.nt||[]).forEach(function(nt){pushInv(s,nt,noteSign(nt),true,false);});});
-  (d.cdnra||[]).forEach(function(s){(s.nt||[]).forEach(function(nt){pushInv(s,nt,noteSign(nt),true,true);});});
+  /* The note tables are named differently again: 2B calls them cdnr / cdnra,
+     2A calls them cdn / cdna. Reading only the 2B names dropped all 82 of the
+     client's 2A credit notes — ₹4,60,132.52 of CGST and ₹6,13,955.76 of IGST —
+     without a word, because a table that is not there looks exactly like a table
+     with nothing in it. Every alias is read; the *a tables are the AMENDMENT
+     ones, flagged so a revised document is not mistaken for a plain mismatch. */
+  TABLES.inv.forEach(function(t){(d[t]||[]).forEach(function(s){(s.inv||[]).forEach(function(inv){pushInv(s,inv,1,false,false);});});});
+  TABLES.invA.forEach(function(t){(d[t]||[]).forEach(function(s){(s.inv||[]).forEach(function(inv){pushInv(s,inv,1,false,true);});});});
+  TABLES.nt.forEach(function(t){(d[t]||[]).forEach(function(s){(s.nt||[]).forEach(function(nt){pushInv(s,nt,noteSign(nt),true,false);});});});
+  TABLES.ntA.forEach(function(t){(d[t]||[]).forEach(function(s){(s.nt||[]).forEach(function(nt){pushInv(s,nt,noteSign(nt),true,true);});});});
+  return out;
+}
+/* Every document table this tool knows how to read, by dialect. Anything in a
+   return that is NOT in here is reported by `unreadTables` rather than ignored —
+   ISD credit, imports and TCS are real ITC and their absence should be a stated
+   gap, not a silent one. */
+var TABLES={inv:['b2b'],invA:['b2ba'],nt:['cdnr','cdn'],ntA:['cdnra','cdna']};
+var TABLES_ALL=TABLES.inv.concat(TABLES.invA,TABLES.nt,TABLES.ntA);
+function unreadTables(j){
+  var t=docTables(j),d=t.d||{},out=[];
+  Object.keys(d).forEach(function(k){
+    if(!Array.isArray(d[k])||!d[k].length)return;
+    if(TABLES_ALL.indexOf(k)>=0)return;
+    var n=0;d[k].forEach(function(s){n+=((s&&(s.inv||s.nt||s.doclist))||[]).length||1;});
+    out.push({table:k,suppliers:d[k].length,docs:n});
+  });
   return out;
 }
 function parse2bJson(j){return parseGstJson(j,null,'');}
@@ -1449,16 +1501,38 @@ function periodsByRegn(){
   });
   return Object.keys(by).sort().map(function(k){var g=gapsIn(by[k]);g.regn=k;return g;});
 }
+/* Which months the BOOKS hold entries in, per registration. A 2B period with no
+   file is only worth reporting if the books have purchases in it: Odisha's
+   February had no 2A/2B because the month had no documents, and a warning there
+   is a false alarm the preparer has to dismiss every run. */
+function booksMonths(regn){
+  var set={};
+  (booksRows||[]).forEach(function(r){
+    var k=normGstin(r._ownGstin||(chosen&&chosen.gstin)||'');
+    if(regn&&k&&k!==regn)return;
+    var d=ymd(r.date);if(d)set[d.y*100+d.mo]=1;
+  });
+  return set;
+}
 function periodGapWarning(){
-  var all=periods2b(),per=periodsByRegn();
-  var bad=per.filter(function(p){return p.gaps.length;});
-  // With one registration the pooled view IS the per-registration view.
-  if(!bad.length&&!all.gaps.length)return '';
-  var rows=(bad.length?bad:[all]).map(function(p){
+  /* The per-registration view is the authoritative one — including when there is
+     only one registration, where it happens to equal the pooled view. Falling
+     back to the pooled figures when no registration had a gap was how a gap the
+     books could not be short against got reported anyway. */
+  var per=periodsByRegn().filter(function(p){return p.regn!=='(unstated)';});
+  if(!per.length){var a=periods2b();a.regn='';per=[a];}
+  var bad=per.map(function(p){
+    if(!p.gaps.length)return p;
+    // Keep only the months the books can actually be short against.
+    var bm=booksMonths(p.regn),any=Object.keys(bm).length;
+    return any?{regn:p.regn,text:p.text,gaps:p.gaps.filter(function(n){return bm[n];})}:p;
+  }).filter(function(p){return p.gaps.length;});
+  if(!bad.length)return '';
+  var rows=bad.map(function(p){
     return '<li><b>'+esc(p.regn||'the files loaded')+'</b> — '+esc(p.text)+', missing <b>'+p.gaps.map(fmtYM).join(', ')+'</b></li>';}).join('');
   return '<div class="repsec"><div class="conn-banner off" style="margin:0"><span class="cdot"></span><div>'
     +'<div class="ctitle">A return period is missing from the middle of what you loaded</div>'
-    +'<div class="csub">Coverage is counted per registration, because one registration having every month says nothing about another.<ul style="margin:6px 0 0 18px">'+rows+'</ul>'
+    +'<div class="csub">Coverage is counted per registration, because one registration having every month says nothing about another — and a month is only named when <b>your books hold entries in it</b>, since a month with no documents has no return to download.<ul style="margin:6px 0 0 18px">'+rows+'</ul>'
     +'Every document in those months will read “booked, but not in 2B”, and the 2B total below is short by their whole value. Load them and reconcile again.</div>'
     +'</div></div></div>';
 }

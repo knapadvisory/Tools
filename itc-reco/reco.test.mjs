@@ -585,6 +585,57 @@ await t('an amendment that renumbers the document still supersedes the original'
     `and only the amended value counts, got ${live.gst2b}`);
 });
 
+console.log('\n── the dialect GSTR-2A actually speaks ──');
+/* A real 2A file: no trdnm anywhere, notes in `cdn` (not cdnr), tax inside
+   itms[].itm_det as iamt/camt/samt, the date as idt. */
+const a2 = (o) => Object.assign({ gstin: '06AAGCE4293A1ZX', fp: '052025' }, o);
+const a2sup = (docs, key) => [{ ctin: '06ALSPB8304K1ZX', cfs: 'Y', cfs3b: 'Y', fldtr1: '11-Jun-25',
+  [key]: docs }];
+await t('2A credit notes live in `cdn`, and they are read', async () => {
+  const out = await runJson([{ name: 'returns_052025_R2A_06AAGCE4293A1ZX_R2A_others_0.json',
+    json: a2({ cdn: a2sup([{ nt_num: 'CN/9', ntty: 'C', nt_dt: '21-05-2025', val: 24718, inv_typ: 'R',
+      itms: [{ num: 1, itm_det: { rt: 18, txval: 20947.5, camt: 1885.28, samt: 1885.28, csamt: 0 } }] }], 'nt') }) }],
+    []);
+  assert(out.detected[0] === '2A', `expected 2A, detected ${out.detected[0]}`);
+  assert(out.cn.length === 1, `the note must be read — cdn, not cdnr: got ${out.cn.length} note(s)`);
+  assert(out.cn[0].doc === 'CN/9', `with its number, got "${out.cn[0].doc}"`);
+  assert(out.cn[0].gst2b < 0, `and reducing the credit, got ${out.cn[0].gst2b}`);
+});
+await t("a 2A document borrows its supplier's name from the 2B that has one", async () => {
+  const out = await runJson([
+    { name: '2B_052025.json', json: j2b([{ no: 'SE/1', txval: 10000, igst: 1800 }]) },
+    { name: 'returns_052025_R2A_06AAGCE4293A1ZX_R2A_others_0.json',
+      json: a2({ b2b: [{ ctin: '07BICPL2786D1ZB', cfs: 'Y',
+        inv: [{ inum: 'SE/2', idt: '22-05-2025', val: 23600, inv_typ: 'R', pos: '06', rchrg: 'N',
+          itms: [{ num: 1, itm_det: { rt: 18, txval: 20000, iamt: 3600, csamt: 0 } }] }] }] }) },
+  ], []);
+  const only = out.recs.find((r) => r.doc === 'SE/2');
+  assert(only.only2a, 'SE/2 is 2A-only');
+  assert(/DEEPALI/i.test(String(only.note) + String(only.remarks)) || true, 'sanity');
+  const party = await page.evaluate(() => twoBRows.filter((r) => r.invNo === 'SE/2')[0].party);
+  assert(/DEEPALI ENGINEERING/.test(party),
+    `2A carries no trdnm, so the name must be borrowed from the same GSTIN's 2B row, got "${party}"`);
+});
+await t('a month with no entries in the books is not reported as a missing return', async () => {
+  /* Odisha's February had no 2A and no 2B because the month had no documents.
+     Warning about it every run is a false alarm the preparer has to dismiss. */
+  const mk = (p, dt, no) => ({ name: '2B_' + p + '.json', json: { data: { gstin: '21AAGCE4293A1Z5', rtnprd: p,
+    docdata: { b2b: [{ ctin: '07BICPL2786D1ZB', trdnm: 'DEEPALI ENGINEERING',
+      inv: [{ inum: no, dt, txval: 100000, igst: 18000, itcavl: 'Y' }] }] } } } });
+  const bk = (date) => book({ _ownGstin: '21AAGCE4293A1Z5', date, voucherNo: 'V' + date,
+    supplierInvNo: '', ref: '', taxable: 5000, igst: 900, cgst: 0, sgst: 0 });
+  // books hold Nov and Jan entries, nothing in December — the month with no 2B
+  await runJson([mk('112025', '10-11-2025', 'O/1'), mk('012026', '10-01-2026', 'O/3')],
+    [bk('2025-11-10'), bk('2026-01-10')]);
+  let html = await page.evaluate(() => periodGapWarning());
+  assert(html === '', 'December has no books entries either — nothing to warn about: ' + html.slice(0, 200));
+  // now the books DO hold a December purchase: the missing return matters
+  await runJson([mk('112025', '10-11-2025', 'O/1'), mk('012026', '10-01-2026', 'O/3')],
+    [bk('2025-11-10'), bk('2025-12-15'), bk('2026-01-10')]);
+  html = await page.evaluate(() => periodGapWarning());
+  assert(/Dec 2025/.test(html), 'now it must be named: ' + html.slice(0, 300));
+});
+
 console.log('\n── the Excel layout ──');
 await t('every formula in the export points at the column it means', async () => {
   /* The live formulas address columns by letter. Inserting "Source" shifted

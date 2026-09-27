@@ -87,6 +87,13 @@ The reverse — in 2B but not in 2A — is **not** flagged. Loading twelve month
 of each still leaves the two sets ending on different documents, so the
 "finding" would be an artefact of which files were loaded.
 
+Against the client's real set (28 returns of 2B, 29 of 2A, three registrations),
+**5,422 documents appear in both and 110 in 2A only** — ₹7,42,259.46 of IGST and
+₹9,55,077.10 of CGST. 106 of the 110 sit in the **March 2026** 2A, which is the
+shape the rule predicts: the supplier filed, the 2B cut-off had passed, and the
+credit lands in April's 2B. The six Odisha ones (₹12,678.04 of CGST) are the
+same documents an earlier comparison had found only in the other tool's sheet.
+
 ## 5. Read the dialect the file is actually written in
 
 2B and 2A/GSTR-1 name a credit note's fields differently, and the difference is
@@ -105,10 +112,39 @@ the sheet just quietly said the opposite of the truth. It surfaced only by
 comparing a real CGST run against the same books reconciled by hand, where the
 notes appeared with their numbers and as negatives.
 
+And the **tables** are named differently too, which is worse, because a table
+that is not there looks exactly like a table with nothing in it:
+
+| | 2B | 2A |
+|---|---|---|
+| invoices | `b2b`, `b2ba` | `b2b`, `b2ba` |
+| notes | `cdnr`, `cdnra` | **`cdn`**, `cdna` |
+| supplier name | `trdnm` | **absent** |
+
+Reading only the 2B names dropped **all 82 credit notes in the client's 29 real
+2A files** — ₹4,60,132.52 of CGST and ₹6,13,955.76 of IGST — in silence. Every
+alias is read now, and `unreadTables` reports any table in a return that this
+tool does not know, so ISD credit or imports turning up is a *stated* gap rather
+than a quiet one.
+
+Not one of those 1,093 supplier blocks carried a `trdnm`. 2A has no supplier
+names at all, which costs twice over: a blank party in the report, and
+`nameScore` returning 0 for exactly the documents that need it most — the
+2A-only ones, which have no 2B row to lean on. So a name is borrowed from
+another document of the **same supplier GSTIN** that has one. Where a supplier
+appears only in 2A there is nothing to borrow, and the party stays blank rather
+than being invented.
+
 Both dialects are read now, and the test builds a note in each. When adding a
 table, check the key names against a real file of **both** returns — and against
 `downloads/gstr2b-tally-poster.mjs`, which has been reading real 2B files for
 longer than this tool has.
+
+One more difference, on the arithmetic rather than the keys: a supplier's
+**debit note increases** the tax, it does not reduce it. The portal's own
+2A-vs-2B sheet adds both kinds into one "CN" figure (₹6,38,291.76 against our
+₹6,13,955.76 of IGST — the ₹24,336 of debit notes counted the wrong way). We net
+them by `ntty`/`typ`.
 
 ## 6. The credit follows the tax, not the taxable value
 
@@ -263,10 +299,13 @@ the year was covered and the check reported no gap at all — while Odisha's
 February was missing and every Odisha purchase in it would have read "booked,
 but not in 2B". One registration having every month says nothing about another.
 
-Gaps are reported only *inside* each registration's own loaded range: Odisha
-starting at November may mean the registration began then, and the tool does not
-guess. That the range starts late is visible on the report; whether it should
-have is the preparer's call.
+Gaps are reported only *inside* each registration's own loaded range, and only
+for months **the books hold entries in**. Odisha was registered in November, and
+its February had no documents at all — so there is no return to download and
+warning about it is a false alarm the preparer has to dismiss on every run. A
+missing month matters when the books can be short against it; otherwise it is
+not a finding. With no books loaded yet, every gap is reported, because nothing
+is known to rule one out.
 
 The remaining three documents (Kaushik Enterprises 110, 121, 125 —
 ₹2,86,644.96) were settled against the source files, and the answer reversed
