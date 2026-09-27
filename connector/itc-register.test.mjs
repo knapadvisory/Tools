@@ -80,8 +80,20 @@ const srv = http.createServer((req, res) => {
       const knows = { good: ['collection-voucher-ledger'],
                       onlyReport: ['report-ledger-vouchers'],
                       ledgerMisses: ['collection-voucher-ledger'],
+                      // the client's Tally: it answers the CHILDOF shape, but
+                      // with the whole day book — ledger and dates both ignored
+                      noFilter: ['collection-voucher-childof'],
                       filterOnly: [], bad: [], noLedgerIndex: [] }[mode] || [];
       if (!knows.includes(shape)) { res.statusCode = 200; return res.end('<ENVELOPE></ENVELOPE>'); }
+      if (mode === 'noFilter') {
+        /* Byte-for-byte the day book, whatever ledger and whatever window was
+           asked for — exactly what the client's Tally did. */
+        const all = [];
+        for (let i = 0; i < TOTAL; i++) all.push(vch(i, (i % ITC_EVERY) === 0));
+        const body0 = '<ENVELOPE>' + all.join('') + '</ENVELOPE>';
+        stats.bytes += body0.length;
+        return setTimeout(() => res.end(body0), 30);
+      }
       const out = [];
       for (let i = 0; i < TOTAL; i++) {
         if ((i % ITC_EVERY) !== 0) continue;
@@ -244,6 +256,27 @@ t('the TDS and the rounding are reported, not silently dropped', () => {
   assert(Math.abs(r.tds - 763.10) < 0.01, `TDS withheld should be 763.10, got ${r.tds}`);
   assert(Math.abs(Math.abs(r.roundOff) - 0.44) < 0.01,
     `the rounding should be carried, got ${r.roundOff}`);
+});
+
+console.log('\n── a ledger shape that does not actually filter ──');
+/* The client's Tally answered "Collection of Voucher, CHILDOF the ledger" with
+   the whole day book — the same bytes for every ledger, and the same bytes for a
+   20-day window as for the year. The old check only asked whether the shape had
+   returned everything the day book showed, which such a response passes
+   trivially. Accepted, it read 294 MB and killed the process. */
+mode = 'noFilter';
+const nf = await run('shape returns the day book');
+t('the shape is rejected rather than trusted', () => {
+  assert(nf.j.ok, 'the read should still succeed by another route: ' + JSON.stringify(nf.j).slice(0, 200));
+  assert(!/ledger index/.test(nf.note || ''),
+    'it must not claim to have read from the ledger index: ' + nf.note);
+});
+t('and the figures still come out right', () => {
+  const rows = nf.j.rows || [];
+  assert(rows.length >= TOTAL / ITC_EVERY,
+    `expected at least ${TOTAL / ITC_EVERY} ITC vouchers, got ${rows.length}`);
+  assert(rows.every((r) => Math.abs(r.igst) > 0 || Math.abs(r.cgst) > 0 || Math.abs(r.sgst) > 0),
+    'every row returned must actually carry input GST');
 });
 
 console.log('\n── the diagnostic ──');

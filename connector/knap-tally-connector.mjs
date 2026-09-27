@@ -28,7 +28,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import v8 from 'node:v8';
 
-const VERSION = '4.66';
+const VERSION = '4.67';
 // Bumped WITH connector/version.json — the two are compared to decide a
 // self-update, so a mismatch either loops every connector in the field or
 // hides the build. connector/version.test.mjs fails the pair apart.
@@ -3068,24 +3068,57 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
               trace('probe shape done', { shape: shape.what, ledger: nm, chars: part.length });
               probeParts.push(part);
             }
-            const got = itcGuids(probeParts.join(''));
+            const probeXml = probeParts.join('');
+            const got = itcGuids(probeXml);
+            const gotVouchers = (probeXml.match(/<VOUCHER[\s>]/gi) || []).length;
+            probeParts.length = 0;
             if (!got.size) continue;                       // this build will not answer that way
             if ([...want].some((g) => !got.has(g))) continue;  // incomplete — never trust it
+            /* And it must actually have FILTERED. The test above only catches a
+               shape that returns too little; a shape that returns the whole day
+               book passes it trivially, because the day book does contain every
+               ITC voucher the day book showed.
 
-            const parts = [];
+               That is not hypothetical. On the client's Tally, "Collection of
+               Voucher, CHILDOF the ledger" returned 102,649,207 characters for
+               Input CGST, the same 102,649,207 for Input IGST, and the same
+               102,649,207 again for the whole year as for a 20-day window —
+               byte-for-byte the day book every time, the ledger and the dates
+               both ignored. Accepted as proven, it then read 294 MB of it and
+               the process died; had it lived, the year's figures would have been
+               whatever period Tally felt like giving.
+
+               A real ledger read returns the ledger's own vouchers. If the count
+               is not materially below the unfiltered day book's, nothing was
+               filtered and the shape is useless however complete it looks. */
+            if (plainCount && gotVouchers >= plainCount) {
+              trace('shape REJECTED — it did not filter', {
+                shape: shape.what, vouchersReturned: gotVouchers, dayBookVouchers: plainCount });
+              continue;
+            }
+
+            const parts = []; let bytes = 0;
             for (const nm of ledgerNames) {
               if (dcCancel) throw new Error('released by user');
               dcProgress.sub = `reading the vouchers of “${nm}”…`;
               trace('full period read', { shape: shape.what, ledger: nm });
               const part = await tallyFetch(url, ledgerVouchersRequest(nm, from, to, shape), 180000);
               trace('full period read done', { shape: shape.what, ledger: nm, chars: part.length });
+              bytes += part.length;
+              /* Holding every ledger's answer at once is what turned a large
+                 read into a dead process. Past this budget the shortcut is not
+                 worth its memory — drop it and let the windowed day-book read,
+                 which holds one window at a time, do the work. */
+              if (bytes > 200 * 1024 * 1024) {
+                parts.length = 0;
+                trace('ledger-index read ABANDONED — too large to hold', { chars: bytes });
+                throw new Error('ledger index too large');
+              }
               parts.push(part);
             }
-            const full = parts.join('');
-            parts.length = 0;                 // one copy is enough to hold
-            trace('ledger-index read complete', { chars: full.length });
-            if (!itcGuids(full).size) continue;
-            ledgerXml = full;
+            trace('ledger-index read complete', { chars: bytes, parts: parts.length });
+            if (!parts.some((p) => itcGuids(p).size)) continue;
+            ledgerXml = parts;               // kept in pieces; eaten one at a time
             filterNote = `read straight from Tally's ledger index (${shape.what}) — ${ledgerNames.length} ledger request(s) instead of scanning the day book`;
           } catch (e) {
             if (/released/i.test(String(e && e.message))) throw e;
@@ -3222,7 +3255,11 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
       // Already in hand, whole period, in as many requests as there are
       // ledgers. Nothing left to window over.
       dcProgress.phase = 'ITC register — reading the ledgers\u2019 vouchers\u2026';
-      await eat(ledgerXml);
+      // One ledger's answer at a time, each released before the next is parsed.
+      for (let i = 0; i < ledgerXml.length; i++) {
+        await eat(ledgerXml[i]);
+        ledgerXml[i] = null;
+      }
       dcProgress.monthsDone = totalDays;
     } else {
       await readVouchersRamp(url, from, to, eat,
