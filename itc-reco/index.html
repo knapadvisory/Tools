@@ -635,6 +635,27 @@ function rebuild2b(){
       });
     });
   });
+  markSuperseded();
+}
+/* An amendment RESTATES a document the supplier already reported: the b2ba /
+   cdnra row is the live version and the original is history. Both appear in the
+   year's returns, so adding both overstates 2B — in the CGST run the client
+   checked, four documents were counted twice for ₹3,55,466.25 of CGST (the
+   portal's own tool does the same, so the two sheets agreed on a figure that was
+   wrong in both). The original is marked here, kept visible, and left out of the
+   total and out of matching, so it cannot take the voucher the live one needs.
+   `origNo` covers the case where the amendment carries a different number. */
+function markSuperseded(){
+  var amended={};
+  twoBRows.forEach(function(r){
+    if(!r.isAmend)return;
+    amended[normGstin(r.gstin)+'|'+normInv(r.origNo||r.invNo)+'|'+(r.isCN?'C':'I')]=1;
+  });
+  mergeStats.superseded=0;
+  twoBRows.forEach(function(r){
+    r._superseded=!r.isAmend&&!!amended[normGstin(r.gstin)+'|'+normInv(r.invNo)+'|'+(r.isCN?'C':'I')];
+    if(r._superseded)mergeStats.superseded++;
+  });
 }
 function setFileSrc(idx,src){var f=loadedFiles[idx];if(!f)return;f.src=src;(f.rows||[]).forEach(function(r){r.src=src;});renderFiles();}
 function renderFiles(){
@@ -1092,7 +1113,7 @@ function applyAmended(rec,b){
   rec.remarks+=' · amended';
   rec.note+=' [Amendment in 2B'+(b.isCN?' (credit/debit note)':'')+': the supplier revised this document in a later return — reconcile against these revised figures, not the original.]';
 }
-var setAside2b=[];
+var setAside2b=[],superseded2b=[];
 function reconcile(){
   setCoverage();
   /* Only the heads the preparer picked. A 2B invoice under a head whose input
@@ -1103,6 +1124,10 @@ function reconcile(){
   var all2b=twoBRows;
   setAside2b=all2b.filter(function(r){return picked.indexOf(headOf2b(r))<0;});
   twoBRows=all2b.filter(function(r){return picked.indexOf(headOf2b(r))>=0;});
+  // Documents a later amendment has restated: shown, but neither counted nor
+  // matched (see markSuperseded).
+  superseded2b=twoBRows.filter(function(r){return r._superseded;});
+  twoBRows=twoBRows.filter(function(r){return !r._superseded;});
 
   var n=booksRows.length,used=new Array(n).fill(false);
   var invIdx={},gstinIdx={},gstAmtIdx={};
@@ -1179,6 +1204,13 @@ function reconcile(){
     var rec=buildRec(b,br);
     (b.isCN?cn:recs).push(rec);
   });
+  superseded2b.forEach(function(b){
+    var rec=buildRec(b,null);
+    rec._cat='superseded';
+    rec.remarks='superseded by a later amendment';
+    rec.note='The supplier restated this document in a later return (2B’s amendment table). The amended version is the live one and is reconciled above; this original is shown for the trail only and is NOT counted in the 2B total — counting both would claim the same invoice twice.';
+    (b.isCN?cn:recs).push(rec);
+  });
   // Latest 2B return period loaded — a books entry dated in or after it can't be
   // confirmed yet (the 2B where it would land isn't in hand). A vendor reporting
   // an invoice a cycle or two late is normal, not an ITC risk, so those aren't
@@ -1229,18 +1261,20 @@ function reconcile(){
 }
 
 /* ---- on-screen report ---- */
-function groupBy(recs){var by={matched:[],mismatch:[],wrongreg:[],probable:[],only2b:[],onlybk:[],onlybkCN:[],cnok:[],cnmm:[],cnmiss:[]};recs.forEach(function(r){(by[r._cat]||by.only2b).push(r);});return by;}
+function groupBy(recs){var by={matched:[],mismatch:[],wrongreg:[],probable:[],only2b:[],onlybk:[],onlybkCN:[],cnok:[],cnmm:[],cnmiss:[],superseded:[]};recs.forEach(function(r){(by[r._cat]||by.only2b).push(r);});return by;}
 function sumF(a,f){return a.reduce(function(s,r){return s+(Number(f(r))||0);},0);}
 function renderReport(){
   var by=groupBy(report.recs), cn=report.cn, cby=groupBy(cn);
-  var b2bTot=sumF(report.recs.filter(function(r){return r._cat!=='onlybk'&&r._cat!=='onlybkCN';}),function(r){return r.gst2b;});
+  var b2bTot=sumF(report.recs.filter(function(r){return r._cat!=='onlybk'&&r._cat!=='onlybkCN'&&r._cat!=='superseded';}),function(r){return r.gst2b;})
+            +sumF(report.cn.filter(function(r){return r._cat!=='superseded';}),function(r){return r.gst2b;});
   var bkTot=booksRows.reduce(function(a,r){return a+bGst(r);},0);
   var blocked=report.recs.concat(cn).filter(function(r){return String(r.remarks).indexOf('[ITC blocked]')>=0;}).length;
   var wrongReg=report.recs.filter(function(r){return String(r.remarks).indexOf('wrong registration')>=0;}).length;
   var only2a=report.recs.concat(cn).filter(function(r){return r._only2a;});
   var cnRev=sumF(cby.cnmiss,function(r){return Math.abs(r.gst2b);})+sumF(cby.cnmm,function(r){return Math.abs(r.gstChk);});
-  $('repSub').innerHTML=(report.recs.filter(function(r){return r._cat!=='onlybk'&&r._cat!=='onlybkCN';}).length)+' documents · '+booksRows.length+' books entries'+(cn.length?' · '+cn.length+' credit/debit notes':'')+' · ITC 2B '+inr(b2bTot)+' vs books '+inr(bkTot)
+  $('repSub').innerHTML=(report.recs.filter(function(r){return r._cat!=='onlybk'&&r._cat!=='onlybkCN'&&r._cat!=='superseded';}).length)+' documents'+(periods2b().text?' from '+esc(periods2b().text):'')+' · '+booksRows.length+' books entries'+(cn.length?' · '+cn.length+' credit/debit notes':'')+' · ITC 2B '+inr(b2bTot)+' (net of notes) vs books '+inr(bkTot)
     +(only2a.length?' · <b style="color:var(--warn)">'+only2a.length+' in 2A only</b>':'')
+    +(by.superseded.length+cby.superseded.length?' · <b style="color:var(--mut)">'+(by.superseded.length+cby.superseded.length)+' superseded by amendments (not counted)</b>':'')
     +(wrongReg?' · <b style="color:var(--bad)">🚩 '+wrongReg+' wrong-registration</b>':'')+(blocked?' · <b style="color:var(--warn)">'+blocked+' ITC-blocked</b>':'')
     /* Say what was left out and why. A number that excludes part of 2B without
        saying so reads as a clean reconciliation of the whole thing. */
@@ -1262,6 +1296,10 @@ function renderReport(){
   html+=secMM('Amount mismatch — matched invoice, GST or split differs',by.mismatch);
   html+=secMM('🚩 Wrong registration — the invoice is booked under a different GSTIN of yours',by.wrongreg);
   html+=secMM('Probable match — verify',by.probable);
+  html+=periodGapWarning();
+  html+=spilloverWarning();
+  if(by.superseded.length+cby.superseded.length)
+    html+=secOnly('Superseded by a later amendment — shown for the trail, not counted',by.superseded.concat(cby.superseded),'2b');
   html+=secRuns(by.only2b);
   var pi=by.only2b.filter(function(r){return r._periodIssue;}).length;
   if(pi)html+='<div class="repsec"><div class="conn-banner off" style="margin:0"><span class="cdot"></span><div><div class="ctitle">'+pi+' of the “not in books” documents fall outside the period you fetched</div><div class="csub">Their invoice dates are before/after '+esc(COV.from)+' → '+esc(COV.to)+', or in a month Tally returned no vouchers for (shown in red). Widen the fetch — Step&nbsp;2 dates, and Alt+F2 in Tally to open the right period/company — then reconcile again. Only the rest are genuinely unrecorded. In the Excel these are tagged in <b>remarks</b> (“not booked — before/after fetched period”, or “month not fetched”) — filter on them; the full reason is in each row’s Note.</div></div></div></div>';
@@ -1297,6 +1335,47 @@ function secOnly(title,recs,side){
     return '<tr><td class="mono">'+esc(g||'—')+'</td><td>'+esc(p||'')+(r.rcm?' <span class="pill rcm">RCM</span>':'')+'</td><td>'+esc(no||'')+'</td><td'+dcls+' style="white-space:nowrap" title="'+esc(r.note||'')+'">'+esc((''+dt).slice(0,10))+'</td><td class="r">'+inr(tx)+'</td><td class="r">'+inr(ig)+'</td><td class="r">'+inr(cg)+'</td><td class="r">'+inr(sg)+'</td></tr>';
   }).join('');
   return sec(title,String(recs.length),'<thead><tr><th>GSTIN</th><th>Party</th><th>Doc / Vch</th><th>Date</th><th class="r">Taxable</th><th class="r">IGST</th><th class="r">CGST</th><th class="r">SGST</th></tr></thead><tbody>'+body+'</tbody>');
+}
+/* A financial year's GSTR-2B is not twelve returns.
+
+   A supplier who files his March GSTR-1 after the 2B cut-off has those invoices
+   land in the APRIL 2B, and one filing a quarter late in May's. In the CGST run
+   the client checked, the April and May 2026 returns held 13 invoices worth
+   ₹14,07,998.95 of CGST and two credit notes worth ₹4,52,921.85 — all of them
+   FY 2025-26 purchases, none of them in the twelve files loaded, and the whole
+   difference against the portal's own 2A/2B summary. So when the last 2B loaded
+   is a March, say what is certainly still outside it. */
+/* Which return periods the loaded files actually are, and any month missing from
+   the middle of them. A total is only as complete as the files behind it, and a
+   month nobody noticed was absent looks exactly like a year of clean books. */
+function periods2b(){
+  var set={};
+  twoBRows.concat(setAside2b,superseded2b).forEach(function(b){
+    var n=ymNumOfPeriod(b.period||periodOf(b.invDate));if(n)set[n]=1;});
+  var list=Object.keys(set).map(Number).sort(function(a,b){return a-b;});
+  if(!list.length)return {list:[],gaps:[],text:''};
+  var gaps=[],a=list[0],z=list[list.length-1];
+  for(var y=Math.floor(a/100),m=a%100,n=a;n<=z;){
+    if(!set[n])gaps.push(n);
+    m++;if(m>12){m=1;y++;}n=y*100+m;
+  }
+  return {list:list,gaps:gaps,text:fmtYM(a)+' → '+fmtYM(z)+' ('+list.length+' return'+(list.length===1?'':'s')+')'};
+}
+function periodGapWarning(){
+  var p=periods2b(); if(!p.gaps.length)return '';
+  return '<div class="repsec"><div class="conn-banner off" style="margin:0"><span class="cdot"></span><div>'
+    +'<div class="ctitle">'+p.gaps.length+' return period(s) inside the range you loaded are missing</div>'
+    +'<div class="csub">The files cover '+esc(p.text)+', but nothing was loaded for <b>'+p.gaps.map(fmtYM).join(', ')+'</b>. Every document in those months will read “booked, but not in 2B”, and the 2B total below is short by their whole value. Load them and reconcile again.</div>'
+    +'</div></div></div>';
+}
+function spilloverWarning(){
+  var mx=report.maxTwoBYM; if(!mx)return '';
+  if((mx%100)!==3)return '';
+  var y=Math.floor(mx/100);
+  return '<div class="repsec"><div class="conn-banner off" style="margin:0"><span class="cdot"></span><div>'
+    +'<div class="ctitle">The last 2B loaded is March '+y+' — the financial year does not end there</div>'
+    +'<div class="csub">A supplier who filed his March GSTR-1 after the 2B cut-off appears in the <b>April '+y+'</b> 2B, and one filing a quarter late in <b>May '+y+'</b>. Those are FY purchases and they are not in this reconciliation at all — every one of them will read “booked, but not in 2B”, and the 2B total here will be short of the portal’s year summary by exactly their value. Download the April and May 2B as well and reconcile again before taking any figure from this as the year’s.</div>'
+    +'</div></div></div>';
 }
 /* Who the unbooked documents belong to.
 
@@ -1427,8 +1506,8 @@ function exportXlsx(){
   }
   // Findings first, matched last — and every category ranked, so a bucket added
   // later can never sort as NaN and scatter its rows through the sheet.
-  var order={wrongreg:0,mismatch:1,probable:2,only2b:3,onlybk:4,onlybkCN:5,matched:6};
-  function rank(c){return order[c]==null?7:order[c];}
+  var order={wrongreg:0,mismatch:1,probable:2,only2b:3,onlybk:4,onlybkCN:5,matched:6,superseded:7};
+  function rank(c){return order[c]==null?8:order[c];}
   var recs=report.recs.slice().sort(function(a,b){return (rank(a._cat)-rank(b._cat))||((b.gst2b||b.gstBk||0)-(a.gst2b||a.gstBk||0));});
   sheet('reconciled',recs);
   var cnOrder={cnmiss:0,cnmm:1,cnok:2};

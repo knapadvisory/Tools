@@ -420,6 +420,76 @@ await t('TDS deducted on the voucher is shown, not folded into the taxable', asy
   assert(r.cat === 'matched', `expected booked, got ${r.cat}`);
 });
 
+console.log('\n── an amendment restates a document, it does not add one ──');
+await t('the original is not counted twice when a later 2B amends it', async () => {
+  /* The real 172/2025-26: reported in the June 2B and restated in July's
+     amendment table. Both sheets — ours and the portal's own tool — added both,
+     so the year's CGST was ₹3,55,466.25 too high across four such documents,
+     and the two agreed on a figure that was wrong in both. */
+  const out = await runJson([
+    { name: '2B_062025.json', json: { data: { gstin: '06AAGCE4293A1ZX', rtnprd: '062025', docdata: {
+        b2b: [{ ctin: '37AEAFS6902D1Z8', trdnm: 'SS ASSOCIATES',
+          inv: [{ inum: '172/2025-26', dt: '15-06-2025', val: 418782, txval: 354900,
+                  cgst: 31941, sgst: 31941, itcavl: 'Y' }] }] } } } },
+    { name: '2B_072025.json', json: { data: { gstin: '06AAGCE4293A1ZX', rtnprd: '072025', docdata: {
+        b2ba: [{ ctin: '37AEAFS6902D1Z8', trdnm: 'SS ASSOCIATES',
+          inv: [{ inum: '172/2025-26', oinum: '172/2025-26', dt: '15-06-2025', val: 418782,
+                  txval: 354900, cgst: 31941, sgst: 31941, itcavl: 'Y' }] }] } } } },
+  ], []);
+  assert(out.merge.superseded === 1,
+    `the original should be marked superseded, got ${out.merge.superseded}`);
+  const live = out.recs.filter((r) => r.cat !== 'superseded');
+  const dead = out.recs.filter((r) => r.cat === 'superseded');
+  assert(live.length === 1 && dead.length === 1,
+    `expected one live and one superseded, got ${live.length}/${dead.length}`);
+  assert(/amended/.test(live[0].remarks), 'the live one is the amendment: ' + live[0].remarks);
+  assert(/not counted/i.test(dead[0].note), 'and the original says it is not counted: ' + dead[0].note);
+});
+await t('a superseded original cannot take the voucher the live one needs', async () => {
+  const out = await runJson([
+    { name: '2B_062025.json', json: { data: { gstin: '06AAGCE4293A1ZX', rtnprd: '062025', docdata: {
+        b2b: [{ ctin: '37AEAFS6902D1Z8', trdnm: 'SS ASSOCIATES',
+          inv: [{ inum: '172/2025-26', dt: '15-06-2025', txval: 354900, cgst: 31941, sgst: 31941, itcavl: 'Y' }] }] } } } },
+    { name: '2B_072025.json', json: { data: { gstin: '06AAGCE4293A1ZX', rtnprd: '072025', docdata: {
+        b2ba: [{ ctin: '37AEAFS6902D1Z8', trdnm: 'SS ASSOCIATES',
+          inv: [{ inum: '172/2025-26', oinum: '172/2025-26', dt: '15-06-2025', txval: 360000, cgst: 32400, sgst: 32400, itcavl: 'Y' }] }] } } } },
+  ], [book({ _ownGstin: '06AAGCE4293A1ZX', date: '2025-06-15', voucherNo: '172/2025-26',
+             supplierInvNo: '172/2025-26', ref: '', party: 'SS ASSOCIATES', gstin: '37AEAFS6902D1Z8',
+             taxable: 360000, igst: 0, cgst: 32400, sgst: 32400 })]);
+  const live = out.recs.find((r) => r.cat !== 'superseded');
+  assert(live.vch === '172/2025-26', `the amendment gets the voucher, got "${live.vch}"`);
+  assert(/booked/.test(live.remarks) && !/not booked/.test(live.remarks),
+    'and it reconciles against the revised figures: ' + live.remarks);
+});
+
+console.log('\n── a total is only as complete as the files behind it ──');
+await t('a March 2B is not the end of the year, and the report says so', async () => {
+  await runJson([{ name: '2B_032026.json', json: { data: { gstin: '06AAGCE4293A1ZX', rtnprd: '032026',
+      docdata: { b2b: [{ ctin: '07BICPL2786D1ZB', trdnm: 'DEEPALI ENGINEERING',
+        inv: [{ inum: 'X/1', dt: '15-03-2026', txval: 100000, igst: 18000, itcavl: 'Y' }] }] } } } }], []);
+  const html = await page.evaluate(() => spilloverWarning());
+  assert(/April 2026/.test(html) && /May 2026/.test(html),
+    'it must name the two returns that carry late-filed March invoices: ' + html.slice(0, 200));
+  const sub = await page.evaluate(() => document.getElementById('repSub').textContent);
+  assert(/Mar 2026/.test(sub), 'the periods loaded belong on the report: ' + sub);
+});
+await t('a month missing from the middle of the range is named', async () => {
+  const mk = (p, dt, no) => ({ name: '2B_' + p + '.json', json: { data: { gstin: '06AAGCE4293A1ZX', rtnprd: p,
+    docdata: { b2b: [{ ctin: '07BICPL2786D1ZB', trdnm: 'DEEPALI ENGINEERING',
+      inv: [{ inum: no, dt, txval: 100000, igst: 18000, itcavl: 'Y' }] }] } } } });
+  await runJson([mk('042025', '10-04-2025', 'A/1'), mk('062025', '10-06-2025', 'A/3')], []);
+  const html = await page.evaluate(() => periodGapWarning());
+  assert(/May 2025/.test(html), 'May is missing and must be named: ' + html.slice(0, 200));
+});
+await t('no gap, no warning', async () => {
+  const mk = (p, dt, no) => ({ name: '2B_' + p + '.json', json: { data: { gstin: '06AAGCE4293A1ZX', rtnprd: p,
+    docdata: { b2b: [{ ctin: '07BICPL2786D1ZB', trdnm: 'DEEPALI ENGINEERING',
+      inv: [{ inum: no, dt, txval: 100000, igst: 18000, itcavl: 'Y' }] }] } } } });
+  await runJson([mk('042025', '10-04-2025', 'A/1'), mk('052025', '10-05-2025', 'A/2')], []);
+  const html = await page.evaluate(() => periodGapWarning());
+  assert(html === '', 'nothing is missing, so nothing should be said: ' + html.slice(0, 120));
+});
+
 console.log('\n── the Excel layout ──');
 await t('every formula in the export points at the column it means', async () => {
   /* The live formulas address columns by letter. Inserting "Source" shifted

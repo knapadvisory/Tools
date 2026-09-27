@@ -178,6 +178,12 @@ Every one of these was a bug that presented as a wall of false findings:
 - **Duplicates.** The same document in two months' files is dropped once and
   the count is shown. Left in, the second copy finds its voucher already taken
   and reads "not in books" — a false finding manufactured by the input.
+- **Amendments.** An amendment *restates* a document; it does not add one. The
+  original is marked superseded, shown for the trail, and kept out of both the
+  total and the matching, so it cannot take the voucher the live version needs.
+  Four documents in the CGST run were counted twice for ₹3,55,466.25 — and the
+  portal's own tool did the same, so the two sheets agreed on a figure that was
+  wrong in both. Agreement is not correctness.
 - **TDS and round off.** Neither belongs in the taxable base. A voucher's TDS
   deduction was inflating it; the giveaway was that 18% of the base without
   TDS equalled the IGST exactly.
@@ -196,7 +202,39 @@ on screen and on its own sheet — with the count, the GST, and what it usually
 means. One supplier's whole run missing is a question about the ledgers that
 were fetched, not about 674 omissions.
 
-## 11. Recall gaps are not all matcher gaps
+## 11. A total is only as complete as the files behind it
+
+The client checked the tool's 2B total against the portal's own 2A/2B summary
+and found it short. It reconciled **to the paisa**, and not one rupee of it was
+a matching failure:
+
+```
+portal 2B CGST (all three registrations)      3,24,52,790.09
+less  13 invoices in the APRIL and MAY 2026
+      2B — FY 2025-26 purchases whose
+      suppliers filed GSTR-1 late              -14,07,998.95
+add   3 documents in our 2B that the portal
+      download does not contain                 +2,86,644.96
+                                              ---------------
+our reconciled sheet                          3,13,31,436.10   ✓
+```
+
+and the notes the same way: portal ₹4,60,132.52 = our ₹7,210.67 + two Yankit
+notes worth ₹4,52,921.85 sitting in the April 2026 2B.
+
+**A financial year's GSTR-2B is not twelve returns.** A supplier who files his
+March GSTR-1 after the 2B cut-off appears in April's 2B; a quarterly filer in
+May's. So when the last 2B loaded is a March, the report says outright that the
+year does not end there — and any month missing from the middle of the loaded
+range is named. The periods loaded are printed on the report itself, because a
+month nobody noticed was absent looks exactly like a year of clean books.
+
+The remaining three documents (Kaushik 110, 121, 125 — ₹2,86,644.96) are in our
+2B and in neither the portal download nor the other tool's sheet. Two of them
+carry the same amounts as invoices 127 and 130, which both sheets do have. That
+needs the source JSON to settle and is **open**.
+
+## 12. Recall gaps are not all matcher gaps
 
 142 documents worth ₹12.37 lakh appeared in the other tool's sheet and not in
 ours. Before touching the matcher: **119 of them were dated March 2026**, and
@@ -236,6 +274,11 @@ Always separate the two before concluding the matching is weak.
 - **Nothing ages the unmatched.** A document unbooked for five months is
   reported the same as one unbooked for five days, and the Sec 16(4) cut-off
   (30 Nov after the FY) is mentioned in notes but not computed.
+- **Three documents unexplained.** Kaushik Enterprises 110, 121 and 125
+  (₹2,86,644.96 of CGST) are in our 2B and in neither the portal's 2A/2B
+  download nor the other tool's sheet; two share amounts with invoices 127 and
+  130, which both of those do have. Needs the May and June 2025 2B JSON to
+  settle.
 - **Nothing reconciles the total to GSTR-3B.** The tool ties 2B to the books;
   it does not tie either to the ITC actually claimed in 3B, which is the number
   a notice is raised on.
