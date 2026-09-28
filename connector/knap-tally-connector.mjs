@@ -28,7 +28,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import v8 from 'node:v8';
 
-const VERSION = '4.67';
+const VERSION = '4.68';
 // Bumped WITH connector/version.json — the two are compared to decide a
 // self-update, so a mismatch either loops every connector in the field or
 // hides the build. connector/version.test.mjs fails the pair apart.
@@ -335,19 +335,35 @@ let currentTallyAbort = null;
    body is streamed and counted now, so an answer that big becomes an error the
    preparer can act on instead of a disappearance nobody can explain. */
 const MAX_TALLY_MB = Number(process.env.KNAP_MAX_TALLY_MB || 350);
-async function tallyFetch(tallyUrl, body, ms) {
+/* What one ledger's 20-day sample may weigh before the shape is written off as
+   not filtering. A real input-GST ledger answers a 20-day window in kilobytes;
+   the shape that ignored the ledger altogether streamed 98 MB, three times over,
+   before anything noticed. */
+const SHAPE_PROBE_MB = Number(process.env.KNAP_SHAPE_PROBE_MB || 20);
+/* capMb: a caller that is only PROBING can set its own, much smaller ceiling.
+   A probe exists to find out whether a request shape filters; one that is still
+   streaming at 20 MB has answered that question already, and downloading the
+   remaining 80 MB to confirm it costs a minute and a third of a gigabyte. Over
+   its own cap a probe fails with PROBE_TOO_BIG, which the caller reads as "this
+   shape does not filter" rather than as an error. */
+async function tallyFetch(tallyUrl, body, ms, capMb) {
   const ctl = new AbortController();
   currentTallyAbort = ctl;
   const timer = ms ? setTimeout(() => ctl.abort(new Error('Tally request timed out')), ms) : null;
   try {
     const res = await fetch(tallyUrl, { method: 'POST', body, headers: { 'content-type': 'text/xml' }, signal: ctl.signal });
     if (!res.body) return await res.text();
-    const cap = MAX_TALLY_MB * 1024 * 1024;
+    const probing = !!capMb && capMb < MAX_TALLY_MB;
+    const cap = (probing ? capMb : MAX_TALLY_MB) * 1024 * 1024;
     const chunks = []; let bytes = 0;
     for await (const chunk of res.body) {
       bytes += chunk.length;
       if (bytes > cap) {
         try { ctl.abort(); } catch { /* already gone */ }
+        if (probing) {
+          trace('probe over its own cap — shape abandoned', { mb: Math.round(bytes / 1048576), capMb });
+          throw new Error('PROBE_TOO_BIG');
+        }
         trace('TALLY RESPONSE OVER CAP — refused', { mb: Math.round(bytes / 1048576), capMb: MAX_TALLY_MB });
         throw new Error(`Tally sent more than ${MAX_TALLY_MB} MB for one request. That is too much to hold in memory — read a shorter period, or fewer ledgers at a time. (Raise the cap with KNAP_MAX_TALLY_MB if this machine has the memory.)`);
       }
@@ -3032,7 +3048,7 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
       }
       return out;
     };
-    let useFilter = false, filterNote = '', ledgerXml = null;
+    let useFilter = false, filterNote = '', ledgerXml = null, dayBookDead = false;
     if (ledgerNames.length) {
       dcProgress.phase = 'Asking Tally which vouchers touch these ledgers…';
       const probeEnd = new Date(Math.min(to.getTime(), from.getTime() + 20 * DAY_MS));
@@ -3045,6 +3061,12 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
         trace('probe done', { chars: plain.length, vouchers: plainCount, itcVouchers: want.size });
       } catch (e) {
         if (/released/i.test(String(e && e.message))) throw e;
+        /* Tally answered the ledger masters a moment ago, so it is running and
+           reachable. It just will not serve a day book. Remembered, because if
+           the ledger shapes fail too there is no route left, and the report
+           should say that rather than blame the period. */
+        dayBookDead = true;
+        trace('day book would not answer', { error: String((e && e.message) || e).slice(0, 120) });
       }
 
       /* ---- 1. straight off Tally's ledger index ----
@@ -3052,7 +3074,22 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
          nineteen entries answers in a moment however big the books are. Proved
          against the sample window before it is used: if the ledger index does
          not account for every ITC voucher the day book showed, it is dropped. */
-      if (want && want.size) {
+      /* The day-book probe is EVIDENCE, not a prerequisite.
+
+         On SHIVAM ENTERPRISES the 20-day day book never came back — three
+         minutes, two attempts, a shorter period, all timed out. `want` stayed
+         empty, and because the shortcut was gated on it, the sixteen named
+         input-GST ledgers — a few seconds of reading — were never even tried.
+         The books too dense to scan are exactly the books that need the
+         shortcut most, and it switched itself off for them.
+
+         So it runs either way. With the probe, a shape must account for every
+         ITC voucher the day book showed. Without it, a shape must still return
+         ITC vouchers, stay under its own size cap, and give DIFFERENT answers
+         for different ledgers — and the note says plainly that it was not
+         cross-checked. */
+      const proved = !!(want && want.size);
+      {
         for (const shape of LEDGER_VCH_SHAPES) {
           if (ledgerXml) break;
           try {
@@ -3064,16 +3101,30 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
               if (dcCancel) throw new Error('released by user');
               dcProgress.sub = `trying ${shape.what} on “${nm}”…`;
               trace('probe shape', { shape: shape.what, ledger: nm });
-              const part = await tallyFetch(url, ledgerVouchersRequest(nm, from, probeEnd, shape), 90000);
+              const part = await tallyFetch(url, ledgerVouchersRequest(nm, from, probeEnd, shape), 90000, SHAPE_PROBE_MB);
               trace('probe shape done', { shape: shape.what, ledger: nm, chars: part.length });
               probeParts.push(part);
+            }
+            /* Different ledgers must give different answers. Byte-for-byte the
+               same large response for "Input CGST" and "Input IGST" is not a
+               coincidence — it is the whole day book, with the ledger ignored.
+               This is the ECLAT failure caught without a day book to compare
+               against. Small identical answers are left alone: two genuinely
+               empty ledgers do match, and the emptiness check below has them. */
+            if (probeParts.length > 1) {
+              const big = probeParts[0].length > 256 * 1024;
+              if (big && probeParts.every((p) => p === probeParts[0])) {
+                trace('shape REJECTED — every ledger gave the same answer', {
+                  shape: shape.what, ledgers: probeParts.length, chars: probeParts[0].length });
+                continue;
+              }
             }
             const probeXml = probeParts.join('');
             const got = itcGuids(probeXml);
             const gotVouchers = (probeXml.match(/<VOUCHER[\s>]/gi) || []).length;
             probeParts.length = 0;
             if (!got.size) continue;                       // this build will not answer that way
-            if ([...want].some((g) => !got.has(g))) continue;  // incomplete — never trust it
+            if (proved && [...want].some((g) => !got.has(g))) continue;  // incomplete — never trust it
             /* And it must actually have FILTERED. The test above only catches a
                shape that returns too little; a shape that returns the whole day
                book passes it trivially, because the day book does contain every
@@ -3096,6 +3147,7 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
                 shape: shape.what, vouchersReturned: gotVouchers, dayBookVouchers: plainCount });
               continue;
             }
+            trace('shape accepted', { shape: shape.what, vouchers: gotVouchers, crossChecked: proved });
 
             const parts = []; let bytes = 0;
             for (const nm of ledgerNames) {
@@ -3119,10 +3171,11 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
             trace('ledger-index read complete', { chars: bytes, parts: parts.length });
             if (!parts.some((p) => itcGuids(p).size)) continue;
             ledgerXml = parts;               // kept in pieces; eaten one at a time
-            filterNote = `read straight from Tally's ledger index (${shape.what}) — ${ledgerNames.length} ledger request(s) instead of scanning the day book`;
+            filterNote = `read straight from Tally's ledger index (${shape.what}) — ${ledgerNames.length} ledger request(s) instead of scanning the day book`
+              + (proved ? '' : '; the day book would not answer, so this was NOT cross-checked against it');
           } catch (e) {
             if (/released/i.test(String(e && e.message))) throw e;
-            /* this shape is not available here — try the next */
+            /* PROBE_TOO_BIG, or this shape is not available here — try the next */
           }
         }
       }
@@ -3131,7 +3184,9 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
       if (!ledgerXml) {
         try {
           if (!want || !want.size) {
-            filterNote = 'no ITC vouchers in the sample window, so no shortcut could be proved — read in full';
+            filterNote = proved
+              ? 'no ITC vouchers in the sample window, so no shortcut could be proved — read in full'
+              : 'the day book would not answer, and no ledger shape worked either — read in full';
           } else {
             const filtered = await tallyFetch(url, itcVoucherRequest(from, probeEnd, ledgerNames), 90000);
             const got = itcGuids(filtered);
@@ -3262,6 +3317,11 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
       }
       dcProgress.monthsDone = totalDays;
     } else {
+      /* The last route. If the day book already refused once, its failing again
+         is not news about the period — it means this company has no readable
+         route at all, and saying so is more use than "try a shorter period",
+         which was the old advice and did not work. */
+      try {
       await readVouchersRamp(url, from, to, eat,
         (endDate) => {
           dcProgress.monthsDone = Math.min(totalDays, Math.round((endDate.getTime() - from.getTime()) / DAY_MS) + 1);
@@ -3274,6 +3334,11 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
           // most of the wall-clock saving actually shows up.
           request: useFilter ? (a, b) => itcVoucherRequest(a, b, ledgerNames)
                              : (a, b) => dcVoucherRequest(a, b, ITC_FETCH) });
+      } catch (e) {
+        const m = String((e && e.message) || e);
+        if (/released/i.test(m)) throw e;
+        throw new Error(dayBookDead ? 'ITC_NO_ROUTE: ' + m : m);
+      }
     }
     rows.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
     return { rows };
@@ -5110,10 +5175,19 @@ const server = http.createServer(async (req, res) => {
         json(res, 200, { ok: true, version: VERSION, from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10), rows: one.rows, registrations });
       } catch (e) {
         dcProgress.active = false;
-        const msg = /AGEING_TOO_DENSE/.test(String((e && e.message) || e))
-          ? 'This company has too many vouchers to read invoice-by-invoice. Try a shorter period.'
-          : ('Could not read Tally: ' + String((e && e.message) || e));
-        trace('READ FAILED', { error: String((e && e.message) || e) });
+        /* "Try a shorter period" was the advice here, and on SHIVAM it was
+           wrong: the April–June retry timed out the same way. A book Tally
+           cannot scan at all does not get easier in quarters. Say what is
+           actually happening and what actually helps. */
+        const raw = String((e && e.message) || e);
+        const msg = /ITC_NO_ROUTE|AGEING_TOO_DENSE/.test(raw)
+          ? 'Tally would not answer a day-book read for this company — it has too many vouchers per day, '
+            + 'and a shorter period does not help (the day book is read day by day either way). '
+            + 'The faster route reads your input-GST ledgers directly: make sure the ledgers picked in step 3 '
+            + 'are the real input-tax ledgers, keep the company open in Tally, and try again. '
+            + 'If it still will not answer, send the trace from Diagnostics.'
+          : ('Could not read Tally: ' + raw);
+        trace('READ FAILED', { error: raw });
         json(res, 502, { ok: false, error: msg });
       }
       return;

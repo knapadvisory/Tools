@@ -72,6 +72,14 @@ const srv = http.createServer((req, res) => {
     const isFiltered = /KnapItcVch/.test(b);
     if (isLedger) stats.ledger++; else if (isFiltered) stats.filtered++; else stats.plain++;
 
+    /* A book Tally will not scan at all. SHIVAM ENTERPRISES answered no day-book
+       request — 20 days, a quarter, a year, all timed out — while its sixteen
+       input-GST ledgers were seconds of reading. The socket is dropped rather
+       than hung so the test does not wait out a real 90-second timeout; what is
+       under test is the state that leaves behind, which is the same either way:
+       no day-book evidence at all. */
+    if (/^dead/.test(mode) && !isLedger && !isFiltered) return res.destroy();
+
     /* Tally's ledger index: only the vouchers that hit the named ledger.
        In "noLedgerIndex" the server refuses it, as an older Tally would. */
     if (isLedger) {
@@ -83,9 +91,14 @@ const srv = http.createServer((req, res) => {
                       // the client's Tally: it answers the CHILDOF shape, but
                       // with the whole day book — ledger and dates both ignored
                       noFilter: ['collection-voucher-childof'],
+                      // the day book will not answer at all, but the ledgers do
+                      deadDayBook: ['collection-voucher-ledger'],
+                      // the day book will not answer AND the only shape ignores
+                      // the ledger — nothing can be trusted here
+                      deadNoFilter: ['collection-voucher-childof'],
                       filterOnly: [], bad: [], noLedgerIndex: [] }[mode] || [];
       if (!knows.includes(shape)) { res.statusCode = 200; return res.end('<ENVELOPE></ENVELOPE>'); }
-      if (mode === 'noFilter') {
+      if (mode === 'noFilter' || mode === 'deadNoFilter') {
         /* Byte-for-byte the day book, whatever ledger and whatever window was
            asked for — exactly what the client's Tally did. */
         const all = [];
@@ -138,16 +151,18 @@ const t = (n, fn) => { try { fn(); pass++; console.log('  PASS  ' + n); }
   catch (e) { fail++; console.log('  FAIL  ' + n + '\n        ' + e.message); } };
 const assert = (c, m) => { if (!c) throw new Error(m); };
 
-async function run(label) {
+async function run(label, opts) {
+  opts = opts || {};
   stats = { plain: 0, filtered: 0, ledger: 0, bytes: 0 };
   const t0 = Date.now();
-  const r = await fetch('http://127.0.0.1:8898/api/itc/register', {
+  const r = await fetch('http://127.0.0.1:' + (opts.port || 8898) + '/api/itc/register', {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ url: 'http://127.0.0.1:9977/', company: 'X',
-      from: '2025-04-01', to: '2026-03-31', taxLedgers: [{ name: 'Input IGST', kind: 'igst' }] }),
+      from: '2025-04-01', to: '2026-03-31',
+      taxLedgers: opts.ledgers || [{ name: 'Input IGST', kind: 'igst' }] }),
   });
   const j = await r.json();
-  const prog = await (await fetch('http://127.0.0.1:8898/api/dc/progress')).json();
+  const prog = await (await fetch('http://127.0.0.1:' + (opts.port || 8898) + '/api/dc/progress')).json();
   console.log(`\n[${label}] rows=${j.rows ? j.rows.length : '-'} requests: ledger=${stats.ledger} plain=${stats.plain} filtered=${stats.filtered} ` +
               `bytes=${(stats.bytes / 1048576).toFixed(1)}MB time=${((Date.now() - t0) / 1000).toFixed(1)}s`);
   console.log(`         note: ${prog.note}`);
@@ -299,6 +314,61 @@ t('it shows what the day book would have cost instead', () => {
   const rep = diag.results.find((r) => r.shape === 'report-ledger-vouchers');
   assert(rep.vouchers < db.vouchers, `the ledger read should be smaller: ${rep.vouchers} vs ${db.vouchers}`);
 });
+
+/* ---------------------------------------------------------------------------
+ * A book Tally will not scan at all.
+ *
+ * SHIVAM ENTERPRISES: every day-book read timed out — 20 days, then a quarter,
+ * then the year. The shortcut was gated on that probe succeeding, so the
+ * sixteen input-GST ledgers, which are seconds of reading, were never tried.
+ * The books too dense to scan are the books that need the shortcut most, and
+ * it switched itself off for exactly those.
+ * ------------------------------------------------------------------------- */
+console.log('\n── the day book will not answer ──');
+mode = 'deadDayBook';
+const dead = await run('dead day book');
+t('the ledger index is still tried, and still works', () => {
+  assert(dead.j.ok !== false, 'the read must not fail: ' + JSON.stringify(dead.j).slice(0, 200));
+  assert(/ledger index/.test(dead.note), 'it must have used the ledger index: ' + dead.note);
+  assert(dead.j.rows.length >= TOTAL / ITC_EVERY,
+    `every ITC voucher must still come back, got ${dead.j.rows.length}`);
+});
+t('and it says plainly that nothing cross-checked it', () => {
+  assert(/NOT cross-checked/.test(dead.note),
+    'an unverified shortcut must admit it is unverified: ' + dead.note);
+});
+
+console.log('\n── the day book will not answer, and the shape ignores the ledger ──');
+mode = 'deadNoFilter';
+const deadBad = await run('dead, and no filter', {
+  ledgers: [{ name: 'Input IGST', kind: 'igst' }, { name: 'Input CGST', kind: 'cgst' }] });
+t('two ledgers giving byte-identical answers is refused, with no day book to prove it', () => {
+  assert(deadBad.j.ok === false,
+    'nothing here can be trusted, so the read must fail rather than invent: ' + JSON.stringify(deadBad.j).slice(0, 200));
+});
+t('and the failure says something true and useful', () => {
+  const m = String(deadBad.j.error || '');
+  assert(/would not answer|too many vouchers per day/.test(m), 'it must say what happened: ' + m);
+  assert(!/Try a shorter period\./.test(m),
+    'a shorter period does not help a book read day by day — that advice was wrong: ' + m);
+});
+
+/* The size cap, on its own connector so the ceiling can be lowered to 1 MB —
+   the stub's unfiltered answer is about 2 MB, which a real book reaches in
+   milliseconds and the client's reached at 98. */
+console.log('\n── a probe that will not stop streaming ──');
+const conn2 = spawn('node', [new URL('./knap-tally-connector.mjs', import.meta.url).pathname],
+  { env: { ...process.env, PORT: '8899', KNAP_SHAPE_PROBE_MB: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+await new Promise((r) => setTimeout(r, 2500));
+mode = 'noFilter';
+const capped = await run('probe cap', { port: 8899 });
+t('the shape is abandoned mid-stream instead of downloaded whole', () => {
+  assert(capped.stats.bytes < 8 * 1024 * 1024,
+    `it must stop early, not pull megabytes: ${(capped.stats.bytes / 1048576).toFixed(1)}MB`);
+  assert(!/ledger index/.test(capped.note),
+    'and it must not then be used: ' + capped.note);
+});
+conn2.kill();
 
 console.log(`\n${pass} passed, ${fail} failed`);
 conn.kill(); srv.close();
