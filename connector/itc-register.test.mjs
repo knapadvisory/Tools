@@ -59,9 +59,36 @@ const tdsVch = () => `<VOUCHER VCHTYPE="Purchase">
 <ALLLEDGERENTRIES.LIST><LEDGERNAME>Round Off</LEDGERNAME><ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE><AMOUNT>-0.44</AMOUNT></ALLLEDGERENTRIES.LIST>
 </VOUCHER>`;
 
+/* Serial Tally. Once it is given a request wider than four days it is BUSY for
+   `busyMs`, and every request that arrives before then — however small — waits
+   behind it. Aborting the client end changes nothing here, as it changes
+   nothing in Tally. This is SHIVAM: a one-day request answering in seven
+   milliseconds, then the identical request timing out because a three-day
+   day-book scan had been abandoned a moment before. */
+let busyUntil = 0, busyMs = 2500;
 const srv = http.createServer((req, res) => {
   let b = ''; req.on('data', (c) => b += c); req.on('end', () => {
     res.setHeader('content-type', 'text/xml');
+    if (mode === 'poison') {
+      const f0 = Number((b.match(/<SVFROMDATE[^>]*>(\d{8})/i) || [])[1] || 0);
+      const t0 = Number((b.match(/<SVTODATE[^>]*>(\d{8})/i) || [])[1] || 0);
+      const isVch = /Voucher/i.test(b);
+      if (isVch && f0 && t0) {
+        const span = Math.round((Date.UTC(Math.floor(t0 / 10000), Math.floor(t0 / 100) % 100 - 1, t0 % 100)
+                               - Date.UTC(Math.floor(f0 / 10000), Math.floor(f0 / 100) % 100 - 1, f0 % 100)) / 86400000);
+        const isDayBook = !/KnapLedVch|Ledger Vouchers|KnapItcVch/i.test(b);
+        if (isDayBook || span > 4) {            // too much for this Tally: it grinds, and never answers
+          if (isDayBook) stats.plain++; else stats.ledger++;   // counted — it WAS sent
+          stats.poisoned = (stats.poisoned || 0) + 1;
+          busyUntil = Math.max(busyUntil, Date.now() + busyMs);
+          return;                                // and the client's abort does not stop the grinding
+        }
+      }
+      const wait = busyUntil - Date.now();
+      if (wait > 0) { stats.queued = (stats.queued || 0) + 1; return setTimeout(() => handle(), wait); }
+    }
+    handle();
+    function handle() {
     if (/KnapLedgers|Ledger/i.test(b) && !/Voucher/i.test(b)) {
       return res.end('<ENVELOPE><LEDGER NAME="Stock Supplier"><PARENT>Sundry Creditors</PARENT></LEDGER></ENVELOPE>');
     }
@@ -121,6 +148,7 @@ const srv = http.createServer((req, res) => {
                       deadNoFilter: ['collection-voucher-childof'],
                       mute: [],
                       narrow: ['collection-voucher-ledger'],
+                      poison: ['collection-voucher-ledger'],
                       filterOnly: [], bad: [], noLedgerIndex: [] }[mode] || [];
       if (!knows.includes(shape)) { res.statusCode = 200; return res.end('<ENVELOPE></ENVELOPE>'); }
       if (mode === 'noFilter' || mode === 'deadNoFilter') {
@@ -162,6 +190,7 @@ const srv = http.createServer((req, res) => {
     const body = '<ENVELOPE>' + out.join('') + '</ENVELOPE>';
     stats.bytes += body.length;
     setTimeout(() => res.end(body), 30);
+    }
   });
 });
 await new Promise((r) => srv.listen(9977, '127.0.0.1', r));
@@ -238,7 +267,10 @@ t('the whole period comes from the ledger index', () => {
      Tally lets them be. What matters is that the ledger index did the work and
      the day book was not scanned. */
   assert(led.stats.ledger >= 3, `the ledger index must be read, got ${led.stats.ledger} requests`);
-  assert(led.stats.plain <= 1, `only the proving window should be scanned, got ${led.stats.plain}`);
+  /* The sample starts at one day and widens (1, 3, 10, 20) until it holds
+     enough ITC vouchers to prove against — a few small day-book requests, never
+     the whole period. */
+  assert(led.stats.plain <= 4, `only the sample windows should be scanned, got ${led.stats.plain}`);
   assert(led.stats.filtered === 0, 'the day-book filter should not be needed');
 });
 t('and it still finds every ITC voucher', () => {
@@ -473,6 +505,52 @@ t('and it did not fall back to scanning the day book', () => {
   assert(/windows/.test(narrow.note), 'and the note should say how: ' + narrow.note);
 });
 conn4.kill();
+
+/* ---------------------------------------------------------------------------
+ * A Tally that keeps working on what you abandoned.
+ *
+ * SHIVAM, 4.71, the line that explained every trace before it: one day of one
+ * ledger answered in seven milliseconds; a three-day day-book request was
+ * abandoned at thirty seconds; and the SAME one-day request, sent next, timed
+ * out at thirty. Tally's XML server is serial, and closing our end of the
+ * connection does not stop the work at its end. Everything asked after an
+ * abandoned request queues behind it. The reader must ask the day book for as
+ * little as possible, and after any timeout wait until a trivial request
+ * answers again before asking anything else — or every timing it takes is a
+ * measurement of the backlog.
+ * ------------------------------------------------------------------------- */
+console.log('\n── a Tally that keeps working on what you abandoned ──');
+const conn5 = spawn('node', [new URL('./knap-tally-connector.mjs', import.meta.url).pathname],
+  { env: { ...process.env, PORT: '8902', KNAP_LIVENESS_MS: '600', KNAP_LIVENESS_SLOW_MS: '900',
+           KNAP_LEDGER_ATTEMPT_MS: '700', KNAP_DAYBOOK_PROBE_MS: '500',
+           KNAP_RECOVER_EVERY_MS: '300', KNAP_RECOVER_EACH_MS: '250' },
+    stdio: ['ignore', 'pipe', 'pipe'] });
+await new Promise((r) => setTimeout(r, 2500));
+mode = 'poison'; busyUntil = 0;
+const poison = await run('serial Tally', { port: 8902 });
+t('the read finishes, and finds every ITC voucher', () => {
+  assert(poison.j.ok !== false, 'it must not fail: ' + JSON.stringify(poison.j).slice(0, 220));
+  const expected = Math.ceil(TOTAL / ITC_EVERY) + 2;
+  assert(poison.j.rows.length === expected, `expected ${expected} rows, got ${poison.j.rows.length}`);
+});
+t('the day book was asked for ONE day, not twenty', () => {
+  /* The first day-book question is the one that poisons. One day is the least
+     it can be; it still never answers here, but it is the only day-book
+     request that should ever have been sent. */
+  assert(poison.stats.plain === 1, `exactly one day-book request, got ${poison.stats.plain}`);
+});
+t('it waited for Tally to come back instead of stacking requests behind the poison', () => {
+  /* Requests that arrived while the stub was busy were queued, not answered.
+     A reader that fires the next question straight after a timeout stacks
+     dozens of them; one that pings and waits stacks a handful. */
+  assert((poison.stats.queued || 0) < 12,
+    `too many requests sent into the backlog: ${poison.stats.queued} queued behind ${poison.stats.poisoned} poisoning request(s)`);
+});
+t('and the ceiling was learned once, not rediscovered per window', () => {
+  assert((poison.stats.poisoned || 0) <= 4,
+    `each poisoning request costs a full recovery; there should be very few: ${poison.stats.poisoned}`);
+});
+conn5.kill();
 
 console.log(`\n${pass} passed, ${fail} failed`);
 conn.kill(); srv.close();

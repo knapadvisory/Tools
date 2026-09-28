@@ -706,6 +706,55 @@ quietly dropped them would read as though nothing had reconciled. The Tie-out
 sheet still covers the whole 2B either way, which that sheet also says, since
 its totals will not add up to the rows in the file.
 
+### Tally's XML server is serial, and a request cannot be taken back
+
+This is the finding that explains every SHIVAM trace before it, and 4.71's own
+run is the proof, once you know what to look for:
+
+```
+14:07:52.189  liveness probe answered   (1 day, 1 ledger)      7 ms, Tally idle
+14:07:52.190  probe: day book, 3 days
+14:08:22.197  day book timed out                              abandoned at 30 s
+   [silence]  shape 1 sample, 1 day — the SAME request that took 7 ms — 30 s, nothing
+   [silence]  shape 2, 30 s. shape 3, 30 s. day-book fallback, 90 s.
+14:11:22.225  READ FAILED
+```
+
+The identical one-day request answered in seven milliseconds and then timed
+out at thirty, with nothing changed but what came before it. **Closing our end
+of the connection does not stop Tally.** Its XML server works through requests
+one at a time; the abandoned three-day day-book scan kept grinding, and every
+request sent afterwards queued behind it. Each "shape that would not answer"
+in every trace since 4.69 was the backlog being measured and the question
+being blamed. It is also why the liveness probe only ever answered right after
+a connector restart — ten minutes after the previous poison had cleared.
+
+Two rules follow, and **4.72** keeps them:
+
+- **nothing that might not come back is sent while a cheaper question could
+  settle the matter.** The day book — the request that poisons — is asked for
+  **one day** on a fifteen-second leash and widened only while it answers
+  quickly, never twenty days on a long one. The Ledger Vouchers report is asked
+  before the shape that on ECLAT answered with the entire day book;
+- **after any request is given up on, nothing else is sent until a trivial one
+  answers again.** One day of one ledger — the seven-millisecond request — is
+  asked every ten seconds on a five-second leash, the wait is shown on the
+  page, and only then does the read continue. The windowed reader does the same
+  after a window times out, instead of retrying narrower into the same backlog.
+
+And every question is now traced *before* it is sent, because a hundred and
+eighty seconds of silence in the 4.71 trace was the difference between seeing
+this and guessing. When nothing works, the failure lists what every question
+got — the day book at one day, each shape's sample, its size, its verdict —
+because that list is what the next fix is made from.
+
+The stub grew a serial Tally: once given a request wider than four days, or any
+day-book request, it is busy for a while and every request that arrives before
+then waits behind it, whatever the client does. Against it the reader finishes
+with all 602 ITC vouchers, sends exactly one day-book request, stacks a handful
+of pings behind the poison rather than dozens of questions, and learns the
+ceiling once.
+
 ### It was never refusing — the window was too wide
 
 The liveness probe in 4.70 was built on the belief that Tally would serve no
