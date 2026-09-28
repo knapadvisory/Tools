@@ -1225,6 +1225,20 @@ await t('a document found only in 2A is kept out of the 2B side of the bridge', 
  * disagree — the same books, matched with the shortcut and without it, must
  * assign exactly the same voucher to exactly the same document.
  * ------------------------------------------------------------------------- */
+console.log('\n── a bill booked as a Journal ──');
+await t('a journal with the bill number only in its narration still finds its 2B document', async () => {
+  /* The connector infers the party from the leg opposite the tax and lifts
+     the bill number out of the narration; the page must use both. No GSTIN,
+     no supplier-invoice field: the number, the name and the amount carry it. */
+  const out = await label(
+    doc({ gstin: '06AAKFG1234B1Z9', party: 'GARG & ASSOCIATES', invNo: 'GA/2526/041', invDate: '2026-03-31',
+          invoiceValue: 14160, taxable: 12000, igst: 2160, cgst: 0, sgst: 0 }),
+    { _ownGstin: '06AAGCE4293A1ZX', date: '2026-03-31', voucherNo: '25-26/GST-102', voucherType: 'Journal',
+      supplierInvNo: '', ref: '', narrationRef: 'GA/2526/041', party: 'GARG & ASSOCIATES', partyInferred: true,
+      gstin: '', taxable: 12000, igst: 2160, cgst: 0, sgst: 0, rcmIgst: 0, rcmCgst: 0, rcmSgst: 0, tds: 1200 });
+  assert(out.cat === 'matched', `it must be booked, got ${out.cat}: ${out.remarks}`);
+});
+
 console.log('\n── the shortcut, and that it changes nothing ──');
 
 /* A book with the three ways a real one fails to line up: the invoice is not

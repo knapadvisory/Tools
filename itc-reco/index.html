@@ -202,7 +202,7 @@
   <!-- 1b · a Tally nobody can connect to -->
   <div class="card" id="card1b">
     <h2>1b · Or — a remote / hosted Tally: start from its export</h2>
-    <div class="lbl" style="margin:4px 0 10px">Tally shown through a remote-app window has no port this tool can reach. Inside that window, from the Gateway press <b>Alt+E → Transactions</b> (not <i>Current</i>, and not the Registers — those export only the columns on screen). <b>Type of Voucher entries: All Vouchers</b> — TallyPrime has no voucher-type filter here, so the file holds sales and receipts too; that is fine, only the vouchers touching the ledgers you tag are read. Format <b>XML (Data Interchange)</b>, <b>Folder Path</b> on your own drive (not the server’s Program Files), and the <b>Period</b> — one month at a time if a year is too large a file; drop all twelve here together. The file is the company: every ledger in it is listed in step 2 for you to tag, and nothing above needs to be connected.</div>
+    <div class="lbl" style="margin:4px 0 10px">Tally shown through a remote-app window has no port this tool can reach. Inside that window, from the Gateway press <b>Alt+E → Transactions</b> (not <i>Current</i>, and not the Registers — those export only the columns on screen). <b>Type of Voucher entries: All Vouchers</b> — TallyPrime has no voucher-type filter here, so the file holds sales and receipts too; that is fine, only the vouchers touching the ledgers you tag are read. <b>Include dependent masters: Yes</b> — that puts each ledger’s group and GSTIN in the file, so a bill booked as a <i>Journal</i> (no party field) still gets its supplier and GSTIN. Format <b>XML (Data Interchange)</b>, <b>Folder Path</b> on your own drive (not the server’s Program Files), and the <b>Period</b> — one month at a time if a year is too large a file; drop all twelve here together. The file is the company: every ledger in it is listed in step 2 for you to tag, and nothing above needs to be connected.</div>
     <div class="drop" id="dropExport">Drop the Tally export <b>.xml</b> file(s) here, or click to choose.
       <input type="file" id="exportFiles" accept=".xml,text/xml" multiple style="display:none">
     </div>
@@ -599,7 +599,8 @@ function scanExports(files){
         (j.ledgers||[]).forEach(function(L){
           var k=nk(L.name),o=byName[k]||(byName[k]={name:L.name,vouchers:0,dr:0,cr:0});
           o.vouchers+=L.vouchers;o.dr+=L.dr;o.cr+=L.cr;
-          o.parent=o.vouchers.toLocaleString('en-IN')+' vch \u00b7 Dr '+inr(o.dr)+' \u00b7 Cr '+inr(o.cr);
+          if(L.group)o.group=L.group;
+          o.parent=(o.group?o.group+' \u00b7 ':'')+o.vouchers.toLocaleString('en-IN')+' vch \u00b7 Dr '+inr(o.dr)+' \u00b7 Cr '+inr(o.cr);
         });
         next();
       }).catch(function(e){errs.push(f.name+': '+e.message+' \u2014 is the connector running on this computer? It reads the file; no Tally is needed.');next();});
@@ -1554,7 +1555,7 @@ function uniq(a){var s={},o=[];a.forEach(function(x){if(x&&!s[x]){s[x]=1;o.push(
    digit long). They are kept here and corroborated at the point of use —
    see `invBest` — because on its own "6" is not evidence of anything. */
 function invCands(r){
-  var out=[];[r.supplierInvNo,r.voucherNo,r.ref].forEach(function(x){out=out.concat(invForms(x));});
+  var out=[];[r.supplierInvNo,r.voucherNo,r.ref,r.narrationRef].forEach(function(x){out=out.concat(invForms(x));});
   return uniq(out).filter(function(x){return x.length>=1;});
 }
 /* The strongest invoice-number agreement between a 2B number and a books row,

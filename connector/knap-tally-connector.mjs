@@ -28,7 +28,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import v8 from 'node:v8';
 
-const VERSION = '4.77';
+const VERSION = '4.78';
 // Bumped WITH connector/version.json — the two are compared to decide a
 // self-update, so a mismatch either loops every connector in the field or
 // hides the build. connector/version.test.mjs fails the pair apart.
@@ -533,7 +533,7 @@ function dcVoucherRequest(from, to, extra) {
 /* What the ITC register needs on top: GSTR-2B is matched on the supplier's own
    invoice number, and a voucher that uses LEDGERENTRIES rather than
    ALLLEDGERENTRIES would otherwise arrive with no legs at all. */
-const ITC_FETCH = ['SUPPLIERINVOICENO', 'BASICBUYERREFNO', 'LEDGERENTRIES.LIST'];
+const ITC_FETCH = ['SUPPLIERINVOICENO', 'BASICBUYERREFNO', 'NARRATION', 'LEDGERENTRIES.LIST'];
 
 /**
  * The vouchers of ONE ledger, straight from Tally's own ledger index.
@@ -620,6 +620,7 @@ const ITC_VCH_FETCH = `<FETCH>DATE</FETCH><FETCH>GUID</FETCH><FETCH>VOUCHERTYPEN
     <FETCH>PARTYLEDGERNAME</FETCH><FETCH>ISCANCELLED</FETCH><FETCH>ISOPTIONAL</FETCH>
     <FETCH>PARTYGSTIN</FETCH><FETCH>CMPGSTIN</FETCH><FETCH>GSTREGISTRATION</FETCH>
     <FETCH>REFERENCE</FETCH><FETCH>SUPPLIERINVOICENO</FETCH><FETCH>BASICBUYERREFNO</FETCH>
+    <FETCH>NARRATION</FETCH>
     <FETCH>ALLLEDGERENTRIES.LIST</FETCH><FETCH>LEDGERENTRIES.LIST</FETCH>`;
 function ledgerVouchersRequest(ledgerName, from, to, shape) {
   return (shape || LEDGER_VCH_SHAPES[0]).xml(ledgerName, from, to);
@@ -3526,16 +3527,46 @@ async function readItcRegister(url, company, from, to, taxLedgers, opts = {}) {
         // input-tax ledger, so the reconciliation can name the voucher that
         // answers a 2A/2B credit note instead of showing a bare number.
         const vtypeName = tag(block, 'VOUCHERTYPENAME').trim();   // tag() already decodes
-        const party = tag(block, 'PARTYLEDGERNAME') || '';
+        let party = tag(block, 'PARTYLEDGERNAME') || '';
+        let partyInferred = false;
         const entryBlocks = block.match(/<ALLLEDGERENTRIES\.LIST>[\s\S]*?<\/ALLLEDGERENTRIES\.LIST>/gi) || block.match(/<LEDGERENTRIES\.LIST>[\s\S]*?<\/LEDGERENTRIES\.LIST>/gi) || [];
         const tax = { igst: 0, cgst: 0, sgst: 0, rcm_igst: 0, rcm_cgst: 0, rcm_sgst: 0 };
         let touchesTax = false, taxable = 0, partyLeg = 0, tds = 0, roundOff = 0;
+        /* The legs, read once. A purchase voucher names its party; a JOURNAL
+           does not — and many clients book their expense bills as journals:
+           Dr Consultancy Charges, Dr Input IGST, Cr TDS, Cr GARG & ASSOCIATES.
+           Read as it stood, that voucher had no party, no GSTIN, and a taxable
+           value of 12,000 less 12,960 — the supplier's own leg netted into the
+           base because nothing said which leg the supplier was. */
+        const legs = [];
         for (const e of entryBlocks) {
           const nm = tag(e, 'LEDGERNAME'); if (!nm) continue;
           const rawAmt = toNum(tag(e, 'AMOUNT'));
           const dp = tag(e, 'ISDEEMEDPOSITIVE');
           const dr = r2((dp ? (/yes/i.test(dp) ? 1 : -1) : (rawAmt < 0 ? 1 : -1)) * Math.abs(rawAmt)); // Dr-positive
-          const k = kindOf.get(norm(nm));
+          legs.push({ nm, dr, kind: kindOf.get(norm(nm)) || '', tds: TDS_LEDGER_RX.test(nm), round: ROUNDOFF_LEDGER_RX.test(nm) });
+        }
+        if (!party && legs.some((l) => l.kind)) {
+          /* Which leg is the supplier? First choice: the one whose ledger master
+             sits under Sundry Creditors (or Debtors, for a reversal) — known
+             when the masters were read, or when the export carried them.
+             Otherwise: the ONE leg that is not tax, not TDS, not rounding, on
+             the side OPPOSITE the input-tax legs — a purchase debits the tax
+             and credits the supplier; a reversal does the reverse. If more than
+             one leg qualifies, nothing is guessed. */
+          const cand = legs.filter((l) => !l.kind && !l.tds && !l.round);
+          const byGroup = cand.filter((l) => /sundry\s*(creditors|debtors)/i.test((masters[l.nm] || {}).parent || ''));
+          let pick = byGroup.length === 1 ? byGroup[0] : null;
+          if (!pick) {
+            const taxSide = Math.sign(legs.filter((l) => l.kind).reduce((a, l) => a + l.dr, 0));
+            const opposite = cand.filter((l) => Math.sign(l.dr) === -taxSide && Math.abs(l.dr) > 0.005);
+            if (opposite.length === 1) pick = opposite[0];
+          }
+          if (pick) { party = pick.nm; partyInferred = true; }
+        }
+        for (const l of legs) {
+          const { nm, dr } = l;
+          const k = l.kind;
           if (k) { tax[k] = r2(tax[k] + dr); touchesTax = true; }
           else if (party && norm(nm) === norm(party)) { partyLeg = r2(partyLeg + dr); }
           /* TDS is withheld from the PAYMENT; it is not consideration and never
@@ -3543,8 +3574,8 @@ async function readItcRegister(url, company, from, to, taxLedgers, opts = {}) {
              no business in the taxable base being compared with 2B. Same for a
              rounding adjustment. Both are kept as their own figures rather than
              dropped, so the voucher can still be tied out. */
-          else if (TDS_LEDGER_RX.test(nm)) { tds = r2(tds + dr); }
-          else if (ROUNDOFF_LEDGER_RX.test(nm)) { roundOff = r2(roundOff + dr); }
+          else if (l.tds) { tds = r2(tds + dr); }
+          else if (l.round) { roundOff = r2(roundOff + dr); }
           else taxable = r2(taxable + dr);                 // purchase / expense base
         }
         if (!touchesTax) continue;                         // not an ITC voucher
@@ -3581,12 +3612,21 @@ async function readItcRegister(url, company, from, to, taxLedgers, opts = {}) {
         const ownRegnName = tag(block, 'GSTREGISTRATION') || '';
         const supInv = tag(block, 'SUPPLIERINVOICENO') || tag(block, 'REFERENCE') || tag(block, 'BASICBUYERREFNO') || '';
         const ref = tag(block, 'REFERENCE') || '';
+        /* A journal has no supplier-invoice field; the bill number, if it was
+           recorded at all, is in the narration ("being bill no INV/2526/041 of
+           …"). The first token that looks like one — five characters or more,
+           at least three of them digits — is carried as one more candidate for
+           the matcher, which corroborates it with the party and the amount
+           before trusting it. "Mar-26" does not qualify; "INV/2526/041" does. */
+        const narration = tag(block, 'NARRATION') || '';
+        const narrationRef = ((narration.match(/[A-Z0-9][A-Z0-9\/\-._]{3,}[A-Z0-9]/gi) || [])
+          .find((t) => (t.match(/\d/g) || []).length >= 3 && t.length >= 5) || '');
         const vd = parseTallyFieldDate(tag(block, 'DATE'));
         const rcmAbs = Math.abs(tax.rcm_igst) + Math.abs(tax.rcm_cgst) + Math.abs(tax.rcm_sgst);
         rows.push({
           date: vd ? vd.toISOString().slice(0, 10) : null,
-          voucherNo: vno || '', voucherType: vtypeName, supplierInvNo: supInv, ref,
-          party, gstin, ownGstin, ownRegnName, taxable: r2(taxable),
+          voucherNo: vno || '', voucherType: vtypeName, supplierInvNo: supInv, ref, narrationRef,
+          party, partyInferred, gstin, ownGstin, ownRegnName, taxable: r2(taxable),
           igst: r2(tax.igst), cgst: r2(tax.cgst), sgst: r2(tax.sgst),
           rcmIgst: r2(tax.rcm_igst), rcmCgst: r2(tax.rcm_cgst), rcmSgst: r2(tax.rcm_sgst),
           // TDS withheld, always shown as a positive amount: builds differ on
@@ -3600,7 +3640,13 @@ async function readItcRegister(url, company, from, to, taxLedgers, opts = {}) {
       /* The export, streamed through voucherRuns (below): whole vouchers cut
          out as they complete and handed to the same parser. */
       dcProgress.phase = 'ITC register \u2014 reading the Tally export\u2026';
-      const st = await voucherRuns(opts.xmlSource, eat, (x) => {
+      /* "Include dependent masters: Yes" puts the ledger masters in the same
+         file — the supplier's group and GSTIN beside the vouchers. They are
+         taken as they pass, so a journal's inferred party gets its GSTIN. */
+      const st = await voucherRuns(opts.xmlSource, async (run) => {
+        if (/<LEDGER[\s>]/i.test(run)) Object.assign(masters, parseLedgerMasters(run));
+        await eat(run);
+      }, (x) => {
         dcProgress.sub = `${Math.round(x.bytes / 1048576)} MB read \u00b7 ${x.vouchers.toLocaleString('en-IN')} vouchers \u00b7 ${rows.length.toLocaleString('en-IN')} with input GST`;
       });
       const vouchersSeen = st.vouchers, sawReport = st.report, scannedBytes = st.bytes;
@@ -5552,10 +5598,11 @@ const server = http.createServer(async (req, res) => {
       if (dcProgress.active) { json(res, 409, { ok: false, error: 'A read is already running.' }); return; }
       dcCancel = false; dcProgress.active = true; dcProgress.phase = 'Scanning the export\u2026'; dcProgress.sub = ''; dcProgress.startedAt = Date.now();
       dcProgress.monthsDone = 0; dcProgress.monthsTotal = 0; dcProgress.note = '';
-      const led = new Map(), types = new Map(), regs = new Set();
+      const led = new Map(), types = new Map(), regs = new Set(), groups = {};
       let minD = null, maxD = null, cancelled = 0;
       try {
         const st = await voucherRuns(req, async (run) => {
+          if (/<LEDGER[\s>]/i.test(run)) Object.assign(groups, parseLedgerMasters(run));
           let n = 0;
           for (const block of run.match(/<VOUCHER[\s>][\s\S]*?<\/VOUCHER>/gi) || []) {
             if ((++n % 400) === 0) { await new Promise((r) => setImmediate(r)); if (dcCancel) throw new Error('released by user'); }
@@ -5592,7 +5639,9 @@ const server = http.createServer(async (req, res) => {
           from: ymd(minD), to: ymd(maxD),
           types: [...types.entries()].map(([name, n]) => ({ name, vouchers: n })).sort((a, b) => b.vouchers - a.vouchers),
           registrations: [...regs].sort(),
-          ledgers: [...led.values()].sort((a, b) => a.name.localeCompare(b.name)) });
+          mastersIncluded: Object.keys(groups).length,
+          ledgers: [...led.values()].map((l) => ({ ...l, group: (groups[l.name] || {}).parent || '', gstin: (groups[l.name] || {}).gstin || '' }))
+            .sort((a, b) => a.name.localeCompare(b.name)) });
       } catch (e) {
         dcProgress.active = false;
         json(res, 502, { ok: false, error: 'Could not scan the export: ' + String((e && e.message) || e) });

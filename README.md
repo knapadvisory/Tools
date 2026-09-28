@@ -41,7 +41,9 @@ finishes. **Tally out of reach** (hosted, shown through a remote-app window, no
 port, no desktop)? Export its vouchers from inside Tally — TallyPrime: **Alt+E →
 Transactions** (not *Current*, which exports only the report on screen),
 All Vouchers (TallyPrime has no voucher-type filter here; sales and
-receipts come along and are simply not read), format **XML**, a month at a
+receipts come along and are simply not read), **Include dependent masters:
+Yes** (so a bill booked as a Journal, which names no party, still gets its
+supplier's group and GSTIN), format **XML**, a month at a
 time if a year is too large — to a redirected local drive, and drop the file(s) on **step 1b**: the connector
 scans them for every ledger they hold (with voucher counts and totals), step 2
 lets you tag the input-GST ones from that list, and step 3 reads the same

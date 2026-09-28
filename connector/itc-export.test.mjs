@@ -196,6 +196,52 @@ t('and the census shows the whole company, so the right ledgers can be picked fr
   assert(types.Sales === 900 && types.Purchase === 600 && types.Journal === 12, JSON.stringify(types));
 });
 
+console.log('\n── a bill booked as a Journal: no party field, no supplier invoice field ──');
+/* The voucher from the field, exactly: Dr CONSULTANCY CHARGES 12,000, Dr Input
+   IGST 2,160, Cr TDS on Professional@10% 1,200, Cr GARG & ASSOCIATES 12,960,
+   narration "professional fees month of Mar-26", and no PARTYLEDGERNAME. */
+const journal = (no, narr, extra = '') => `<TALLYMESSAGE xmlns:UDF="TallyUDF">
+<VOUCHER REMOTEID="j-${no}" VCHTYPE="Journal" ACTION="Create" OBJVIEW="Accounting Voucher View">
+<DATE>20260331</DATE><GUID>jg-${no}</GUID><VOUCHERTYPENAME>Journal</VOUCHERTYPENAME><VOUCHERNUMBER>25-26/GST-${no}</VOUCHERNUMBER>
+<PARTYLEDGERNAME></PARTYLEDGERNAME><CMPGSTIN>06AAACE1234F1Z5</CMPGSTIN><NARRATION>${narr}</NARRATION>
+<ISCANCELLED>No</ISCANCELLED><ISOPTIONAL>No</ISOPTIONAL>${extra}
+<ALLLEDGERENTRIES.LIST><LEDGERNAME>CONSULTANCY CHARGES</LEDGERNAME><ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE><AMOUNT>-12000</AMOUNT></ALLLEDGERENTRIES.LIST>
+<ALLLEDGERENTRIES.LIST><LEDGERNAME>Input IGST</LEDGERNAME><ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE><AMOUNT>-2160</AMOUNT></ALLLEDGERENTRIES.LIST>
+<ALLLEDGERENTRIES.LIST><LEDGERNAME>TDS on Professional@10%</LEDGERNAME><ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE><AMOUNT>1200</AMOUNT></ALLLEDGERENTRIES.LIST>
+<ALLLEDGERENTRIES.LIST><LEDGERNAME>GARG &amp; ASSOCIATES</LEDGERNAME><ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE><AMOUNT>12960</AMOUNT></ALLLEDGERENTRIES.LIST>
+</VOUCHER>
+</TALLYMESSAGE>`;
+const jr = await send(Buffer.from(wrap(journal(101, 'professional fees month of Mar-26') + journal(102, 'being bill no GA/2526/041 for consultancy')), 'utf8'), { label: 'journals, no masters' });
+t('the supplier is the one leg opposite the tax, and the base is the expense', () => {
+  assert(jr.j.ok && jr.j.rows.length === 2, 'two journals: ' + JSON.stringify(jr.j).slice(0, 200));
+  const r = jr.j.rows.find((x) => x.voucherNo === '25-26/GST-101');
+  assert(r.party === 'GARG & ASSOCIATES' && r.partyInferred === true, `party: ${r.party} inferred=${r.partyInferred}`);
+  assert(Math.abs(r.taxable - 12000) < 0.01, `taxable is the expense, not net of the supplier: ${r.taxable}`);
+  assert(Math.abs(r.igst - 2160) < 0.01 && Math.abs(r.tds - 1200) < 0.01, `igst ${r.igst} tds ${r.tds}`);
+});
+t('a bill number in the narration is carried; a month name is not', () => {
+  const a = jr.j.rows.find((x) => x.voucherNo === '25-26/GST-101'), b = jr.j.rows.find((x) => x.voucherNo === '25-26/GST-102');
+  assert(a.narrationRef === '', `"Mar-26" is not a bill number: got "${a.narrationRef}"`);
+  assert(b.narrationRef === 'GA/2526/041', `the bill number is: got "${b.narrationRef}"`);
+});
+/* With "Include dependent masters: Yes" the ledger masters ride in the same
+   file, and the inferred party gets its group and GSTIN from them. */
+const withMasters = wrap(`<TALLYMESSAGE xmlns:UDF="TallyUDF"><LEDGER NAME="GARG &amp; ASSOCIATES" RESERVEDNAME=""><PARENT>Sundry Creditors</PARENT><PARTYGSTIN>06AAKFG1234B1Z9</PARTYGSTIN></LEDGER></TALLYMESSAGE>
+<TALLYMESSAGE xmlns:UDF="TallyUDF"><LEDGER NAME="CONSULTANCY CHARGES" RESERVEDNAME=""><PARENT>Indirect Expenses</PARENT></LEDGER></TALLYMESSAGE>` + journal(103, 'fees'));
+const jm = await send(Buffer.from(withMasters, 'utf8'), { label: 'journal, masters included' });
+t('with the masters in the file, the party is picked by its group and gets its GSTIN', () => {
+  const r = jm.j.rows[0];
+  assert(r && r.party === 'GARG & ASSOCIATES', `party: ${JSON.stringify(r)}`);
+  assert(r.gstin === '06AAKFG1234B1Z9', `GSTIN from the ledger master: ${r.gstin}`);
+});
+const cm = await census(Buffer.from(withMasters, 'utf8'), 'census with masters');
+t('and the census shows each ledger\u2019s group, so step 2 can tell a creditor from an expense', () => {
+  const by = Object.fromEntries(cm.ledgers.map((l) => [l.name, l]));
+  assert(by['GARG & ASSOCIATES'].group === 'Sundry Creditors', JSON.stringify(by['GARG & ASSOCIATES']));
+  assert(by['CONSULTANCY CHARGES'].group === 'Indirect Expenses', JSON.stringify(by['CONSULTANCY CHARGES']));
+  assert(cm.mastersIncluded === 2, `masters seen: ${cm.mastersIncluded}`);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 conn.kill();
 process.exit(fail ? 1 : 0);
