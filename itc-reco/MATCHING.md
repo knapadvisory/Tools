@@ -706,6 +706,31 @@ quietly dropped them would read as though nothing had reconciled. The Tie-out
 sheet still covers the whole 2B either way, which that sheet also says, since
 its totals will not add up to the rows in the file.
 
+### When Tally will not serve vouchers at all
+
+SHIVAM's trace on 4.69 settled a question the size numbers could not. Tally
+answered the ledger list for that company in **0.28 seconds** — 708 ledgers,
+284,905 characters — and then returned nothing at all: the day book timed out at
+ninety seconds, and so did each of the three ledger shapes, on the first ledger
+alone, a reverse-charge ledger that should hold almost nothing. Eight minutes to
+learn one thing.
+
+That one thing is now asked first, and cheaply. **One day of one ledger** is the
+smallest voucher question there is; a healthy Tally answers it in milliseconds
+whatever the size of the books, and an *empty* answer counts — what is being
+tested is whether Tally responds, not whether that day had entries. The first
+shape to answer ends the check, so a healthy site pays one small extra request.
+A silent site pays a quick round of all three, then one patient minute in case
+the machine is merely slow, and then gives up in about eighty seconds saying what
+it found:
+
+> Tally answered the ledger list instantly for this company, then would not
+> return even ONE day of ONE ledger's vouchers.
+
+Which is the whole diagnosis. It is not the period, not the size of the request,
+and not this tool's memory — and a shorter period, which the old message
+suggested, cannot help it.
+
 ### The books side is the real limit
 
 The browser is not what gives out first — Tally is. The connector used to fetch

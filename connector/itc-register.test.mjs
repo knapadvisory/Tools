@@ -80,6 +80,13 @@ const srv = http.createServer((req, res) => {
        no day-book evidence at all. */
     if (/^dead/.test(mode) && !isLedger && !isFiltered) return res.destroy();
 
+    /* SHIVAM ENTERPRISES: the ledger list came back in 0.28s, and then nothing
+       — the day book and all three ledger shapes each timed out at ninety
+       seconds, on the first ledger alone. Tally perfectly well, and serving no
+       vouchers at all. Here the socket is simply held open and never answered,
+       which is what a timeout is. */
+    if (mode === 'mute') return;                          // answer no voucher request, ever
+
     /* Tally's ledger index: only the vouchers that hit the named ledger.
        In "noLedgerIndex" the server refuses it, as an older Tally would. */
     if (isLedger) {
@@ -96,6 +103,7 @@ const srv = http.createServer((req, res) => {
                       // the day book will not answer AND the only shape ignores
                       // the ledger — nothing can be trusted here
                       deadNoFilter: ['collection-voucher-childof'],
+                      mute: [],
                       filterOnly: [], bad: [], noLedgerIndex: [] }[mode] || [];
       if (!knows.includes(shape)) { res.statusCode = 200; return res.end('<ENVELOPE></ENVELOPE>'); }
       if (mode === 'noFilter' || mode === 'deadNoFilter') {
@@ -209,8 +217,9 @@ mode = 'good';
 const led = await run('ledger index');
 t('the whole period comes from the ledger index', () => {
   assert(/ledger index/.test(led.note), 'note should record the ledger read: ' + led.note);
-  // one small request per ledger to PROVE the shape, then one for the period
-  assert(led.stats.ledger === 2, `expected a probe and a full read per ledger, got ${led.stats.ledger}`);
+  // one day of one ledger to check Tally answers at all, then one small
+  // request per ledger to PROVE the shape, then one for the period
+  assert(led.stats.ledger === 3, `expected a liveness check, a probe and a full read, got ${led.stats.ledger}`);
   assert(led.stats.plain <= 1, `only the proving window should be scanned, got ${led.stats.plain}`);
   assert(led.stats.filtered === 0, 'the day-book filter should not be needed');
 });
@@ -369,6 +378,42 @@ t('the shape is abandoned mid-stream instead of downloaded whole', () => {
     'and it must not then be used: ' + capped.note);
 });
 conn2.kill();
+
+/* ---------------------------------------------------------------------------
+ * Tally perfectly well, and serving no vouchers at all.
+ *
+ * SHIVAM again, on 4.69: the ledger list came back in 0.28 seconds, and then
+ * the day book timed out at ninety, and each of the three ledger shapes timed
+ * out at ninety, on the first ledger alone. Eight minutes to learn one thing.
+ * One day of one ledger is the smallest voucher question there is; asking it
+ * first turns those eight minutes into about eighty seconds and an answer.
+ * ------------------------------------------------------------------------- */
+console.log('\n── Tally answers its masters and nothing else ──');
+const conn3 = spawn('node', [new URL('./knap-tally-connector.mjs', import.meta.url).pathname],
+  { env: { ...process.env, PORT: '8900', KNAP_LIVENESS_MS: '400', KNAP_LIVENESS_SLOW_MS: '900' },
+    stdio: ['ignore', 'pipe', 'pipe'] });
+await new Promise((r) => setTimeout(r, 2500));
+mode = 'mute';
+const t0mute = Date.now();
+const mute = await run('serves no vouchers', { port: 8900 });
+const muteMs = Date.now() - t0mute;
+t('it gives up on the liveness probe, not on three full timeouts', () => {
+  assert(mute.j.ok === false, 'the read must fail: ' + JSON.stringify(mute.j).slice(0, 160));
+  // four probes at 400/400/400/900ms, not three at the shape-probe timeout
+  assert(muteMs < 8000, `it must fail fast, took ${muteMs}ms`);
+});
+t('and says it is Tally refusing, not the period', () => {
+  const m = String(mute.j.error || '');
+  assert(/would not return even ONE day/.test(m), 'it must say what it actually asked for: ' + m);
+  assert(/ledger list instantly/.test(m),
+    'and that Tally is otherwise healthy — that is the whole diagnosis: ' + m);
+  assert(!/shorter period/.test(m), 'a shorter period cannot help this: ' + m);
+});
+t('it does not keep hammering a Tally that will not answer', () => {
+  assert(mute.stats.ledger <= 4,
+    `one day of one ledger per shape, then one more — got ${mute.stats.ledger} requests`);
+});
+conn3.kill();
 
 console.log(`\n${pass} passed, ${fail} failed`);
 conn.kill(); srv.close();

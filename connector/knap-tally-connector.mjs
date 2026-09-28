@@ -28,7 +28,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import v8 from 'node:v8';
 
-const VERSION = '4.69';
+const VERSION = '4.70';
 // Bumped WITH connector/version.json — the two are compared to decide a
 // self-update, so a mismatch either loops every connector in the field or
 // hides the build. connector/version.test.mjs fails the pair apart.
@@ -340,6 +340,11 @@ const MAX_TALLY_MB = Number(process.env.KNAP_MAX_TALLY_MB || 350);
    the shape that ignored the ledger altogether streamed 98 MB, three times over,
    before anything noticed. */
 const SHAPE_PROBE_MB = Number(process.env.KNAP_SHAPE_PROBE_MB || 20);
+/* How long to wait for ONE day of ONE ledger before deciding Tally is not
+   going to serve vouchers at all: a quick round over every shape, then one
+   patient attempt in case the machine is merely slow. */
+const LIVENESS_MS = Number(process.env.KNAP_LIVENESS_MS || 20000);
+const LIVENESS_SLOW_MS = Number(process.env.KNAP_LIVENESS_SLOW_MS || 60000);
 /* capMb: a caller that is only PROBING can set its own, much smaller ceiling.
    A probe exists to find out whether a request shape filters; one that is still
    streaming at 20 MB has answered that question already, and downloading the
@@ -3050,6 +3055,62 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
     };
     let useFilter = false, filterNote = '', ledgerPlan = null, dayBookDead = false;
     if (ledgerNames.length) {
+      /* ---- 0. will Tally answer a voucher request AT ALL? ----
+
+         SHIVAM ENTERPRISES answered the ledger list in 0.28 seconds — 708
+         ledgers, 284,905 characters — and then timed out at ninety seconds on
+         the day book, and again at ninety on each of the three ledger shapes,
+         on the first ledger alone. Eight minutes to learn one thing: Tally is
+         perfectly well and will not serve vouchers for this company.
+
+         That one thing is worth asking first, and cheaply. ONE day of ONE
+         ledger is the smallest voucher question there is: a healthy Tally
+         answers it in milliseconds whatever the size of the books, and an
+         EMPTY answer counts — what is being tested is whether Tally responds,
+         not whether that day had entries. If nothing answers it in twenty
+         seconds, one shape is given a minute in case the machine is merely
+         slow, and then the read gives up in about eighty seconds instead of
+         eight minutes, saying what it found rather than blaming the period.
+
+         The FIRST shape to answer ends it — the question was whether Tally
+         serves vouchers, not which shape is best, and that is settled below.
+         So a healthy site pays one small request, and only a silent one pays
+         for asking the rest. A shape that stayed silent here is not asked
+         again later; a shape never reached is left to prove itself normally. */
+      const liveShapes = {}, deadShapes = {};
+      {
+        const oneDay = new Date(from.getTime());
+        const nm0 = ledgerNames[0];
+        for (const ms of [LIVENESS_MS, LIVENESS_SLOW_MS]) {
+          const shapes = ms === LIVENESS_MS ? LEDGER_VCH_SHAPES : LEDGER_VCH_SHAPES.slice(0, 1);
+          for (const shape of shapes) {
+            if (dcCancel) throw new Error('released by user');
+            if (liveShapes[shape.id]) continue;
+            dcProgress.phase = 'Checking that Tally will answer at all…';
+            dcProgress.sub = `one day of “${nm0}” — ${shape.what}`;
+            try {
+              trace('liveness probe', { shape: shape.what, ledger: nm0, ms });
+              const r = await tallyFetch(url, ledgerVouchersRequest(nm0, from, oneDay, shape), ms, SHAPE_PROBE_MB);
+              trace('liveness probe answered', { shape: shape.what, chars: r.length });
+              liveShapes[shape.id] = true;
+              break;                    // Tally serves vouchers; that is all this asked
+            } catch (e) {
+              const m = String((e && e.message) || e);
+              if (/released/i.test(m)) throw e;
+              /* Over its cap means it answered — hugely, and wrongly, but it
+                 answered. Whether that shape filters is settled further down. */
+              if (/PROBE_TOO_BIG/.test(m)) { liveShapes[shape.id] = true; trace('liveness probe answered over cap', { shape: shape.what }); break; }
+              deadShapes[shape.id] = true;
+              trace('liveness probe silent', { shape: shape.what, ms, error: m.slice(0, 80) });
+            }
+          }
+          if (Object.keys(liveShapes).length) break;
+        }
+        if (!Object.keys(liveShapes).length) {
+          trace('Tally will not serve vouchers', { company: company || '(current)', ledgers: ledgerNames.length });
+          throw new Error('TALLY_NO_VOUCHERS');
+        }
+      }
       dcProgress.phase = 'Asking Tally which vouchers touch these ledgers…';
       const probeEnd = new Date(Math.min(to.getTime(), from.getTime() + 20 * DAY_MS));
       let want = null, plainCount = 0;
@@ -3092,6 +3153,10 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
       {
         for (const shape of LEDGER_VCH_SHAPES) {
           if (ledgerPlan) break;
+          /* A shape that would not answer one day of one ledger will not answer
+             twenty days of sixteen. Skipping it here is the difference between
+             one ninety-second timeout and three. */
+          if (deadShapes[shape.id] && !liveShapes[shape.id]) { trace('shape skipped — it did not answer the liveness probe', { shape: shape.what }); continue; }
           try {
             /* Prove it on the SAMPLE window first — one small request per
                ledger. Only a shape that accounts for every ITC voucher the day
@@ -5182,7 +5247,16 @@ const server = http.createServer(async (req, res) => {
            cannot scan at all does not get easier in quarters. Say what is
            actually happening and what actually helps. */
         const raw = String((e && e.message) || e);
-        const msg = /ITC_NO_ROUTE|AGEING_TOO_DENSE/.test(raw)
+        /* Tally answered the ledger list in a moment and then would not answer
+           for a single day of a single ledger. That is not about the period, not
+           about our memory, and not something a smaller request fixes. */
+        const msg = /TALLY_NO_VOUCHERS/.test(raw)
+          ? 'Tally answered the ledger list instantly for this company, then would not return even ONE day of ONE ledger\u2019s vouchers. '
+            + 'So this is Tally itself refusing to serve vouchers here, not the period and not the size of the request. '
+            + 'Worth trying, in order: close and reopen the company in Tally; check Gateway of Tally \u2192 F1 \u2192 Advanced Configuration that the XML/HTTP port is the one this connector uses; '
+            + 'restart Tally (and if it is a data server, the server too); and verify the books are not in the middle of a rewrite or a repair. '
+            + 'If Tally answers other tools but never this one, send the trace from Diagnostics.'
+          : /ITC_NO_ROUTE|AGEING_TOO_DENSE/.test(raw)
           ? 'Tally would not answer a day-book read for this company — it has too many vouchers per day, '
             + 'and a shorter period does not help (the day book is read day by day either way). '
             + 'The faster route reads your input-GST ledgers directly: make sure the ledgers picked in step 3 '
