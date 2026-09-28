@@ -37,7 +37,12 @@ Excel asks before building and offers an **exceptions only** workbook: at
 exceptions one 3.8 s and 266 MB. On the books side the
 connector reads one input-GST ledger at a time and releases it before the next,
 so the size of the books decides how long a read takes rather than whether it
-finishes. Tests: `node itc-reco/reco.test.mjs`, `node itc-reco/datepicker.test.mjs` (both need `playwright-core`), `node connector/itc-register.test.mjs`. |
+finishes. **Tally out of reach** (hosted, shown through a remote-app window, no
+port, no desktop)? Export its vouchers from inside Tally — Alt+E, Day Book or
+Voucher Register, format **XML** — to a redirected local drive, and press
+**Load a Tally export** in step 3: the connector streams the file and reads it
+with the same parser, no live Tally involved. Tests:
+`node connector/itc-export.test.mjs`. Tests: `node itc-reco/reco.test.mjs`, `node itc-reco/datepicker.test.mjs` (both need `playwright-core`), `node connector/itc-register.test.mjs`. |
 **Connector versions — bump on EVERY change, however small.** A build that
 ships without a bump is never offered to any connector in the field: every
 Tally PC keeps running the old file, and the symptom looks like "the fix did

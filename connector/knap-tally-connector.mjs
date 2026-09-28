@@ -28,7 +28,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import v8 from 'node:v8';
 
-const VERSION = '4.73';
+const VERSION = '4.74';
 // Bumped WITH connector/version.json — the two are compared to decide a
 // self-update, so a mismatch either loops every connector in the field or
 // hides the build. connector/version.test.mjs fails the pair apart.
@@ -3090,16 +3090,28 @@ const ROUNDOFF_LEDGER_RX = /round(ing)?\s*-?\s*off|\brounding\b/i;
 // any of these against 2B), party + GSTIN, taxable base, and the tax split. The
 // taxable base is the non-tax, non-party debit (the purchase/expense leg).
 // Voucher-dense books fail fast (never freeze Tally).
-async function readItcRegister(url, company, from, to, taxLedgers) {
+/* opts.xmlSource — an async iterable of chunks (a request body, a file) holding
+   Tally's OWN export of the vouchers, instead of a live Tally to ask. The XML
+   Tally writes when a Day Book or Voucher Register is exported is the XML its
+   HTTP server serves — the same <VOUCHER> blocks, the same ledger entries — so
+   the same parser reads it. What this buys: a Tally that cannot be reached at
+   all (hosted, shown through a remote-app window, no port, no desktop) can
+   still be reconciled, because Export is a menu inside that window and the
+   file lands on a redirected local drive. */
+async function readItcRegister(url, company, from, to, taxLedgers, opts = {}) {
   const saved = state.settings.company; state.settings.company = company || '';
-  trace('ITC read START', { company, url,
+  const fromFile = !!opts.xmlSource;
+  trace('ITC read START', { company, url: fromFile ? '(export file)' : url,
     from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10),
     ledgers: taxLedgers.map((t) => t.name) });
   try {
-    const mastersXml = await askTallyFast(url, LEDGER_MASTERS_REQUEST(), 180000);
-    trace('ledger masters read', { chars: mastersXml.length });
-    const masters = parseLedgerMasters(mastersXml);
-    trace('ledger masters parsed', { ledgers: Object.keys(masters).length });
+    let masters = {};
+    if (!fromFile) {
+      const mastersXml = await askTallyFast(url, LEDGER_MASTERS_REQUEST(), 180000);
+      trace('ledger masters read', { chars: mastersXml.length });
+      masters = parseLedgerMasters(mastersXml);
+      trace('ledger masters parsed', { ledgers: Object.keys(masters).length });
+    }
     const kindOf = new Map();
     for (const t of taxLedgers) if (t && t.name && t.kind) kindOf.set(norm(t.name), t.kind);
     const fromKey = from.getUTCFullYear() * 10000 + (from.getUTCMonth() + 1) * 100 + from.getUTCDate();
@@ -3129,7 +3141,7 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
     };
     let useFilter = false, filterNote = '', ledgerPlan = null, dayBookDead = false;
     let ping = null, PATIENT_MS = DAYBOOK_PROBE_MS * 12;
-    if (ledgerNames.length) {
+    if (ledgerNames.length && !fromFile) {
       /* ---- 0. will Tally answer a voucher request AT ALL? ----
 
          SHIVAM ENTERPRISES answered the ledger list in 0.28 seconds — 708
@@ -3544,7 +3556,44 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
         });
       }
     };
-    if (ledgerPlan) {
+    if (fromFile) {
+      /* The export, streamed. Whole vouchers are cut out as they complete and
+         handed to the same parser; what has not yet closed waits for the next
+         chunk. A year of a large book is hundreds of megabytes — it is never
+         held at once. Old Tally releases export as UTF-16 ("Unicode"); the
+         byte-order mark on the first chunk says which, and it is honoured. */
+      dcProgress.phase = 'ITC register \u2014 reading the Tally export\u2026';
+      let scannedBytes = 0, vouchersSeen = 0, decoder = null, buf = '';
+      const flush = async (final) => {
+        let cut = buf.lastIndexOf('</VOUCHER>');
+        if (cut < 0) { if (final) { buf = ''; } return; }
+        cut += '</VOUCHER>'.length;
+        const run = buf.slice(0, cut); buf = buf.slice(cut);
+        vouchersSeen += (run.match(/<VOUCHER[\s>]/gi) || []).length;
+        await eat(run);
+        dcProgress.sub = `${Math.round(scannedBytes / 1048576)} MB read \u00b7 ${vouchersSeen.toLocaleString('en-IN')} vouchers \u00b7 ${rows.length.toLocaleString('en-IN')} with input GST`;
+      };
+      for await (const chunk of opts.xmlSource) {
+        if (dcCancel) throw new Error('released by user');
+        const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        if (!decoder) {
+          const { StringDecoder } = await import('node:string_decoder');
+          const utf16 = b.length >= 2 && b[0] === 0xFF && b[1] === 0xFE;
+          decoder = new StringDecoder(utf16 ? 'utf16le' : 'utf8');
+          trace('export encoding', { utf16, firstBytes: [...b.subarray(0, 4)] });
+        }
+        scannedBytes += b.length;
+        buf += decoder.write(b);
+        if (buf.length > 4 * 1024 * 1024) await flush(false);
+      }
+      buf += decoder ? decoder.end() : '';
+      await flush(true);
+      trace('export read complete', { mb: Math.round(scannedBytes / 1048576), vouchers: vouchersSeen, rows: rows.length });
+      if (!vouchersSeen) throw new Error('EXPORT_EMPTY: no <VOUCHER> in the file \u2014 export the Day Book or Voucher Register as XML, not Excel');
+      filterNote = `read from a Tally export file \u2014 ${vouchersSeen.toLocaleString('en-IN')} vouchers scanned, ${rows.length.toLocaleString('en-IN')} with input GST; no live Tally was asked`;
+      dcProgress.note = filterNote;
+      dcProgress.monthsDone = totalDays;
+    } else if (ledgerPlan) {
       // The whole period, one ledger per request — fetched, parsed and released
       // one at a time, so the books' size sets the time this takes and not the
       // memory it needs.
@@ -5469,6 +5518,39 @@ const server = http.createServer(async (req, res) => {
           : ('Could not read Tally: ' + raw);
         trace('READ FAILED', { error: raw });
         json(res, 502, { ok: false, error: msg });
+      }
+      return;
+    }
+
+    /* The same register, from Tally's own export instead of a live Tally.
+       The body IS the XML file, streamed — the page hands the browser's File
+       straight to fetch(), which sends it from disk without loading it, and
+       this end cuts vouchers out as they arrive. No size limit applies; a
+       year of a large book is several hundred megabytes and that is fine. */
+    if (req.method === 'POST' && url.pathname === '/api/itc/register-xml') {
+      if (dcProgress.active) { json(res, 409, { ok: false, error: 'A read is already running.' }); return; }
+      const q = url.searchParams;
+      const from = tallyDateOf(String(q.get('from') || '').replace(/-/g, ''));
+      const to = tallyDateOf(String(q.get('to') || '').replace(/-/g, ''));
+      let taxLedgers = [];
+      try { taxLedgers = JSON.parse(q.get('taxLedgers') || '[]'); } catch { taxLedgers = []; }
+      taxLedgers = Array.isArray(taxLedgers) ? taxLedgers.filter((t) => t && t.name && t.kind) : [];
+      if (!from || !to) { json(res, 400, { ok: false, error: 'Set the from and to dates.' }); return; }
+      if (!taxLedgers.length) { json(res, 400, { ok: false, error: 'Select at least one input-GST ledger.' }); return; }
+      dcCancel = false; lastFatal = null;
+      dcProgress.active = true; dcProgress.done = 0; dcProgress.total = 1; dcProgress.phase = 'Reading the export\u2026'; dcProgress.sub = ''; dcProgress.startedAt = Date.now();
+      dcProgress.monthsDone = 0; dcProgress.monthsTotal = 0; dcProgress.note = '';
+      try {
+        const one = await readItcRegister('', String(q.get('company') || ''), from, to, taxLedgers, { xmlSource: req });
+        dcProgress.active = false;
+        trace('ITC read DONE (export)', { rows: one.rows.length });
+        const registrations = [...new Set(one.rows.map((r) => r.ownGstin).filter(Boolean))].sort();
+        json(res, 200, { ok: true, version: VERSION, source: 'export', from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10), rows: one.rows, registrations });
+      } catch (e) {
+        dcProgress.active = false;
+        const raw = String((e && e.message) || e);
+        trace('READ FAILED (export)', { error: raw });
+        json(res, 502, { ok: false, error: /EXPORT_EMPTY/.test(raw) ? raw.replace(/^EXPORT_EMPTY:\s*/, '') : ('Could not read the export: ' + raw) });
       }
       return;
     }

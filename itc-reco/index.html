@@ -226,6 +226,8 @@
         <label class="lbl">To <input type="date" id="toDate" class="kdate"></label>
         <span id="fyQuick" class="fyq"></span>
         <button class="btn primary" id="btnFetch" onclick="fetchItc()">Fetch books ITC →</button>
+        <button class="btn ghost" id="btnExport" onclick="document.getElementById('exportXml').click()" title="Tally cannot be reached from here? Export its vouchers as XML from inside Tally (Alt+E, Day Book or Voucher Register, format XML) and load that file instead">⬆ Load a Tally export (.xml)</button>
+        <input type="file" id="exportXml" accept=".xml,text/xml" style="display:none" onchange="loadExportXml(this.files[0]);this.value=''">
         <button class="btn ghost sm" onclick="downloadDiag()" title="Collect the connector's version, memory ceiling and logs into one file to send">⬇ Diagnostics</button>
       </div>
       <div class="prog" id="fetchProg" style="display:none"><i id="fetchBar"></i></div>
@@ -536,6 +538,47 @@ function fetchItc(){
         });
       });
   })();
+}
+/* The books from Tally's OWN export, when Tally itself cannot be reached.
+
+   A hosted Tally shown through a remote-app window has no port this connector
+   can talk to and no desktop to install it on. What it does have is Export
+   (Alt+E): the Day Book or the Voucher Register written out as XML — the same
+   <VOUCHER> blocks the connector reads over HTTP — saved to a redirected local
+   drive. The file is handed to fetch() as the body, which streams it from disk
+   without loading it, and the connector cuts vouchers out as they arrive. */
+function loadExportXml(file){
+  if(!file)return;
+  RELEASED=false;
+  var sel=selectedLedgers();
+  if(!sel.length){setMsg('msgFetch','Select and confirm the input-GST ledgers first \u2014 the export is read against them.','bad');return;}
+  var from=$('fromDate').value,to=$('toDate').value;
+  if(!from||!to){setMsg('msgFetch','Set the from and to dates.','bad');return;}
+  if(!/\.xml$/i.test(file.name)){setMsg('msgFetch','That is not an XML file. In Tally: Alt+E \u2192 Current \u2192 format XML.','bad');return;}
+  $('btnFetch').disabled=true;$('btnExport').disabled=true;setMsg('msgFetch','','');
+  $('fetchProg').style.display='';$('fetchLine').style.display='';$('fetchBar').style.width='8%';
+  $('fetchLine').textContent='Reading '+file.name+' ('+Math.round(file.size/1048576)+' MB)\u2026';
+  booksRows=[];
+  pollFetch();
+  FETCH_ABORT=new AbortController();
+  var q='from='+encodeURIComponent(from)+'&to='+encodeURIComponent(to)+'&taxLedgers='+encodeURIComponent(JSON.stringify(sel))+'&company='+encodeURIComponent(file.name);
+  fetch(API+'/api/itc/register-xml?'+q,{method:'POST',signal:FETCH_ABORT.signal,headers:{'content-type':'text/xml'},body:file})
+    .then(function(r){return r.json();}).then(function(j){
+      if(POLL){clearInterval(POLL);POLL=null;}
+      $('btnFetch').disabled=false;$('btnExport').disabled=false;$('fetchProg').style.display='none';$('fetchLine').style.display='none';
+      if(!j.ok){setMsg('msgFetch','Could not read the export \u2014 '+(j.error||'error'),'bad');return;}
+      (j.rows||[]).forEach(function(row){row._ownGstin=(row.ownGstin||'').toUpperCase();row._company=file.name;booksRows.push(row);});
+      if(!booksRows.length){setMsg('msgFetch','The export was read but held no voucher touching the selected input-GST ledgers in this period. Check the ledgers picked in step 2 are the ones the export uses, and that the export covers '+from+' to '+to+'.','warn');return;}
+      var noReg=booksRows.filter(function(r){return !r._ownGstin;}).length;
+      setMsg('msgFetch','Read '+booksRows.length.toLocaleString('en-IN')+' invoices from '+file.name+'.'+(noReg?' '+noReg.toLocaleString('en-IN')+' carry no registration (the export has no CMPGSTIN) \u2014 wrong-registration findings are off for those.':''),noReg?'warn':'');
+      showBooks({from:from,to:to});markStep(2,true);
+      $('card4').classList.remove('hidden');markStep(3,true);
+    }).catch(function(e){
+      if(POLL){clearInterval(POLL);POLL=null;}
+      $('btnFetch').disabled=false;$('btnExport').disabled=false;$('fetchProg').style.display='none';$('fetchLine').style.display='none';
+      if(RELEASED)return;
+      setMsg('msgFetch','Could not read the export \u2014 '+e.message+'. The connector must be running on this computer (it reads the file; no Tally is needed).','bad');
+    });
 }
 /* Progress while Tally is read. A bar that cannot know how far along it is
    must say so rather than parking at an invented percentage — that is what
