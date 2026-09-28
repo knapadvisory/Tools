@@ -330,13 +330,24 @@ function checkConn(){
     else{banner('wait','Connector ready · v'+connVer,'Add your Tally port(s) below and scan for companies.');bu.textContent='⟳ Update connector';}
   }).catch(function(){setPill('off','connector not found');$('btnUpdate').style.display='none';banner('off','Connector not found on this PC','Install the KNAP connector, then reload. <a href="/connector/Install-Tally-Connector.bat" download>Download installer</a>');});
 }
+/* "Updated" means a HIGHER version than the one that was running when the
+   button was pressed — not merely one the page can work with. The old test
+   passed on the very first poll, 1.5 s in, against the old process still
+   alive before its restart, and reported "Updated to v4.78 ✓" while 4.79 sat
+   on the server. If the server has nothing newer, the connector says so and
+   that is reported as what it is. */
 function doUpdate(){
-  banner('wait','Updating the connector…','Fetching the latest version — a few seconds. Don’t close this tab.');
+  var before=String(connVer||'0');
+  banner('wait','Updating the connector…','Asking the connector to fetch the latest version — a few seconds. Don’t close this tab.');
   fetch(API+'/update',{method:'POST'}).then(function(){
-    var tries=0,t=setInterval(function(){tries++;fetch(API+'/health').then(function(r){return r.json();}).then(function(h){
-      if(verGE(h.version||'0',REQVER)){clearInterval(t);banner('wait','Updated to v'+(h.version||'')+' ✓','Reloading…');setTimeout(function(){location.reload();},900);}
-      else if(tries>25){clearInterval(t);banner('off','Update did not complete','Still on v'+(h.version||'?')+'. Try again, or restart the connector on the Tally PC.');}
-    }).catch(function(){if(tries>25){clearInterval(t);checkConn();}});},1500);
+    var tries=0,seenDown=false,t=setInterval(function(){tries++;fetch(API+'/health').then(function(r){return r.json();}).then(function(h){
+      var now=String(h.version||'0');
+      if(verGE(now,before)&&now!==before){clearInterval(t);banner('wait','Updated v'+before+' → v'+now+' ✓','Reloading…');setTimeout(function(){location.reload();},900);}
+      else if(tries>25){clearInterval(t);
+        banner('off',seenDown?'Restarted, but still v'+now:'No newer version was found',
+          seenDown?'The connector restarted on the same version. Restart it on the Tally PC and try again.'
+                  :'The connector checked the server and found nothing newer than v'+now+'. If a newer version was just released, the site takes a minute or two to publish it — try again shortly.');}
+    }).catch(function(){seenDown=true;if(tries>25){clearInterval(t);checkConn();}});},1500);
   }).catch(function(){banner('off','Could not reach the connector','Make sure the KNAP connector is running on this PC.');});
 }
 /* Release has to let go at BOTH ends. Telling the connector to drop Tally
