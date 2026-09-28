@@ -28,7 +28,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import v8 from 'node:v8';
 
-const VERSION = '4.78';
+const VERSION = '4.79';
 // Bumped WITH connector/version.json — the two are compared to decide a
 // self-update, so a mismatch either loops every connector in the field or
 // hides the build. connector/version.test.mjs fails the pair apart.
@@ -3554,7 +3554,14 @@ async function readItcRegister(url, company, from, to, taxLedgers, opts = {}) {
              the side OPPOSITE the input-tax legs — a purchase debits the tax
              and credits the supplier; a reversal does the reverse. If more than
              one leg qualifies, nothing is guessed. */
-          const cand = legs.filter((l) => !l.kind && !l.tds && !l.round);
+          /* A tax or duty ledger is never the supplier — the month-end set-off
+             journal (Dr Output IGST / Cr Input IGST, no party) has exactly one
+             leg opposite the input tax, and it is Output IGST. Nor is anything
+             the masters place outside Sundry Creditors / Debtors: an expense
+             is not a party either, whichever side it sits on. */
+          const TAXISH = /\b(output|input)\b|\bgst\b|igst|cgst|sgst|utgst|\bcess\b|payable|liabilit|duties|\btax\b/i;
+          const cand = legs.filter((l) => !l.kind && !l.tds && !l.round && !TAXISH.test(l.nm)
+            && !((masters[l.nm] || {}).parent && !/sundry\s*(creditors|debtors)/i.test(masters[l.nm].parent)));
           const byGroup = cand.filter((l) => /sundry\s*(creditors|debtors)/i.test((masters[l.nm] || {}).parent || ''));
           let pick = byGroup.length === 1 ? byGroup[0] : null;
           if (!pick) {

@@ -242,6 +242,37 @@ t('and the census shows each ledger\u2019s group, so step 2 can tell a creditor 
   assert(cm.mastersIncluded === 2, `masters seen: ${cm.mastersIncluded}`);
 });
 
+/* The other way round: a reversal booked as a journal — Dr the supplier,
+   Cr the expense, Cr Input IGST. The party is still the one leg opposite the
+   tax, the ITC is negative, and it must NOT be mistaken for a set-off. */
+const reversal = `<TALLYMESSAGE xmlns:UDF="TallyUDF">
+<VOUCHER REMOTEID="j-201" VCHTYPE="Journal" ACTION="Create" OBJVIEW="Accounting Voucher View">
+<DATE>20260331</DATE><GUID>jg-201</GUID><VOUCHERTYPENAME>Journal</VOUCHERTYPENAME><VOUCHERNUMBER>25-26/GST-201</VOUCHERNUMBER>
+<PARTYLEDGERNAME></PARTYLEDGERNAME><CMPGSTIN>06AAACE1234F1Z5</CMPGSTIN><NARRATION>reversal of bill GA/2526/041 short supply</NARRATION>
+<ISCANCELLED>No</ISCANCELLED><ISOPTIONAL>No</ISOPTIONAL>
+<ALLLEDGERENTRIES.LIST><LEDGERNAME>GARG &amp; ASSOCIATES</LEDGERNAME><ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE><AMOUNT>-5900</AMOUNT></ALLLEDGERENTRIES.LIST>
+<ALLLEDGERENTRIES.LIST><LEDGERNAME>CONSULTANCY CHARGES</LEDGERNAME><ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE><AMOUNT>5000</AMOUNT></ALLLEDGERENTRIES.LIST>
+<ALLLEDGERENTRIES.LIST><LEDGERNAME>Input IGST</LEDGERNAME><ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE><AMOUNT>900</AMOUNT></ALLLEDGERENTRIES.LIST>
+</VOUCHER>
+</TALLYMESSAGE>`;
+const setoff = `<TALLYMESSAGE xmlns:UDF="TallyUDF">
+<VOUCHER REMOTEID="j-202" VCHTYPE="Journal" ACTION="Create" OBJVIEW="Accounting Voucher View">
+<DATE>20260331</DATE><GUID>jg-202</GUID><VOUCHERTYPENAME>Journal</VOUCHERTYPENAME><VOUCHERNUMBER>25-26/GST-202</VOUCHERNUMBER>
+<PARTYLEDGERNAME></PARTYLEDGERNAME><CMPGSTIN>06AAACE1234F1Z5</CMPGSTIN><NARRATION>ITC set off for Mar-26</NARRATION>
+<ISCANCELLED>No</ISCANCELLED><ISOPTIONAL>No</ISOPTIONAL>
+<ALLLEDGERENTRIES.LIST><LEDGERNAME>Output IGST</LEDGERNAME><ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE><AMOUNT>-3600</AMOUNT></ALLLEDGERENTRIES.LIST>
+<ALLLEDGERENTRIES.LIST><LEDGERNAME>Input IGST</LEDGERNAME><ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE><AMOUNT>3600</AMOUNT></ALLLEDGERENTRIES.LIST>
+</VOUCHER>
+</TALLYMESSAGE>`;
+const rv = await send(Buffer.from(wrap(reversal + setoff), 'utf8'), { label: 'reversal journal + set-off journal' });
+t('a reversal journal keeps its supplier and its negative ITC; the set-off is still not a row', () => {
+  assert(rv.j.ok && rv.j.rows.length === 1, `one row, the reversal: ${JSON.stringify(rv.j).slice(0, 200)}`);
+  const r = rv.j.rows[0];
+  assert(r.voucherNo === '25-26/GST-201' && r.party === 'GARG & ASSOCIATES', `the reversal: ${JSON.stringify(r)}`);
+  assert(Math.abs(r.igst + 900) < 0.01 && Math.abs(r.taxable + 5000) < 0.01, `negative, as a reversal is: igst ${r.igst} taxable ${r.taxable}`);
+  assert(r.narrationRef === 'GA/2526/041', `and the bill it reverses, from the narration: ${r.narrationRef}`);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 conn.kill();
 process.exit(fail ? 1 : 0);
