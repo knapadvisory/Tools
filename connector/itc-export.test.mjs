@@ -109,7 +109,20 @@ t('only the period asked for is kept', () => {
 const bad = await send(Buffer.from('<?xml version="1.0"?><ENVELOPE><BODY><DATA><TALLYMESSAGE><LEDGER NAME="x"/></TALLYMESSAGE></DATA></BODY></ENVELOPE>', 'utf8'), { label: 'no vouchers' });
 t('a file with no vouchers says what to export instead', () => {
   assert(bad.j.ok === false, 'it must fail: ' + JSON.stringify(bad.j).slice(0, 120));
-  assert(/Day Book or Voucher Register/.test(bad.j.error), 'and say which report: ' + bad.j.error);
+  assert(/Transactions/.test(bad.j.error), 'and name the menu: ' + bad.j.error);
+});
+/* What actually arrived from the field: the Ledger Vouchers screen of Input
+   CGST, exported with "Current" — 3,432 lines of DSPVCHDATE / DSPVCHLEDACCOUNT
+   / DSPVCHDRAMT / DSPEXPLVCHNUMBER, UTF-16, and not one <VOUCHER>. It is the
+   report as displayed, with no GSTIN, no taxable value and no ledger legs.
+   The right answer is not "no vouchers" but "wrong menu, here is the right one". */
+const dsp = Buffer.concat([Buffer.from([0xFF, 0xFE]), Buffer.from('<ENVELOPE>\r\n' + Array.from({ length: 400 }, (_, i) =>
+  ` <DSPVCHDATE>${1 + (i % 28)}-Apr-25</DSPVCHDATE>\r\n <DSPVCHLEDACCOUNT>SUPPLIER ${i}</DSPVCHLEDACCOUNT>\r\n <DSPVCHTYPE>Purc</DSPVCHTYPE>\r\n <DSPVCHDRAMT>-${(410 + i)}.40</DSPVCHDRAMT>\r\n <DSPVCHCRAMT></DSPVCHCRAMT>\r\n <DSPEXPLVCHNUMBER>(No. :GST/25-26/${i})</DSPEXPLVCHNUMBER>\r\n`).join('') + '</ENVELOPE>\r\n', 'utf16le')]);
+const rep = await send(dsp, { label: 'report as displayed' });
+t('a report exported "as displayed" is recognised, and the right menu named', () => {
+  assert(rep.j.ok === false, 'it must fail: ' + JSON.stringify(rep.j).slice(0, 120));
+  assert(/as it appears on screen/.test(rep.j.error), 'it must say what the file is: ' + rep.j.error);
+  assert(/Alt\+E .* Transactions/.test(rep.j.error) && /not Current/.test(rep.j.error), 'and the menu that gives vouchers: ' + rep.j.error);
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -226,7 +226,7 @@
         <label class="lbl">To <input type="date" id="toDate" class="kdate"></label>
         <span id="fyQuick" class="fyq"></span>
         <button class="btn primary" id="btnFetch" onclick="fetchItc()">Fetch books ITC →</button>
-        <button class="btn ghost" id="btnExport" onclick="document.getElementById('exportXml').click()" title="Tally cannot be reached from here? Export its vouchers as XML from inside Tally (Alt+E, Day Book or Voucher Register, format XML) and load that file instead">⬆ Load a Tally export (.xml)</button>
+        <button class="btn ghost" id="btnExport" onclick="document.getElementById('exportXml').click()" title="Tally cannot be reached from here? Export its vouchers from inside Tally — TallyPrime: Alt+E → Transactions (not Current), format XML, period, voucher type Purchase — and load that file instead">⬆ Load a Tally export (.xml)</button>
         <input type="file" id="exportXml" accept=".xml,text/xml" style="display:none" onchange="loadExportXml(this.files[0]);this.value=''">
         <button class="btn ghost sm" onclick="downloadDiag()" title="Collect the connector's version, memory ceiling and logs into one file to send">⬇ Diagnostics</button>
       </div>
@@ -554,7 +554,7 @@ function loadExportXml(file){
   if(!sel.length){setMsg('msgFetch','Select and confirm the input-GST ledgers first \u2014 the export is read against them.','bad');return;}
   var from=$('fromDate').value,to=$('toDate').value;
   if(!from||!to){setMsg('msgFetch','Set the from and to dates.','bad');return;}
-  if(!/\.xml$/i.test(file.name)){setMsg('msgFetch','That is not an XML file. In Tally: Alt+E \u2192 Current \u2192 format XML.','bad');return;}
+  if(!/\.xml$/i.test(file.name)){setMsg('msgFetch','That is not an XML file. In TallyPrime: Alt+E \u2192 Transactions \u2192 format XML.','bad');return;}
   $('btnFetch').disabled=true;$('btnExport').disabled=true;setMsg('msgFetch','','');
   $('fetchProg').style.display='';$('fetchLine').style.display='';$('fetchBar').style.width='8%';
   $('fetchLine').textContent='Reading '+file.name+' ('+Math.round(file.size/1048576)+' MB)\u2026';

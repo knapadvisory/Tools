@@ -28,7 +28,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import v8 from 'node:v8';
 
-const VERSION = '4.74';
+const VERSION = '4.75';
 // Bumped WITH connector/version.json — the two are compared to decide a
 // self-update, so a mismatch either loops every connector in the field or
 // hides the build. connector/version.test.mjs fails the pair apart.
@@ -3563,10 +3563,20 @@ async function readItcRegister(url, company, from, to, taxLedgers, opts = {}) {
          held at once. Old Tally releases export as UTF-16 ("Unicode"); the
          byte-order mark on the first chunk says which, and it is honoured. */
       dcProgress.phase = 'ITC register \u2014 reading the Tally export\u2026';
-      let scannedBytes = 0, vouchersSeen = 0, decoder = null, buf = '';
+      let scannedBytes = 0, vouchersSeen = 0, decoder = null, buf = '', sawReport = false;
       const flush = async (final) => {
         let cut = buf.lastIndexOf('</VOUCHER>');
-        if (cut < 0) { if (final) { buf = ''; } return; }
+        if (cut < 0) {
+          /* No voucher closed yet. A report exported "as displayed" — the
+             Ledger Vouchers screen, say — never has one: it is DSPVCHDATE and
+             DSPVCHDRAMT all the way down, the columns and nothing else. Notice,
+             so the failure can name the right menu. And do not let a file with
+             no vouchers in it grow the buffer without bound: keep only a tail
+             in case a <VOUCHER> is straddling the chunk boundary. */
+          if (!sawReport && /<DSPVCH/i.test(buf)) sawReport = true;
+          if (final) buf = ''; else if (buf.length > 4 * 1024 * 1024) buf = buf.slice(-65536);
+          return;
+        }
         cut += '</VOUCHER>'.length;
         const run = buf.slice(0, cut); buf = buf.slice(cut);
         vouchersSeen += (run.match(/<VOUCHER[\s>]/gi) || []).length;
@@ -3589,7 +3599,12 @@ async function readItcRegister(url, company, from, to, taxLedgers, opts = {}) {
       buf += decoder ? decoder.end() : '';
       await flush(true);
       trace('export read complete', { mb: Math.round(scannedBytes / 1048576), vouchers: vouchersSeen, rows: rows.length });
-      if (!vouchersSeen) throw new Error('EXPORT_EMPTY: no <VOUCHER> in the file \u2014 export the Day Book or Voucher Register as XML, not Excel');
+      if (!vouchersSeen) {
+        throw new Error(sawReport
+          ? 'EXPORT_EMPTY: this file is a report as it appears on screen (Ledger Vouchers / Day Book columns), not the vouchers themselves \u2014 it has no GSTIN, no taxable value and no ledger legs. '
+            + 'In TallyPrime use Alt+E \u2192 Transactions (not Current), format XML, set the period and choose the Purchase voucher type; then again for Debit Note. That writes the vouchers whole.'
+          : 'EXPORT_EMPTY: no <VOUCHER> in the file. In TallyPrime use Alt+E \u2192 Transactions, format XML \u2014 not Excel, and not "Current", which exports only the report on screen.');
+      }
       filterNote = `read from a Tally export file \u2014 ${vouchersSeen.toLocaleString('en-IN')} vouchers scanned, ${rows.length.toLocaleString('en-IN')} with input GST; no live Tally was asked`;
       dcProgress.note = filterNote;
       dcProgress.monthsDone = totalDays;

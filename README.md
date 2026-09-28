@@ -38,8 +38,10 @@ exceptions one 3.8 s and 266 MB. On the books side the
 connector reads one input-GST ledger at a time and releases it before the next,
 so the size of the books decides how long a read takes rather than whether it
 finishes. **Tally out of reach** (hosted, shown through a remote-app window, no
-port, no desktop)? Export its vouchers from inside Tally — Alt+E, Day Book or
-Voucher Register, format **XML** — to a redirected local drive, and press
+port, no desktop)? Export its vouchers from inside Tally — TallyPrime: **Alt+E →
+Transactions** (not *Current*, which exports only the report on screen),
+format **XML**, period, voucher type Purchase (then Debit Note) — to a
+redirected local drive, and press
 **Load a Tally export** in step 3: the connector streams the file and reads it
 with the same parser, no live Tally involved. Tests:
 `node connector/itc-export.test.mjs`. Tests: `node itc-reco/reco.test.mjs`, `node itc-reco/datepicker.test.mjs` (both need `playwright-core`), `node connector/itc-register.test.mjs`. |
