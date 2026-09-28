@@ -199,6 +199,17 @@
   </div>
 
   <!-- STEP 2 -->
+  <!-- 1b · a Tally nobody can connect to -->
+  <div class="card" id="card1b">
+    <h2>1b · Or — a remote / hosted Tally: start from its export</h2>
+    <div class="lbl" style="margin:4px 0 10px">Tally shown through a remote-app window has no port this tool can reach. Inside that window, from the Gateway press <b>Alt+E → Transactions</b> (not <i>Current</i>), format <b>XML</b>, the period, voucher type <b>Purchase</b> — save to your local drive. Then again for <b>Debit Note</b> (your reversals). Drop both here. The file is the company: every ledger in it is listed in step 2 for you to tag, and nothing above needs to be connected.</div>
+    <div class="drop" id="dropExport">Drop the Tally export <b>.xml</b> file(s) here, or click to choose.
+      <input type="file" id="exportFiles" accept=".xml,text/xml" multiple style="display:none">
+    </div>
+    <div class="msg" id="msgExport"></div>
+    <div id="exportSummary" class="lbl" style="margin-top:8px"></div>
+  </div>
+
   <div class="card hidden" id="card2">
     <h2>2 · Pick the input-GST ledgers</h2>
     <div class="sub">Tag each <b>input</b> ledger you claim ITC through as IGST / CGST / SGST — and use the RCM options for reverse-charge ledgers. Likely input ledgers are pre-tagged, but check them: <b>output/liability and rate ledgers are NOT auto-selected</b> — only ones named “Input…”. Debits = ITC availed, credits = reversals (both netted). Then <b>Confirm</b>.</div>
@@ -483,6 +494,7 @@ function editLedgers(){$('confirmBlock').classList.add('hidden');$('ledPickArea'
 var booksRows=[];
 var FETCH_ABORT=null, RELEASED=false;
 function fetchItc(){
+  if(REMOTE_MODE){readExportFiles();return;}      // the files are the company
   RELEASED=false;
   var sel=selectedLedgers();
   if(!sel.length){setMsg('msgFetch','Select at least one input-GST ledger.','bad');return;}
@@ -537,6 +549,94 @@ function fetchItc(){
           next();
         });
       });
+  })();
+}
+/* ============================ step 1b: a remote Tally, from its export ============================
+   The file is the company. It is scanned once for what it holds — every
+   ledger that appears in a voucher leg, the voucher types, the dates, the
+   registrations — and that census feeds step 2 exactly as a live ledger list
+   would. Step 3 then reads the same files against the ledgers tagged. */
+var EXPORT_FILES=[], REMOTE_MODE=false;
+$('dropExport').addEventListener('click',function(){$('exportFiles').click();});
+$('dropExport').addEventListener('dragover',function(e){e.preventDefault();$('dropExport').classList.add('has');});
+$('dropExport').addEventListener('dragleave',function(){if(!EXPORT_FILES.length)$('dropExport').classList.remove('has');});
+$('dropExport').addEventListener('drop',function(e){e.preventDefault();scanExports(e.dataTransfer.files);});
+$('exportFiles').addEventListener('change',function(e){scanExports(e.target.files);e.target.value='';});
+function scanExports(files){
+  var arr=Array.prototype.slice.call(files||[]).filter(function(f){return /\.xml$/i.test(f.name);});
+  if(!arr.length){setMsg('msgExport','Drop .xml files \u2014 Alt+E \u2192 Transactions, format XML.','bad');return;}
+  setMsg('msgExport','Scanning\u2026','');
+  var byName={},total=0,types={},regs={},minD=null,maxD=null,errs=[],i=0,accepted=[];
+  (function next(){
+    if(i>=arr.length){
+      if(!accepted.length){setMsg('msgExport',errs.join(' '),'bad');return;}
+      EXPORT_FILES=accepted;REMOTE_MODE=true;chosenList=[];
+      ledgers=Object.keys(byName).map(function(k){return byName[k];}).sort(function(a,b){return a.name.localeCompare(b.name);});
+      kinds={};ledgers.forEach(function(L){var g=guessKind(L.name);if(g)kinds[nk(L.name)]=g;});
+      renderLedgers();renderPicked();
+      $('dropExport').classList.add('has');
+      $('dropExport').innerHTML=accepted.map(function(f){return '<b>'+esc(f.name)+'</b> ('+Math.round(f.size/1048576)+' MB)';}).join(' \u00b7 ')+' \u2014 drop more to add, or reload the page to start over.';
+      var tl=Object.keys(types).sort(function(a,b){return types[b]-types[a];}).map(function(t){return esc(t)+' '+types[t].toLocaleString('en-IN');}).join(', ');
+      var rl=Object.keys(regs).sort();
+      $('exportSummary').innerHTML='<b>'+total.toLocaleString('en-IN')+' vouchers</b>'+(minD?' from '+minD+' to '+maxD:'')+' \u00b7 '+ledgers.length+' ledgers \u00b7 '+tl
+        +(rl.length?' \u00b7 registrations: <span class="mono">'+rl.map(esc).join(', ')+'</span>':' \u00b7 <span class="bad">no CMPGSTIN on the vouchers \u2014 wrong-registration findings will be off</span>');
+      setMsg('msgExport',(errs.length?errs.join(' ')+' ':'')+'Now tag the input-GST ledgers in step 2.',errs.length?'warn':'ok');
+      if(minD&&!$('fromDate').value)$('fromDate').value=minD;
+      if(maxD&&!$('toDate').value)$('toDate').value=maxD;
+      $('card2').classList.remove('hidden');markStep(1,true);
+      setMsg('msgLed',ledgers.length+' ledgers found in '+accepted.length+' export file(s) \u2014 tag the input-GST ones','ok');
+      return;
+    }
+    var f=arr[i++];
+    setMsg('msgExport','Scanning '+f.name+' ('+Math.round(f.size/1048576)+' MB)\u2026','');
+    fetch(API+'/api/itc/export-ledgers',{method:'POST',headers:{'content-type':'text/xml'},body:f})
+      .then(function(r){return r.json();}).then(function(j){
+        if(!j.ok){errs.push(f.name+': '+(j.error||'could not scan'));next();return;}
+        accepted.push(f);total+=j.vouchers||0;
+        (j.types||[]).forEach(function(t){types[t.name]=(types[t.name]||0)+t.vouchers;});
+        (j.registrations||[]).forEach(function(g){regs[g]=1;});
+        if(j.from&&(!minD||j.from<minD))minD=j.from;if(j.to&&(!maxD||j.to>maxD))maxD=j.to;
+        (j.ledgers||[]).forEach(function(L){
+          var k=nk(L.name),o=byName[k]||(byName[k]={name:L.name,vouchers:0,dr:0,cr:0});
+          o.vouchers+=L.vouchers;o.dr+=L.dr;o.cr+=L.cr;
+          o.parent=o.vouchers.toLocaleString('en-IN')+' vch \u00b7 Dr '+inr(o.dr)+' \u00b7 Cr '+inr(o.cr);
+        });
+        next();
+      }).catch(function(e){errs.push(f.name+': '+e.message+' \u2014 is the connector running on this computer? It reads the file; no Tally is needed.');next();});
+  })();
+}
+/* Step 3, in remote mode: read the export files against the tagged ledgers. */
+function readExportFiles(){
+  RELEASED=false;
+  var sel=selectedLedgers();
+  if(!sel.length){setMsg('msgFetch','Tag at least one input-GST ledger in step 2.','bad');return;}
+  var from=$('fromDate').value,to=$('toDate').value;
+  if(!from||!to){setMsg('msgFetch','Set the from and to dates.','bad');return;}
+  $('btnFetch').disabled=true;setMsg('msgFetch','','');
+  $('fetchProg').style.display='';$('fetchLine').style.display='';$('fetchBar').style.width='8%';
+  booksRows=[];var i=0,errs=[];
+  pollFetch();
+  (function next(){
+    if(i>=EXPORT_FILES.length){
+      if(POLL){clearInterval(POLL);POLL=null;}$('btnFetch').disabled=false;$('fetchProg').style.display='none';$('fetchLine').style.display='none';
+      if(!booksRows.length){setMsg('msgFetch','No voucher in the export touches the tagged ledgers in this period. '+errs.join(' '),'bad');return;}
+      var noReg=booksRows.filter(function(r){return !r._ownGstin;}).length;
+      setMsg('msgFetch','Read '+booksRows.length.toLocaleString('en-IN')+' invoices from '+EXPORT_FILES.length+' export file(s).'+(noReg?' '+noReg.toLocaleString('en-IN')+' carry no registration.':'')+(errs.length?' '+errs.join(' '):''),(noReg||errs.length)?'warn':'');
+      showBooks({from:from,to:to});markStep(2,true);
+      $('card4').classList.remove('hidden');markStep(3,true);
+      return;
+    }
+    var f=EXPORT_FILES[i++];
+    $('fetchLine').textContent='Reading '+f.name+' ('+i+'/'+EXPORT_FILES.length+')\u2026';
+    $('fetchBar').style.width=Math.round(8+(i/EXPORT_FILES.length)*82)+'%';
+    FETCH_ABORT=new AbortController();
+    var q='from='+encodeURIComponent(from)+'&to='+encodeURIComponent(to)+'&taxLedgers='+encodeURIComponent(JSON.stringify(sel))+'&company='+encodeURIComponent(f.name);
+    fetch(API+'/api/itc/register-xml?'+q,{method:'POST',signal:FETCH_ABORT.signal,headers:{'content-type':'text/xml'},body:f})
+      .then(function(r){return r.json();}).then(function(j){
+        if(!j.ok){errs.push(f.name+': '+(j.error||'error'));next();return;}
+        (j.rows||[]).forEach(function(row){row._ownGstin=(row.ownGstin||'').toUpperCase();row._company=f.name;booksRows.push(row);});
+        next();
+      }).catch(function(e){if(RELEASED)return;errs.push(f.name+': '+e.message);next();});
   })();
 }
 /* The books from Tally's OWN export, when Tally itself cannot be reached.

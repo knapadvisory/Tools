@@ -28,7 +28,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import v8 from 'node:v8';
 
-const VERSION = '4.75';
+const VERSION = '4.76';
 // Bumped WITH connector/version.json — the two are compared to decide a
 // self-update, so a mismatch either loops every connector in the field or
 // hides the build. connector/version.test.mjs fails the pair apart.
@@ -3090,6 +3090,46 @@ const ROUNDOFF_LEDGER_RX = /round(ing)?\s*-?\s*off|\brounding\b/i;
 // any of these against 2B), party + GSTIN, taxable base, and the tax split. The
 // taxable base is the non-tax, non-party debit (the purchase/expense leg).
 // Voucher-dense books fail fast (never freeze Tally).
+/* Stream a Tally export and hand over whole <VOUCHER> blocks as they complete.
+   What has not yet closed waits for the next chunk; a year of a large book is
+   hundreds of megabytes and is never held at once. Old Tally releases export
+   as UTF-16 ("Unicode"); the byte-order mark on the first chunk says which.
+   A report exported "as displayed" — DSPVCHDATE and DSPVCHDRAMT all the way
+   down, not one voucher — is noticed, so the failure can name the right menu;
+   and a file with no vouchers does not grow the buffer without bound. */
+async function voucherRuns(source, onRun, onProgress) {
+  const { StringDecoder } = await import('node:string_decoder');
+  let bytes = 0, vouchers = 0, decoder = null, buf = '', report = false, utf16 = false;
+  const flush = async (final) => {
+    let cut = buf.lastIndexOf('</VOUCHER>');
+    if (cut < 0) {
+      if (!report && /<DSPVCH/i.test(buf)) report = true;
+      if (final) buf = ''; else if (buf.length > 4 * 1024 * 1024) buf = buf.slice(-65536);
+      return;
+    }
+    cut += '</VOUCHER>'.length;
+    const run = buf.slice(0, cut); buf = buf.slice(cut);
+    vouchers += (run.match(/<VOUCHER[\s>]/gi) || []).length;
+    await onRun(run);
+    if (onProgress) onProgress({ bytes, vouchers });
+  };
+  for await (const chunk of source) {
+    if (dcCancel) throw new Error('released by user');
+    const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    if (!decoder) {
+      utf16 = b.length >= 2 && b[0] === 0xFF && b[1] === 0xFE;
+      decoder = new StringDecoder(utf16 ? 'utf16le' : 'utf8');
+      trace('export encoding', { utf16, firstBytes: [...b.subarray(0, 4)] });
+    }
+    bytes += b.length;
+    buf += decoder.write(b);
+    if (buf.length > 4 * 1024 * 1024) await flush(false);
+  }
+  buf += decoder ? decoder.end() : '';
+  await flush(true);
+  return { bytes, vouchers, report, utf16 };
+}
+
 /* opts.xmlSource — an async iterable of chunks (a request body, a file) holding
    Tally's OWN export of the vouchers, instead of a live Tally to ask. The XML
    Tally writes when a Day Book or Voucher Register is exported is the XML its
@@ -3557,47 +3597,13 @@ async function readItcRegister(url, company, from, to, taxLedgers, opts = {}) {
       }
     };
     if (fromFile) {
-      /* The export, streamed. Whole vouchers are cut out as they complete and
-         handed to the same parser; what has not yet closed waits for the next
-         chunk. A year of a large book is hundreds of megabytes — it is never
-         held at once. Old Tally releases export as UTF-16 ("Unicode"); the
-         byte-order mark on the first chunk says which, and it is honoured. */
+      /* The export, streamed through voucherRuns (below): whole vouchers cut
+         out as they complete and handed to the same parser. */
       dcProgress.phase = 'ITC register \u2014 reading the Tally export\u2026';
-      let scannedBytes = 0, vouchersSeen = 0, decoder = null, buf = '', sawReport = false;
-      const flush = async (final) => {
-        let cut = buf.lastIndexOf('</VOUCHER>');
-        if (cut < 0) {
-          /* No voucher closed yet. A report exported "as displayed" — the
-             Ledger Vouchers screen, say — never has one: it is DSPVCHDATE and
-             DSPVCHDRAMT all the way down, the columns and nothing else. Notice,
-             so the failure can name the right menu. And do not let a file with
-             no vouchers in it grow the buffer without bound: keep only a tail
-             in case a <VOUCHER> is straddling the chunk boundary. */
-          if (!sawReport && /<DSPVCH/i.test(buf)) sawReport = true;
-          if (final) buf = ''; else if (buf.length > 4 * 1024 * 1024) buf = buf.slice(-65536);
-          return;
-        }
-        cut += '</VOUCHER>'.length;
-        const run = buf.slice(0, cut); buf = buf.slice(cut);
-        vouchersSeen += (run.match(/<VOUCHER[\s>]/gi) || []).length;
-        await eat(run);
-        dcProgress.sub = `${Math.round(scannedBytes / 1048576)} MB read \u00b7 ${vouchersSeen.toLocaleString('en-IN')} vouchers \u00b7 ${rows.length.toLocaleString('en-IN')} with input GST`;
-      };
-      for await (const chunk of opts.xmlSource) {
-        if (dcCancel) throw new Error('released by user');
-        const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        if (!decoder) {
-          const { StringDecoder } = await import('node:string_decoder');
-          const utf16 = b.length >= 2 && b[0] === 0xFF && b[1] === 0xFE;
-          decoder = new StringDecoder(utf16 ? 'utf16le' : 'utf8');
-          trace('export encoding', { utf16, firstBytes: [...b.subarray(0, 4)] });
-        }
-        scannedBytes += b.length;
-        buf += decoder.write(b);
-        if (buf.length > 4 * 1024 * 1024) await flush(false);
-      }
-      buf += decoder ? decoder.end() : '';
-      await flush(true);
+      const st = await voucherRuns(opts.xmlSource, eat, (x) => {
+        dcProgress.sub = `${Math.round(x.bytes / 1048576)} MB read \u00b7 ${x.vouchers.toLocaleString('en-IN')} vouchers \u00b7 ${rows.length.toLocaleString('en-IN')} with input GST`;
+      });
+      const vouchersSeen = st.vouchers, sawReport = st.report, scannedBytes = st.bytes;
       trace('export read complete', { mb: Math.round(scannedBytes / 1048576), vouchers: vouchersSeen, rows: rows.length });
       if (!vouchersSeen) {
         throw new Error(sawReport
@@ -5533,6 +5539,63 @@ const server = http.createServer(async (req, res) => {
           : ('Could not read Tally: ' + raw);
         trace('READ FAILED', { error: raw });
         json(res, 502, { ok: false, error: msg });
+      }
+      return;
+    }
+
+    /* What is IN an export, before anything is read against it: every ledger
+       that appears in a voucher leg, with how many vouchers touch it and what
+       they total; the voucher types; the dates; the registrations stamped on
+       the vouchers. This is step 1 and step 2 for a Tally nobody can connect
+       to — the file is the company, and its ledgers are picked from here. */
+    if (req.method === 'POST' && url.pathname === '/api/itc/export-ledgers') {
+      if (dcProgress.active) { json(res, 409, { ok: false, error: 'A read is already running.' }); return; }
+      dcCancel = false; dcProgress.active = true; dcProgress.phase = 'Scanning the export\u2026'; dcProgress.sub = ''; dcProgress.startedAt = Date.now();
+      dcProgress.monthsDone = 0; dcProgress.monthsTotal = 0; dcProgress.note = '';
+      const led = new Map(), types = new Map(), regs = new Set();
+      let minD = null, maxD = null, cancelled = 0;
+      try {
+        const st = await voucherRuns(req, async (run) => {
+          let n = 0;
+          for (const block of run.match(/<VOUCHER[\s>][\s\S]*?<\/VOUCHER>/gi) || []) {
+            if ((++n % 400) === 0) { await new Promise((r) => setImmediate(r)); if (dcCancel) throw new Error('released by user'); }
+            if (/<ISCANCELLED>\s*Yes/i.test(block)) { cancelled++; continue; }
+            if (/<ISOPTIONAL>\s*Yes/i.test(block)) continue;
+            const dk = dateKey(tag(block, 'DATE'));
+            if (dk) { if (minD === null || dk < minD) minD = dk; if (maxD === null || dk > maxD) maxD = dk; }
+            const vt = tag(block, 'VOUCHERTYPENAME').trim(); if (vt) types.set(vt, (types.get(vt) || 0) + 1);
+            const og = (tag(block, 'CMPGSTIN').match(GSTIN_RE) || [''])[0]; if (og) regs.add(og.toUpperCase());
+            const seenHere = new Set();
+            const ents = block.match(/<ALLLEDGERENTRIES\.LIST>[\s\S]*?<\/ALLLEDGERENTRIES\.LIST>/gi) || block.match(/<LEDGERENTRIES\.LIST>[\s\S]*?<\/LEDGERENTRIES\.LIST>/gi) || [];
+            for (const e of ents) {
+              const nm = tag(e, 'LEDGERNAME'); if (!nm) continue;
+              const rawAmt = toNum(tag(e, 'AMOUNT')); const dp = tag(e, 'ISDEEMEDPOSITIVE');
+              const dr = (dp ? (/yes/i.test(dp) ? 1 : -1) : (rawAmt < 0 ? 1 : -1)) * Math.abs(rawAmt);
+              const k = norm(nm);
+              const o = led.get(k) || { name: nm, vouchers: 0, dr: 0, cr: 0 };
+              if (!seenHere.has(k)) { o.vouchers++; seenHere.add(k); }
+              if (dr >= 0) o.dr = r2(o.dr + dr); else o.cr = r2(o.cr - dr);
+              led.set(k, o);
+            }
+          }
+        }, (x) => { dcProgress.sub = `${Math.round(x.bytes / 1048576)} MB \u00b7 ${x.vouchers.toLocaleString('en-IN')} vouchers`; });
+        dcProgress.active = false;
+        const ymd = (k) => k ? `${Math.floor(k / 10000)}-${String(Math.floor(k / 100) % 100).padStart(2, '0')}-${String(k % 100).padStart(2, '0')}` : null;
+        trace('export scanned', { mb: Math.round(st.bytes / 1048576), vouchers: st.vouchers, ledgers: led.size, report: st.report });
+        if (!st.vouchers) {
+          json(res, 200, { ok: false, report: st.report, error: st.report
+            ? 'This file is a report as it appears on screen (Ledger Vouchers / Day Book columns), not the vouchers themselves. In TallyPrime use Alt+E \u2192 Transactions (not Current), format XML, period, voucher type Purchase; then again for Debit Note.'
+            : 'No <VOUCHER> in this file. In TallyPrime use Alt+E \u2192 Transactions, format XML \u2014 not Excel, and not "Current".' });
+          return;
+        }
+        json(res, 200, { ok: true, version: VERSION, vouchers: st.vouchers, cancelled, utf16: st.utf16, mb: Math.round(st.bytes / 1048576),
+          from: ymd(minD), to: ymd(maxD),
+          types: [...types.entries()].map(([name, n]) => ({ name, vouchers: n })).sort((a, b) => b.vouchers - a.vouchers),
+          registrations: [...regs].sort(),
+          ledgers: [...led.values()].sort((a, b) => a.name.localeCompare(b.name)) });
+      } catch (e) {
+        dcProgress.active = false;
+        json(res, 502, { ok: false, error: 'Could not scan the export: ' + String((e && e.message) || e) });
       }
       return;
     }

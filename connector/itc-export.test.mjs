@@ -125,6 +125,39 @@ t('a report exported "as displayed" is recognised, and the right menu named', ()
   assert(/Alt\+E .* Transactions/.test(rep.j.error) && /not Current/.test(rep.j.error), 'and the menu that gives vouchers: ' + rep.j.error);
 });
 
+console.log('\n── what is in the file, before anything is read against it ──');
+async function census(buf, label) {
+  const r = await fetch('http://127.0.0.1:8910/api/itc/export-ledgers', {
+    method: 'POST', headers: { 'content-type': 'text/xml' }, body: chunks(buf, 7919), duplex: 'half' });
+  const j = await r.json();
+  console.log(`\n[${label}] vouchers=${j.vouchers} ledgers=${j.ledgers ? j.ledgers.length : '-'} ${j.from}..${j.to}`);
+  return j;
+}
+const cen = await census(Buffer.from(XML, 'utf8'), 'census');
+t('every ledger in the vouchers is listed, with how many touch it', () => {
+  assert(cen.ok, 'census failed: ' + JSON.stringify(cen).slice(0, 160));
+  const by = Object.fromEntries(cen.ledgers.map((l) => [l.name, l]));
+  assert(by['Input IGST'] && by['Input IGST'].vouchers === TOTAL / ITC_EVERY, `Input IGST: ${JSON.stringify(by['Input IGST'])}`);
+  assert(by['Purchases'] && by['Purchases'].vouchers === TOTAL, `Purchases: ${JSON.stringify(by['Purchases'])}`);
+  assert(by['Supplier 7'] && by['Supplier 7'].vouchers === TOTAL / 50, `a party ledger: ${JSON.stringify(by['Supplier 7'])}`);
+  assert(Math.abs(by['Input IGST'].dr - 1800 * (TOTAL / ITC_EVERY)) < 0.01, `and what they total: Dr ${by['Input IGST'].dr}`);
+});
+t('the dates, the types and the registrations come with it', () => {
+  assert(cen.from === '2025-04-01', `from ${cen.from}`);
+  assert(cen.to === '2025-08-28', `to ${cen.to} (3,000 vouchers at twenty a day)`);
+  assert(cen.types[0].name === 'Purchase' && cen.types[0].vouchers === TOTAL, JSON.stringify(cen.types));
+  assert(cen.registrations.join() === '06AAACE1234F1Z5', `registrations: ${cen.registrations}`);
+  /* 3,000 purchases plus one cancelled and one optional: all three thousand
+     and two are vouchers in the file, and the census says so; the cancelled
+     one is also counted as cancelled, so the reader knows what it will skip. */
+  assert(cen.vouchers === TOTAL + 2 && cen.cancelled === 1, `vouchers in the file / cancelled among them: ${cen.vouchers}/${cen.cancelled}`);
+});
+const cenRep = await census(dsp, 'census of a report');
+t('a report exported "as displayed" is named as such here too', () => {
+  assert(cenRep.ok === false && cenRep.report === true, JSON.stringify(cenRep).slice(0, 160));
+  assert(/Transactions/.test(cenRep.error), cenRep.error);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 conn.kill();
 process.exit(fail ? 1 : 0);

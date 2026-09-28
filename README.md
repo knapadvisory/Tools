@@ -41,9 +41,11 @@ finishes. **Tally out of reach** (hosted, shown through a remote-app window, no
 port, no desktop)? Export its vouchers from inside Tally — TallyPrime: **Alt+E →
 Transactions** (not *Current*, which exports only the report on screen),
 format **XML**, period, voucher type Purchase (then Debit Note) — to a
-redirected local drive, and press
-**Load a Tally export** in step 3: the connector streams the file and reads it
-with the same parser, no live Tally involved. Tests:
+redirected local drive, and drop the file(s) on **step 1b**: the connector
+scans them for every ledger they hold (with voucher counts and totals), step 2
+lets you tag the input-GST ones from that list, and step 3 reads the same
+files against them — the same parser as a live read, no Tally connected at
+any point. Tests:
 `node connector/itc-export.test.mjs`. Tests: `node itc-reco/reco.test.mjs`, `node itc-reco/datepicker.test.mjs` (both need `playwright-core`), `node connector/itc-register.test.mjs`. |
 **Connector versions — bump on EVERY change, however small.** A build that
 ships without a bump is never offered to any connector in the field: every
