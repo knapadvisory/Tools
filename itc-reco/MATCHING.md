@@ -671,21 +671,40 @@ disagree.
 Measured in headless Chromium, a book where one document in seven does *not*
 line up cleanly (unbooked, wrong amount, or the number typed differently):
 
-| documents | before | after |
-|---|---|---|
-| 8,000 | 1.7 s | 0.7 s |
-| 1,50,000 | did not finish | **19 s** |
+| documents | suppliers | before | after |
+|---|---|---|---|
+| 8,000 | 120 | 1.7 s | 0.7 s |
+| 1,50,000 | 800 | did not finish | **19 s** |
+| 1,50,000 | 40 | did not finish | **1 m 48 s** |
+
+The last row is the shape that still costs: the residue that does *not* take the
+shortcut is searched against every other voucher of the same supplier, so a book
+with forty suppliers and a hundred and fifty thousand invoices gives each of
+those searches a pool of nearly four thousand. It finishes, and it is honest
+about the shape of the problem — concentration of suppliers, not size of book,
+is what the matcher feels. Narrowing that pool by amount is **not** available
+without changing results: a same-supplier voucher whose invoice number partly
+agrees is accepted however far its amount is, and an amount filter would drop
+exactly those.
 
 ### The workbook
 
 Above **40,000 rows** the Download button asks first, and a second button
-appears offering **exceptions only** — the matched rows left out. A hundred and
-fifty thousand rows build in about three quarters of a minute and want roughly
-1.7 GB of the browser's memory: survivable on the machine this was measured on,
-not on every machine it will run on. Nobody reads a hundred and fifty thousand
-rows that agreed, so the exceptions workbook is the useful one anyway; it says
+appears offering **exceptions only** — the matched rows left out. On the same
+hundred-and-fifty-thousand-row book:
+
+| workbook | rows | time | browser memory |
+|---|---|---|---|
+| everything | 1,50,000 | 36.6 s | 1,421 MB |
+| exceptions only | 14,286 | **3.8 s** | **266 MB** |
+
+A gigabyte and a half is survivable on the machine this was measured on and not
+on every machine it will run on. Nobody reads a hundred and fifty thousand rows
+that agreed, so the exceptions workbook is the useful one anyway — and it says
 on its own first sheet that the matched rows are missing, because a file that
-quietly dropped them would read as though nothing had reconciled.
+quietly dropped them would read as though nothing had reconciled. The Tie-out
+sheet still covers the whole 2B either way, which that sheet also says, since
+its totals will not add up to the rows in the file.
 
 ### The books side is the real limit
 

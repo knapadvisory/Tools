@@ -32,8 +32,9 @@ own click each run, because they are undocumented and change. Read the warning
 on that page before using it. Tests: `node itc-reco/portal-capture.test.mjs`.
 **Scale:** a hundred and fifty thousand documents against as many vouchers
 reconcile in about 19 seconds (see MATCHING.md → Scale). Above 40,000 rows the
-Excel asks before building and offers an **exceptions only** workbook, because
-the full one wants well over a gigabyte of browser memory. On the books side the
+Excel asks before building and offers an **exceptions only** workbook: at
+1.5 lakh rows the full one takes 37 s and 1.4 GB of browser memory, the
+exceptions one 3.8 s and 266 MB. On the books side the
 connector reads one input-GST ledger at a time and releases it before the next,
 so the size of the books decides how long a read takes rather than whether it
 finishes. Tests: `node itc-reco/reco.test.mjs`, `node itc-reco/datepicker.test.mjs` (both need `playwright-core`), `node connector/itc-register.test.mjs`. |
