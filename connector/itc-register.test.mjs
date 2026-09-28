@@ -65,11 +65,11 @@ const tdsVch = () => `<VOUCHER VCHTYPE="Purchase">
    nothing in Tally. This is SHIVAM: a one-day request answering in seven
    milliseconds, then the identical request timing out because a three-day
    day-book scan had been abandoned a moment before. */
-let busyUntil = 0, busyMs = 2500;
+let busyUntil = 0, busyMs = 2500;                    // 'stuck' makes this an hour
 const srv = http.createServer((req, res) => {
   let b = ''; req.on('data', (c) => b += c); req.on('end', () => {
     res.setHeader('content-type', 'text/xml');
-    if (mode === 'poison') {
+    if (mode === 'poison' || mode === 'stuck') {
       const f0 = Number((b.match(/<SVFROMDATE[^>]*>(\d{8})/i) || [])[1] || 0);
       const t0 = Number((b.match(/<SVTODATE[^>]*>(\d{8})/i) || [])[1] || 0);
       const isVch = /Voucher/i.test(b);
@@ -79,8 +79,9 @@ const srv = http.createServer((req, res) => {
         const isDayBook = !/KnapLedVch|Ledger Vouchers|KnapItcVch/i.test(b);
         if (isDayBook || span > 4) {            // too much for this Tally: it grinds, and never answers
           if (isDayBook) stats.plain++; else stats.ledger++;   // counted — it WAS sent
+          if (process.env.STUB_DEBUG) console.error('POISONED', JSON.stringify({ isDayBook, span, id: (b.match(/<ID>([^<]+)<\/ID>/) || [])[1], len: b.length }));
           stats.poisoned = (stats.poisoned || 0) + 1;
-          busyUntil = Math.max(busyUntil, Date.now() + busyMs);
+          busyUntil = Math.max(busyUntil, Date.now() + (mode === 'stuck' ? 3600000 : busyMs));
           return;                                // and the client's abort does not stop the grinding
         }
       }
@@ -104,6 +105,7 @@ const srv = http.createServer((req, res) => {
     const to = Number((b.match(/<SVTODATE[^>]*>(\d{8})/i) || [])[1] || 20260331);
     const isFiltered = /KnapItcVch/.test(b);
     if (isLedger) stats.ledger++; else if (isFiltered) stats.filtered++; else stats.plain++;
+    if (process.env.STUB_DEBUG && !isLedger && !isFiltered) console.error('PLAIN', JSON.stringify({ mode, id: (b.match(/<ID>([^<]+)<\/ID>/) || [])[1], from, to, len: b.length }));
 
     /* A book Tally will not scan at all. SHIVAM ENTERPRISES answered no day-book
        request — 20 days, a quarter, a year, all timed out — while its sixteen
@@ -149,6 +151,7 @@ const srv = http.createServer((req, res) => {
                       mute: [],
                       narrow: ['collection-voucher-ledger'],
                       poison: ['collection-voucher-ledger'],
+                      stuck: ['collection-voucher-ledger'],
                       filterOnly: [], bad: [], noLedgerIndex: [] }[mode] || [];
       if (!knows.includes(shape)) { res.statusCode = 200; return res.end('<ENVELOPE></ENVELOPE>'); }
       if (mode === 'noFilter' || mode === 'deadNoFilter') {
@@ -521,7 +524,7 @@ conn4.kill();
  * ------------------------------------------------------------------------- */
 console.log('\n── a Tally that keeps working on what you abandoned ──');
 const conn5 = spawn('node', [new URL('./knap-tally-connector.mjs', import.meta.url).pathname],
-  { env: { ...process.env, PORT: '8902', KNAP_LIVENESS_MS: '600', KNAP_LIVENESS_SLOW_MS: '900',
+  { env: { ...process.env, PORT: '8902', KNAP_LIVENESS_MS: '600', KNAP_LIVENESS_SLOW_MS: '900', KNAP_DENSE_SAMPLE_KB: '4',
            KNAP_LEDGER_ATTEMPT_MS: '700', KNAP_DAYBOOK_PROBE_MS: '500',
            KNAP_RECOVER_EVERY_MS: '300', KNAP_RECOVER_EACH_MS: '250' },
     stdio: ['ignore', 'pipe', 'pipe'] });
@@ -533,11 +536,14 @@ t('the read finishes, and finds every ITC voucher', () => {
   const expected = Math.ceil(TOTAL / ITC_EVERY) + 2;
   assert(poison.j.rows.length === expected, `expected ${expected} rows, got ${poison.j.rows.length}`);
 });
-t('the day book was asked for ONE day, not twenty', () => {
-  /* The first day-book question is the one that poisons. One day is the least
-     it can be; it still never answers here, but it is the only day-book
-     request that should ever have been sent. */
-  assert(poison.stats.plain === 1, `exactly one day-book request, got ${poison.stats.plain}`);
+t('the day book was never asked — the ledger sample was already dense, so it was not consulted', () => {
+  /* The day book is the request that poisons. It is asked only as a
+     cross-check, and only when the ledgers' own three-day sample was small and
+     quick — the day book for the same days being many times larger. Here the
+     sample is over the (test-sized) limit, so the day book is never sent and
+     the note says the shortcut was not cross-checked instead. */
+  assert(poison.stats.plain === 0, `no day-book request at all, got ${poison.stats.plain}`);
+  assert(/NOT cross-checked/.test(poison.note), 'and it must say so: ' + poison.note);
 });
 t('it waited for Tally to come back instead of stacking requests behind the poison', () => {
   /* Requests that arrived while the stub was busy were queued, not answered.
@@ -551,6 +557,37 @@ t('and the ceiling was learned once, not rediscovered per window', () => {
     `each poisoning request costs a full recovery; there should be very few: ${poison.stats.poisoned}`);
 });
 conn5.kill();
+
+/* ---------------------------------------------------------------------------
+ * A Tally that does not come back.
+ *
+ * 4.72 waited its ten minutes for the ping to answer, and when it did not,
+ * carried on as though it had — into the same backlog, poisoning it again.
+ * Sixteen minutes on the page. When the ping does not come back, the only
+ * thing that helps is restarting Tally, and the read must say so and stop.
+ * ------------------------------------------------------------------------- */
+console.log('\n── a Tally that does not come back ──');
+const conn6 = spawn('node', [new URL('./knap-tally-connector.mjs', import.meta.url).pathname],
+  { env: { ...process.env, PORT: '8903', KNAP_LIVENESS_MS: '600', KNAP_LIVENESS_SLOW_MS: '900', KNAP_DENSE_SAMPLE_KB: '4',
+           KNAP_LEDGER_ATTEMPT_MS: '700', KNAP_DAYBOOK_PROBE_MS: '300',
+           KNAP_RECOVER_EVERY_MS: '200', KNAP_RECOVER_EACH_MS: '150', KNAP_RECOVER_MAX_MS: '1500' },
+    stdio: ['ignore', 'pipe', 'pipe'] });
+await new Promise((r) => setTimeout(r, 2500));
+mode = 'stuck'; busyUntil = 0;
+const t0stuck = Date.now();
+const stuck = await run('Tally never comes back', { port: 8903 });
+const stuckMs = Date.now() - t0stuck;
+t('it stops instead of pushing more requests into the backlog', () => {
+  assert(stuck.j.ok === false, 'it must fail: ' + JSON.stringify(stuck.j).slice(0, 200));
+  assert(stuckMs < 15000, `and fail once the wait is up, not after every timeout in turn: ${stuckMs}ms`);
+  assert((stuck.stats.poisoned || 0) <= 2, `at most the one request that poisoned it, got ${stuck.stats.poisoned}`);
+});
+t('and tells you the one thing that helps', () => {
+  const m = String(stuck.j.error || '');
+  assert(/Close and reopen Tally/.test(m), 'restarting Tally is the only fix, and it must say so: ' + m);
+  assert(/cannot cancel/.test(m), 'and why the connector cannot do it: ' + m);
+});
+conn6.kill();
 
 console.log(`\n${pass} passed, ${fail} failed`);
 conn.kill(); srv.close();

@@ -28,7 +28,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import v8 from 'node:v8';
 
-const VERSION = '4.72';
+const VERSION = '4.73';
 // Bumped WITH connector/version.json — the two are compared to decide a
 // self-update, so a mismatch either loops every connector in the field or
 // hides the build. connector/version.test.mjs fails the pair apart.
@@ -352,6 +352,12 @@ const LEDGER_ATTEMPT_MS = Number(process.env.KNAP_LEDGER_ATTEMPT_MS || 60000);
 const DAYBOOK_PROBE_MS = Number(process.env.KNAP_DAYBOOK_PROBE_MS || 15000);
 const RECOVER_EVERY_MS = Number(process.env.KNAP_RECOVER_EVERY_MS || 10000);
 const RECOVER_EACH_MS = Number(process.env.KNAP_RECOVER_EACH_MS || 5000);
+const RECOVER_MAX_MS = Number(process.env.KNAP_RECOVER_MAX_MS || 600000);
+/* The day book is consulted as a cross-check only when the ledgers' own sample
+   was small. Past this much XML across all the input-GST ledgers for a few
+   days, the day book for the same days would be many times more, and on a
+   serial Tally asking for it is a ten-minute mistake. */
+const DENSE_SAMPLE_KB = Number(process.env.KNAP_DENSE_SAMPLE_KB || 1024);
 /* capMb: a caller that is only PROBING can set its own, much smaller ceiling.
    A probe exists to find out whether a request shape filters; one that is still
    streaming at 20 MB has answered that question already, and downloading the
@@ -2451,7 +2457,7 @@ const dcDenseSet = new Set();
    five-second leash, and the wait is shown, because a bar that sits still
    while the connector waits looks exactly like a connector that has died. */
 async function waitForTally(url, ping, opts = {}) {
-  const every = opts.everyMs || RECOVER_EVERY_MS, each = opts.eachMs || RECOVER_EACH_MS, giveUp = opts.maxMs || 600000;
+  const every = opts.everyMs || RECOVER_EVERY_MS, each = opts.eachMs || RECOVER_EACH_MS, giveUp = opts.maxMs || RECOVER_MAX_MS;
   const t0 = Date.now();
   let tries = 0;
   while (Date.now() - t0 < giveUp) {
@@ -2509,8 +2515,8 @@ async function readVouchersRamp(url, from, to, onXml, prog, opts = {}) {
         await onXml(xml);
         done = true;
         const ms = Date.now() - t0;
-        if (ms < 8000) win = Math.min(win * 2, maxWin);             // fast → read bigger next
-        else if (ms > 45000) win = Math.max(Math.floor(win / 2), 2); // slow → back off
+        if (ms < (opts.growBelowMs || 8000)) win = Math.min(win * 2, maxWin);            // fast → read bigger next
+        else if (ms > (opts.slowAboveMs || 45000)) win = Math.max(Math.floor(win / 2), 2); // slow → back off
       } catch (e) {
         const msg = String((e && e.message) || e);
         if (/released/i.test(msg)) throw e;                         // user pressed Release
@@ -2525,7 +2531,7 @@ async function readVouchersRamp(url, from, to, onXml, prog, opts = {}) {
              now queues behind it and times out too — not because two days is
              too wide, but because the answer to the last question is still
              being written. */
-          if (opts.ping) await waitForTally(url, opts.ping);
+          if (opts.ping) { if (!(await waitForTally(url, opts.ping))) throw new Error('TALLY_STUCK'); }
           else await new Promise((r) => setTimeout(r, 4000));
           continue;
         }
@@ -3122,6 +3128,7 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
       return out;
     };
     let useFilter = false, filterNote = '', ledgerPlan = null, dayBookDead = false;
+    let ping = null, PATIENT_MS = DAYBOOK_PROBE_MS * 12;
     if (ledgerNames.length) {
       /* ---- 0. will Tally answer a voucher request AT ALL? ----
 
@@ -3165,7 +3172,7 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
          eighty seconds of silence in the last trace was the difference between
          seeing this and guessing. */
       const nm0 = ledgerNames[0];
-      const ping = () => ledgerVouchersRequest(nm0, from, from, LEDGER_VCH_SHAPES[0]);
+      ping = () => ledgerVouchersRequest(nm0, from, from, LEDGER_VCH_SHAPES[0]);
       const outcomes = [];                       // what each question got — for the note, and for the error
       const note = (o) => { outcomes.push(o); dcProgress.shapes = outcomes.slice(); };
 
@@ -3192,89 +3199,110 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
         throw new Error('TALLY_NO_VOUCHERS');
       }
 
-      /* 1. the sample the shortcut is proved against — from the day book, which
-            is the one request that can poison Tally. So: ONE day first, on a
-            fifteen-second leash, widened only while it answers quickly, and if
-            it dies, wait for Tally before anything else is asked. A narrower
-            sample that came back is still a real sample. */
-      dcProgress.phase = 'Asking Tally which vouchers touch these ledgers…';
+      /* ---- a timeout is not a cancel; on this Tally it is a ten-minute penalty ----
+
+         The 4.72 run: the day book asked for ONE day died at fifteen seconds,
+         the recovery wait ran its full ten minutes, and the read then went on
+         as if Tally had come back — into the same backlog, timing out again,
+         poisoning again. Sixteen minutes on the page, going nowhere.
+
+         So the order is inverted and the patience is too. The ledger shapes —
+         the seven-millisecond class of question — go FIRST. The day book, the
+         ten-minute class, is consulted only afterwards, only as a cross-check,
+         and only when the ledger answers came back fast enough to suggest this
+         Tally can take it. And every leash is long: on a serial server the
+         expensive thing is abandoning a request, not waiting for it. */
+      const recover = async () => { if (!(await waitForTally(url, ping))) throw new Error('TALLY_STUCK'); };
+      // PATIENT_MS: three minutes by default — see above
       let probeEnd = new Date(from.getTime());
-      let want = null, plainCount = 0;
-      {
-        let widen = true;
-        for (const days of [1, 3, 10, 20]) {
-          if (!widen) break;
-          if (dcCancel) throw new Error('released by user');
-          const end = new Date(Math.min(to.getTime(), from.getTime() + (days - 1) * DAY_MS));
-          const ms = days === 1 ? DAYBOOK_PROBE_MS : DAYBOOK_PROBE_MS * 2;
-          dcProgress.sub = `a ${days}-day sample of the day book`;
-          trace('probe: day book', { days, to: end.toISOString().slice(0, 10), ms });
-          const t0 = Date.now();
-          try {
-            const plain = await tallyFetch(url, dcVoucherRequest(from, end, ITC_FETCH), ms);
-            const w = itcGuids(plain), n = (plain.match(/<VOUCHER[\s>]/gi) || []).length, took = Date.now() - t0;
-            want = w; plainCount = n; probeEnd = end;
-            trace('probe done', { days, ms: took, chars: plain.length, vouchers: n, itcVouchers: w.size });
-            note({ what: 'day book', days, vouchers: n, itcVouchers: w.size, ms: took });
-            if (w.size >= 5 || took > 12000 || end.getTime() >= to.getTime()) widen = false;
-          } catch (e) {
-            const m = String((e && e.message) || e);
-            if (/released/i.test(m)) throw e;
-            note({ what: 'day book', days, error: m.slice(0, 60) });
-            if (!want) { dayBookDead = true; trace('day book would not answer', { days, error: m.slice(0, 120) }); }
-            else trace('day book: kept the narrower sample', { to: probeEnd.toISOString().slice(0, 10), itcVouchers: want.size });
-            widen = false;
-            await waitForTally(url, ping);
-          }
-        }
-      }
-      const proved = !!(want && want.size);
+      let want = null, plainCount = 0, proved = false;
+      let acceptedGot = null, acceptedVouchers = 0, rampFast = false, sampleEndUsed = null;
 
-      /* 2. straight off Tally's ledger index — proved against the sample when
-            there is one; without one, a shape must still return ITC vouchers,
-            stay under its cap, and give different answers for different
-            ledgers, and the note says it was not cross-checked.
-
-            The order is not the declaration order. On ECLAT the first shape
-            answered empty for every ledger, the second returned the entire day
-            book — 102,649,207 characters, ledger and dates both ignored, the
-            poisoning kind — and the third, the Ledger Vouchers report, came
-            back small and per-ledger. So the report is asked before the shape
-            known to answer with everything. */
+      /* 1. the ledger shapes. The order is not the declaration order: on ECLAT
+            the first answered empty for every ledger, the second returned the
+            entire day book — the poisoning kind — and the third, the Ledger
+            Vouchers report, came back small and per-ledger. So the report is
+            asked before the shape known to answer with everything. */
       const SHAPE_ORDER = [LEDGER_VCH_SHAPES[0], LEDGER_VCH_SHAPES[2], LEDGER_VCH_SHAPES[1]];
       const ceiling = { win: null };            // the widest window known to answer, shared by every ledger
+      /* A shape asked for three days of ONE ledger has told on itself if its
+         answer holds vouchers from other months, or vouchers that never touch
+         that ledger. That is the whole-day-book shape — ECLAT's 102,649,207
+         characters — caught from its own answer, with no day book to compare
+         against and no size to guess from. It matters because a shape like that
+         also makes its own sample look dense, which would otherwise switch off
+         the cross-check that was the last thing standing in its way. */
+      const ymdKey = (d) => d.getUTCFullYear() * 10000 + (d.getUTCMonth() + 1) * 100 + d.getUTCDate();
+      const unfiltered = (xml, nm, fromD, toD) => {
+        const lo = ymdKey(fromD), hi = ymdKey(toD), want = norm(nm);
+        let n = 0, outside = 0, touching = 0;
+        for (const block of xml.match(/<VOUCHER[\s>][\s\S]*?<\/VOUCHER>/gi) || []) {
+          n++;
+          const dk = dateKey(tag(block, 'DATE'));
+          if (dk && (dk < lo || dk > hi)) outside++;
+          const ents = block.match(/<(?:ALL)?LEDGERENTRIES\.LIST>[\s\S]*?<\/(?:ALL)?LEDGERENTRIES\.LIST>/gi) || [];
+          if (ents.some((e) => norm(tag(e, 'LEDGERNAME')) === want)) touching++;
+        }
+        if (!n) return null;
+        if (outside > 0) return `ignores the dates \u2014 ${outside} of ${n} vouchers fall outside the window asked for`;
+        if (touching < n / 2) return `ignores the ledger \u2014 only ${touching} of ${n} vouchers touch \u201c${nm}\u201d`;
+        return null;
+      };
       for (const shape of SHAPE_ORDER) {
         if (ledgerPlan) break;
         if (dcCancel) throw new Error('released by user');
         const rec = { what: shape.what, shape: shape.id };
         try {
-          /* The sample window. With a day book to compare against it MUST be
-             the same window, or the completeness check compares two different
-             questions. Without one it widens until the answer holds vouchers,
-             which is the only way a shape can prove itself on such a book. */
-          let sampleEnd = probeEnd;
-          if (!proved) {
-            sampleEnd = new Date(from.getTime());
-            for (const days of [1, 3, 9, 27]) {
-              if (dcCancel) throw new Error('released by user');
-              const end = new Date(Math.min(to.getTime(), from.getTime() + (days - 1) * DAY_MS));
-              dcProgress.sub = `sizing a window for ${shape.what} — ${days} day(s)`;
-              trace('shape sample', { shape: shape.what, ledger: nm0, days, ms: 30000 });
-              const part = await tallyFetch(url, ledgerVouchersRequest(nm0, from, end, shape), DAYBOOK_PROBE_MS * 2, SHAPE_PROBE_MB);
-              sampleEnd = end;
-              const n = (part.match(/<VOUCHER[\s>]/gi) || []).length;
-              trace('shape sample done', { shape: shape.what, days, chars: part.length, vouchers: n });
-              rec.sampleDays = days; rec.sampleChars = part.length; rec.sampleVouchers = n;
-              if (n > 0 || end.getTime() >= to.getTime()) break;
+          /* Size a sample window on the first ledger: a day, then three, then
+             nine — widening only while each answer is quick. A wider window
+             that times out is not a broken shape, it is the ceiling: recover,
+             remember it, and keep the sample already in hand. Only a shape
+             that cannot answer a single day is given up on. */
+          let sampleEnd = null, fast = true, lastFastDays = 0;
+          for (const days of [1, 3, 9]) {
+            if (dcCancel) throw new Error('released by user');
+            const end = new Date(Math.min(to.getTime(), from.getTime() + (days - 1) * DAY_MS));
+            dcProgress.sub = `sizing a window for ${shape.what} — ${days} day(s)`;
+            trace('shape sample', { shape: shape.what, ledger: nm0, days, ms: PATIENT_MS });
+            const t0 = Date.now();
+            let part;
+            try {
+              part = await tallyFetch(url, ledgerVouchersRequest(nm0, from, end, shape), PATIENT_MS, SHAPE_PROBE_MB);
+            } catch (e) {
+              const m = String((e && e.message) || e);
+              if (/released/i.test(m) || /PROBE_TOO_BIG/.test(m) || !sampleEnd) throw e;
+              trace('shape sample: window too wide', { shape: shape.what, days, keeping: lastFastDays });
+              ceiling.win = Math.max(1, lastFastDays);
+              fast = false;
+              await recover();
+              break;
             }
+            const took = Date.now() - t0;
+            const n = (part.match(/<VOUCHER[\s>]/gi) || []).length;
+            trace('shape sample done', { shape: shape.what, days, ms: took, chars: part.length, vouchers: n });
+            const bad = unfiltered(part, nm0, from, end);
+            if (bad) { trace('shape REJECTED from its own answer', { shape: shape.what, why: bad }); throw new Error('UNFILTERED: ' + bad); }
+            sampleEnd = end;
+            rec.sampleDays = days; rec.sampleChars = part.length; rec.sampleVouchers = n;
+            if (took > 3000) { fast = false; ceiling.win = Math.max(1, lastFastDays || days); break; }
+            lastFastDays = days;
+            if (end.getTime() >= to.getTime()) break;
+            /* One quick day proves nothing about three. The cross-check below
+               needs to know this Tally handles a wider window quickly, so the
+               ramp goes to three days whenever one was quick, and stops there
+               once the sample holds vouchers. */
+            if (n > 0 && days >= 3) break;
           }
+          const probeT0 = Date.now();
           const probeParts = [];
           for (const nm of ledgerNames) {
             if (dcCancel) throw new Error('released by user');
             dcProgress.sub = `trying ${shape.what} on “${nm}”…`;
-            trace('probe shape', { shape: shape.what, ledger: nm, to: sampleEnd.toISOString().slice(0, 10), ms: 30000 });
-            const part = await tallyFetch(url, ledgerVouchersRequest(nm, from, sampleEnd, shape), DAYBOOK_PROBE_MS * 2, SHAPE_PROBE_MB);
+            trace('probe shape', { shape: shape.what, ledger: nm, to: sampleEnd.toISOString().slice(0, 10), ms: PATIENT_MS });
+            const part = await tallyFetch(url, ledgerVouchersRequest(nm, from, sampleEnd, shape), PATIENT_MS, SHAPE_PROBE_MB);
             trace('probe shape done', { shape: shape.what, ledger: nm, chars: part.length });
+            const bad = unfiltered(part, nm, from, sampleEnd);
+            if (bad) { trace('shape REJECTED from its own answer', { shape: shape.what, ledger: nm, why: bad }); throw new Error('UNFILTERED: ' + bad); }
             probeParts.push(part);
           }
           /* Different ledgers must give different answers. Byte-for-byte the
@@ -3288,36 +3316,109 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
             }
           }
           const probeXml = probeParts.join('');
+          const probeChars = probeXml.length, probeMs = Date.now() - probeT0;
           const got = itcGuids(probeXml);
           const gotVouchers = (probeXml.match(/<VOUCHER[\s>]/gi) || []).length;
-          rec.vouchers = gotVouchers; rec.itcVouchers = got.size;
+          rec.vouchers = gotVouchers; rec.itcVouchers = got.size; rec.probeKB = Math.round(probeChars / 1024); rec.probeMs = probeMs;
           probeParts.length = 0;
           if (!got.size) { rec.why = 'no input-GST vouchers in its answer'; continue; }
-          if (proved && [...want].some((g) => !got.has(g))) { rec.why = 'missed vouchers the day book showed'; continue; }
-          /* And it must actually have FILTERED: a shape returning the whole day
-             book passes the completeness test trivially. */
-          if (plainCount && gotVouchers >= plainCount) {
-            trace('shape REJECTED — it did not filter', { shape: shape.what, vouchersReturned: gotVouchers, dayBookVouchers: plainCount });
-            rec.why = 'did not filter'; continue;
-          }
-          trace('shape accepted', { shape: shape.what, vouchers: gotVouchers, crossChecked: proved });
+          trace('shape accepted, pending cross-check', { shape: shape.what, vouchers: gotVouchers, fast, lastFastDays, probeKB: rec.probeKB, probeMs });
           rec.why = 'accepted';
-          /* Nothing is fetched here — the plan is carried, not the payload.
-             Each ledger is read at the point of use, in windows, one held at a
-             time; the ceiling and the ping travel with it. */
           ledgerPlan = { shape, ledgerNames, ceiling, ping };
-          filterNote = `read straight from Tally's ledger index (${shape.what}) — ${ledgerNames.length} ledger(s), walked in windows, instead of scanning the day book`
-            + (proved ? '' : '; the day book would not answer, so this was NOT cross-checked against it');
+          acceptedGot = got; acceptedVouchers = gotVouchers; sampleEndUsed = sampleEnd;
+          /* Whether the day book may be asked for the same window: the ledgers
+             were sampled to three days quickly, and what came back was small
+             and quick across ALL of them. Anything else is a book whose day
+             book is many times larger than this, and it is not asked. */
+          rampFast = fast && lastFastDays >= 3 && probeChars < DENSE_SAMPLE_KB * 1024 && probeMs < 10000;
+          if (!rampFast) trace('day book will not be consulted — the ledger sample was already large or slow',
+            { lastFastDays, probeKB: rec.probeKB, probeMs, limitKB: DENSE_SAMPLE_KB });
         } catch (e) {
           const m = String((e && e.message) || e);
-          if (/released/i.test(m)) throw e;
-          rec.why = /PROBE_TOO_BIG/.test(m) ? 'answered far too much — ignores the ledger or the dates' : m.slice(0, 60);
-          trace('shape failed', { shape: shape.what, why: rec.why });
-          if (/timed out|timeout|PROBE_TOO_BIG/i.test(m)) await waitForTally(url, ping);
+          if (/released|TALLY_STUCK/i.test(m)) throw e;
+          rec.why = /PROBE_TOO_BIG/.test(m) ? 'answered far too much — ignores the ledger or the dates'
+                  : /^UNFILTERED: /.test(m) ? m.replace(/^UNFILTERED: /, '')
+                  : m.slice(0, 60);
+          if (!/^UNFILTERED: /.test(m)) trace('shape failed', { shape: shape.what, why: rec.why });
+          if (/timed out|timeout|PROBE_TOO_BIG/i.test(m)) await recover();
         } finally { note(rec); }
       }
 
-      /* ---- 2. or let Tally filter the day book ---- */
+      /* 2. the cross-check. The day book is asked now — for the SAME window the
+            accepted shape was sampled on, so the two answer the same question —
+            and only when the shape's ramp was fast. A Tally that laboured over
+            nine days of one ledger is not asked for nine days of everything;
+            the note says the shortcut was not cross-checked, and that is the
+            truth rather than a ten-minute detour to learn it. */
+      if (ledgerPlan && rampFast && sampleEndUsed) {
+        const days = Math.round((sampleEndUsed.getTime() - from.getTime()) / DAY_MS) + 1;
+        dcProgress.sub = `cross-checking against ${days} day(s) of the day book`;
+        trace('probe: day book (cross-check)', { days, to: sampleEndUsed.toISOString().slice(0, 10), ms: PATIENT_MS });
+        const t0 = Date.now();
+        try {
+          const plain = await tallyFetch(url, dcVoucherRequest(from, sampleEndUsed, ITC_FETCH), PATIENT_MS);
+          want = itcGuids(plain); plainCount = (plain.match(/<VOUCHER[\s>]/gi) || []).length; probeEnd = sampleEndUsed;
+          proved = want.size > 0;
+          trace('probe done', { days, ms: Date.now() - t0, chars: plain.length, vouchers: plainCount, itcVouchers: want.size });
+          note({ what: 'day book', days, vouchers: plainCount, itcVouchers: want.size, ms: Date.now() - t0 });
+          const missing = [...want].filter((g) => !acceptedGot.has(g));
+          if (missing.length) {
+            trace('shape REJECTED by the cross-check — it missed vouchers the day book showed', { shape: ledgerPlan.shape.what, missing: missing.length });
+            note({ what: ledgerPlan.shape.what, why: `missed ${missing.length} voucher(s) the day book showed` });
+            ledgerPlan = null;
+          } else if (plainCount && acceptedVouchers >= plainCount) {
+            /* It must actually have FILTERED: a shape returning the whole day
+               book passes the completeness test trivially. */
+            trace('shape REJECTED — it did not filter', { shape: ledgerPlan.shape.what, vouchersReturned: acceptedVouchers, dayBookVouchers: plainCount });
+            note({ what: ledgerPlan.shape.what, why: 'did not filter' });
+            ledgerPlan = null;
+          } else {
+            trace('shape cross-checked', { shape: ledgerPlan.shape.what, dayBookItc: want.size });
+          }
+        } catch (e) {
+          const m = String((e && e.message) || e);
+          if (/released/i.test(m)) throw e;
+          dayBookDead = true;
+          trace('day book would not answer the cross-check', { days, error: m.slice(0, 120) });
+          note({ what: 'day book', days, error: m.slice(0, 60) });
+          if (/timed out|timeout/i.test(m)) await recover();
+        }
+      }
+      if (ledgerPlan) {
+        filterNote = `read straight from Tally's ledger index (${ledgerPlan.shape.what}) — ${ledgerNames.length} ledger(s), walked in windows, instead of scanning the day book`
+          + (proved ? '' : (dayBookDead ? '; the day book would not answer, so this was NOT cross-checked against it'
+                                        : '; the ledgers\u2019 own sample was already large or slow, so the day book was not consulted and this was NOT cross-checked against it'));
+      }
+
+      /* ---- 2. or let Tally filter the day book ----
+         Reached only when no ledger shape could be used. The day book is the
+         only route left, so it is asked — patiently, a day at a time, widening
+         while it answers quickly — for the sample the filter is proved on. */
+      if (!ledgerPlan && !dayBookDead && !want) {
+        for (const days of [1, 3, 10]) {
+          if (dcCancel) throw new Error('released by user');
+          const end = new Date(Math.min(to.getTime(), from.getTime() + (days - 1) * DAY_MS));
+          dcProgress.sub = `a ${days}-day sample of the day book`;
+          trace('probe: day book', { days, to: end.toISOString().slice(0, 10), ms: PATIENT_MS });
+          const t0 = Date.now();
+          try {
+            const plain = await tallyFetch(url, dcVoucherRequest(from, end, ITC_FETCH), PATIENT_MS);
+            const w = itcGuids(plain), n = (plain.match(/<VOUCHER[\s>]/gi) || []).length, took = Date.now() - t0;
+            want = w; plainCount = n; probeEnd = end;
+            trace('probe done', { days, ms: took, chars: plain.length, vouchers: n, itcVouchers: w.size });
+            note({ what: 'day book', days, vouchers: n, itcVouchers: w.size, ms: took });
+            if (w.size >= 5 || took > 3000 || end.getTime() >= to.getTime()) break;
+          } catch (e) {
+            const m = String((e && e.message) || e);
+            if (/released/i.test(m)) throw e;
+            note({ what: 'day book', days, error: m.slice(0, 60) });
+            if (!want) { dayBookDead = true; trace('day book would not answer', { days, error: m.slice(0, 120) }); }
+            else trace('day book: kept the narrower sample', { to: probeEnd.toISOString().slice(0, 10), itcVouchers: want.size });
+            if (/timed out|timeout/i.test(m)) await recover();
+            break;
+          }
+        }
+      }
       if (!ledgerPlan) {
         try {
           if (!want || !want.size) {
@@ -3468,7 +3569,8 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
             dcProgress.sub = `\u201c${nm}\u201d to ${endDate.toISOString().slice(0, 10)} \u00b7 `
               + `${rows.length.toLocaleString('en-IN')} with input GST`;
           },
-          { firstWin: 2, attemptMs: LEDGER_ATTEMPT_MS, maxWin: 31,
+          { firstWin: 1, attemptMs: LEDGER_ATTEMPT_MS, maxWin: 31,
+            growBelowMs: 3000, slowAboveMs: 20000,
             ceiling: ledgerPlan.ceiling, ping: ledgerPlan.ping,
             request: (a, b) => ledgerVouchersRequest(nm, a, b, shape) });
         done++;
@@ -3482,19 +3584,19 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
          refused once, asking it again is not a route — it is ninety more
          seconds of poisoning Tally before failing the same way. Say what every
          question got instead; that is what the next fix is made from. */
-      if (dayBookDead) {
-        const tried = (dcProgress.shapes || []).map((o) => `${o.what}${o.days ? ' (' + o.days + 'd)' : ''}: `
-          + (o.error ? o.error : (o.why || `${o.vouchers ?? '?'} vouchers`))).join('; ');
-        throw new Error('ITC_NO_ROUTE: ' + tried);
-      }
+      const tried = () => (dcProgress.shapes || []).map((o) => `${o.what}${o.days ? ' (' + o.days + 'd)' : ''}: `
+        + (o.error ? o.error : (o.why || `${o.vouchers ?? '?'} vouchers`))).join('; ');
+      if (dayBookDead) throw new Error('ITC_NO_ROUTE: ' + tried());
       try {
       await readVouchersRamp(url, from, to, eat,
         (endDate) => {
           dcProgress.monthsDone = Math.min(totalDays, Math.round((endDate.getTime() - from.getTime()) / DAY_MS) + 1);
           dcProgress.sub = `to ${endDate.toISOString().slice(0, 10)} \u00b7 ${rows.length.toLocaleString('en-IN')} invoice(s) with input GST`;
         },
-        { firstWin: useFilter ? 15 : 3, attemptMs: 90000, failFast: true,
-          maxWin: useFilter ? 62 : 15,
+        /* Patient, and never fail-fast: on a serial Tally the timeout IS the
+           failure. One day at a time to begin with, and a ping to wait on. */
+        { firstWin: useFilter ? 15 : 1, attemptMs: PATIENT_MS,
+          maxWin: useFilter ? 62 : 15, ping, growBelowMs: 3000, slowAboveMs: 20000,
           // With Tally doing the filtering, a window carries a fraction of the
           // XML, so far longer windows come back comfortably — which is where
           // most of the wall-clock saving actually shows up.
@@ -3502,8 +3604,8 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
                              : (a, b) => dcVoucherRequest(a, b, ITC_FETCH) });
       } catch (e) {
         const m = String((e && e.message) || e);
-        if (/released/i.test(m)) throw e;
-        throw new Error(dayBookDead ? 'ITC_NO_ROUTE: ' + m : m);
+        if (/released|TALLY_STUCK/i.test(m)) throw e;
+        throw new Error('ITC_NO_ROUTE: ' + tried() + (tried() ? '; ' : '') + 'day book, windowed: ' + m.slice(0, 60));
       }
     }
     rows.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
@@ -5349,7 +5451,11 @@ const server = http.createServer(async (req, res) => {
         /* Tally answered the ledger list in a moment and then would not answer
            for a single day of a single ledger. That is not about the period, not
            about our memory, and not something a smaller request fixes. */
-        const msg = /TALLY_NO_VOUCHERS/.test(raw)
+        const msg = /TALLY_STUCK/.test(raw)
+          ? 'Tally is still working on a request it was given earlier and has not answered anything for ten minutes. '
+            + 'This connector cannot cancel that work \u2014 only Tally can. Close and reopen Tally (the company reopens with it), '
+            + 'then run again. Nothing is lost; the read had not started.'
+          : /TALLY_NO_VOUCHERS/.test(raw)
           ? 'Tally answered the ledger list instantly for this company, then would not return even ONE day of ONE ledger\u2019s vouchers. '
             + 'So this is Tally itself refusing to serve vouchers here, not the period and not the size of the request. '
             + 'Worth trying, in order: close and reopen the company in Tally; check Gateway of Tally \u2192 F1 \u2192 Advanced Configuration that the XML/HTTP port is the one this connector uses; '

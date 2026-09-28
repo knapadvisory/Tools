@@ -706,6 +706,52 @@ quietly dropped them would read as though nothing had reconciled. The Tie-out
 sheet still covers the whole 2B either way, which that sheet also says, since
 its totals will not add up to the rows in the file.
 
+### A timeout is not a cancel — it is a ten-minute penalty
+
+4.72 knew Tally was serial and still got it wrong, and the screen showed how:
+*"waiting for Tally to finish an earlier request… 65s · 16m 17s"*. The one-day
+day-book request it sent first died at fifteen seconds; the recovery wait ran
+its full ten minutes without the ping ever answering; and the read then carried
+on **as though Tally had come back** — into the same backlog, timing out again,
+poisoning it again. Two mistakes: the day book was still the *first* thing
+asked, and "Tally did not come back" was a return value nobody read.
+
+**4.73** inverts the order and the patience:
+
+- **The ledger shapes go first.** They are the seven-millisecond class of
+  question. The day book — the ten-minute class — is consulted only afterwards,
+  only as a cross-check, and only when the ledgers were sampled to three days
+  quickly *and* what came back was small across all of them (under 1 MB,
+  `KNAP_DENSE_SAMPLE_KB`). A book whose ledgers alone answer with megabytes has
+  a day book many times that, and it is not asked; the note says the shortcut
+  was not cross-checked, which is true and costs nothing.
+- **Every leash is long** — three minutes by default — because on a serial
+  server the expensive thing is *abandoning* a request, not waiting for it.
+- **A window that times out while sizing the sample is the ceiling, not a
+  broken shape.** The shape keeps the sample it already has; the ceiling is
+  remembered and every ledger's read starts there. Only a shape that cannot
+  answer a single day is given up on.
+- **"Tally did not come back" stops the read** with the one instruction that
+  helps: close and reopen Tally. The connector cannot cancel Tally's work; only
+  Tally can.
+
+And one thing the density gate exposed: a shape that ignores the ledger
+returns the whole day book, which makes its own sample look dense — and that
+would have switched off the very cross-check that used to catch it. It was
+accepted, and lost two vouchers. So a shape is now judged **from its own
+answer**: asked for three days of one ledger, it is rejected if the answer
+holds vouchers from other months, or vouchers that never touch that ledger.
+No day book, no size guess — the answer itself is the evidence.
+
+The stub grew two more Tallys. One keeps working on what you abandoned: given
+a day-book request or anything wider than four days, it is busy for a while
+and every request that arrives before then waits, whatever the client does.
+Against it the reader finishes with all 602 ITC vouchers, sends **no** day-book
+request, stacks a handful of pings behind the poison rather than dozens of
+questions, and learns the ceiling once. The other never comes back: against
+it the read stops within the recovery window, having sent at most the one
+request that poisoned it, and says to restart Tally.
+
 ### Tally's XML server is serial, and a request cannot be taken back
 
 This is the finding that explains every SHIVAM trace before it, and 4.71's own
