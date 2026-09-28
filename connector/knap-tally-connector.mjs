@@ -28,7 +28,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import v8 from 'node:v8';
 
-const VERSION = '4.68';
+const VERSION = '4.69';
 // Bumped WITH connector/version.json — the two are compared to decide a
 // self-update, so a mismatch either loops every connector in the field or
 // hides the build. connector/version.test.mjs fails the pair apart.
@@ -3048,7 +3048,7 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
       }
       return out;
     };
-    let useFilter = false, filterNote = '', ledgerXml = null, dayBookDead = false;
+    let useFilter = false, filterNote = '', ledgerPlan = null, dayBookDead = false;
     if (ledgerNames.length) {
       dcProgress.phase = 'Asking Tally which vouchers touch these ledgers…';
       const probeEnd = new Date(Math.min(to.getTime(), from.getTime() + 20 * DAY_MS));
@@ -3091,7 +3091,7 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
       const proved = !!(want && want.size);
       {
         for (const shape of LEDGER_VCH_SHAPES) {
-          if (ledgerXml) break;
+          if (ledgerPlan) break;
           try {
             /* Prove it on the SAMPLE window first — one small request per
                ledger. Only a shape that accounts for every ITC voucher the day
@@ -3149,28 +3149,19 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
             }
             trace('shape accepted', { shape: shape.what, vouchers: gotVouchers, crossChecked: proved });
 
-            const parts = []; let bytes = 0;
-            for (const nm of ledgerNames) {
-              if (dcCancel) throw new Error('released by user');
-              dcProgress.sub = `reading the vouchers of “${nm}”…`;
-              trace('full period read', { shape: shape.what, ledger: nm });
-              const part = await tallyFetch(url, ledgerVouchersRequest(nm, from, to, shape), 180000);
-              trace('full period read done', { shape: shape.what, ledger: nm, chars: part.length });
-              bytes += part.length;
-              /* Holding every ledger's answer at once is what turned a large
-                 read into a dead process. Past this budget the shortcut is not
-                 worth its memory — drop it and let the windowed day-book read,
-                 which holds one window at a time, do the work. */
-              if (bytes > 200 * 1024 * 1024) {
-                parts.length = 0;
-                trace('ledger-index read ABANDONED — too large to hold', { chars: bytes });
-                throw new Error('ledger index too large');
-              }
-              parts.push(part);
-            }
-            trace('ledger-index read complete', { chars: bytes, parts: parts.length });
-            if (!parts.some((p) => itcGuids(p).size)) continue;
-            ledgerXml = parts;               // kept in pieces; eaten one at a time
+            /* Nothing is fetched here. Reading all sixteen ledgers and holding
+               the answers was what killed a large read: the old code fetched
+               every one, summed them, and gave up past a 200 MB budget — which
+               a book of a hundred and fifty thousand purchase vouchers passes
+               long before it finishes, so the shortcut it had just proved was
+               thrown away and the day book (which cannot be read at all on such
+               a book) was all that remained.
+
+               So the plan is carried instead of the payload. Each ledger is
+               fetched, parsed and released at the point of use, one at a time,
+               and peak memory is one ledger's answer rather than all of them.
+               There is no budget to exceed any more. */
+            ledgerPlan = { shape, ledgerNames };
             filterNote = `read straight from Tally's ledger index (${shape.what}) — ${ledgerNames.length} ledger request(s) instead of scanning the day book`
               + (proved ? '' : '; the day book would not answer, so this was NOT cross-checked against it');
           } catch (e) {
@@ -3181,7 +3172,7 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
       }
 
       /* ---- 2. or let Tally filter the day book ---- */
-      if (!ledgerXml) {
+      if (!ledgerPlan) {
         try {
           if (!want || !want.size) {
             filterNote = proved
@@ -3306,15 +3297,26 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
         });
       }
     };
-    if (ledgerXml) {
-      // Already in hand, whole period, in as many requests as there are
-      // ledgers. Nothing left to window over.
+    if (ledgerPlan) {
+      // The whole period, one ledger per request — fetched, parsed and released
+      // one at a time, so the books' size sets the time this takes and not the
+      // memory it needs.
       dcProgress.phase = 'ITC register — reading the ledgers\u2019 vouchers\u2026';
-      // One ledger's answer at a time, each released before the next is parsed.
-      for (let i = 0; i < ledgerXml.length; i++) {
-        await eat(ledgerXml[i]);
-        ledgerXml[i] = null;
+      const { shape, ledgerNames: plannedLedgers } = ledgerPlan;
+      let done = 0, seenAny = false;
+      for (const nm of plannedLedgers) {
+        if (dcCancel) throw new Error('released by user');
+        dcProgress.sub = `reading the vouchers of \u201c${nm}\u201d\u2026 \u00b7 ${rows.length.toLocaleString('en-IN')} with input GST`;
+        trace('full period read', { shape: shape.what, ledger: nm });
+        let part = await tallyFetch(url, ledgerVouchersRequest(nm, from, to, shape), 180000);
+        trace('full period read done', { shape: shape.what, ledger: nm, chars: part.length });
+        if (!seenAny && itcGuids(part).size) seenAny = true;
+        await eat(part);
+        part = null;                                    // released before the next
+        dcProgress.monthsDone = Math.round(totalDays * (++done / plannedLedgers.length));
       }
+      trace('ledger-index read complete', { ledgers: plannedLedgers.length, rows: rows.length });
+      if (!seenAny) throw new Error('the ledger read returned no input-GST vouchers');
       dcProgress.monthsDone = totalDays;
     } else {
       /* The last route. If the day book already refused once, its failing again

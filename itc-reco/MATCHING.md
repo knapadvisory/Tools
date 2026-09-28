@@ -628,3 +628,72 @@ node connector/itc-register.test.mjs # the Tally-side read, against a stub
 A new finding class, or a fix to a mis-labelling, is not finished until a
 test built from the real row that exposed it is in `reco.test.mjs`. Fixtures
 invented from scratch have never caught any of the above.
+
+## Scale
+
+ECLAT is about five thousand documents against five thousand vouchers. SHIVAM
+ENTERPRISES books roughly **a hundred and fifty thousand** purchase vouchers
+against as many 2B documents — thirty times as many — and that is a different
+problem, not a bigger one.
+
+### The matcher
+
+It indexes rather than scans, so it was never a plain N². But the candidate
+pool it builds for one document is *every unused voucher of the same supplier*
+plus *every one of the same tax amount*, and each of those is then scored,
+including a string similarity on the party name. With a few hundred suppliers
+and a hundred and fifty thousand rows that is tens of millions of scored
+candidates, three times over (the assignment runs in tiers). Measured before
+any of the below: it did not finish.
+
+Four changes, none of which move a single match:
+
+1. **The perfect match is taken without searching.** A document agreeing with a
+   voucher on invoice number, supplier GSTIN, own registration, tax to within a
+   rupee and taxable value has the ranking key `[1,1,1,1,3,…]`. Nothing can beat
+   it, and anything that could tie all five leading terms would have to match
+   the invoice number too — so the shortcut only fires when exactly **one**
+   candidate qualifies. Most of a well-kept book is this case.
+2. **Party-name tokens are remembered.** `nameScore` re-tokenised both names on
+   every comparison. The answer depends only on the string, and a book has a few
+   hundred supplier names, not tens of millions.
+3. **Each books row's invoice-number forms are worked out once**, at the point
+   the index is built, instead of six regex passes per comparison.
+4. **The candidate pool is a list of row numbers**, not an object keyed by
+   strings that were then parsed back into numbers.
+
+`reco.test.mjs` runs the same eight-thousand-row book twice, once with the
+shortcut and once with it switched off, and requires the two to assign **the
+same voucher to the same document in the same category** — a string comparison
+of every pair. That is the guarantee: the shortcut is faster, and it cannot
+disagree.
+
+Measured in headless Chromium, a book where one document in seven does *not*
+line up cleanly (unbooked, wrong amount, or the number typed differently):
+
+| documents | before | after |
+|---|---|---|
+| 8,000 | 1.7 s | 0.7 s |
+| 1,50,000 | did not finish | **19 s** |
+
+### The workbook
+
+Above **40,000 rows** the Download button asks first, and a second button
+appears offering **exceptions only** — the matched rows left out. A hundred and
+fifty thousand rows build in about three quarters of a minute and want roughly
+1.7 GB of the browser's memory: survivable on the machine this was measured on,
+not on every machine it will run on. Nobody reads a hundred and fifty thousand
+rows that agreed, so the exceptions workbook is the useful one anyway; it says
+on its own first sheet that the matched rows are missing, because a file that
+quietly dropped them would read as though nothing had reconciled.
+
+### The books side is the real limit
+
+The browser is not what gives out first — Tally is. The connector used to fetch
+every input-GST ledger's whole-period answer and hold them all before parsing
+any, abandoning the shortcut past a 200 MB budget. A book of this size passes
+that budget long before it finishes, so the shortcut it had just proved was
+thrown away and the day book — which on SHIVAM cannot be read at all — was all
+that remained. From v4.69 each ledger is fetched, parsed and released one at a
+time: peak memory is one ledger's answer, there is no budget to exceed, and the
+size of the books sets how long it takes rather than whether it works.

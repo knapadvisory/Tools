@@ -1210,6 +1210,119 @@ await t('a document found only in 2A is kept out of the 2B side of the bridge', 
   assert(out.live === 180, `and excluded — the portal's 2B column never held it, got ${out.live}`);
 });
 
+/* ---------------------------------------------------------------------------
+ * Scale.
+ *
+ * SHIVAM ENTERPRISES books about a hundred and fifty thousand purchase
+ * vouchers against as many 2B documents — thirty times ECLAT. The matcher
+ * indexes rather than scans, but its candidate pool is every other voucher of
+ * the same supplier AND every one of the same tax amount, each scored with a
+ * string similarity. That is invisible at five thousand rows and quadratic in
+ * everything that matters at a hundred and fifty thousand.
+ *
+ * A document that agrees on number, supplier, registration, tax and taxable
+ * value is now taken without searching. These prove the two routes cannot
+ * disagree — the same books, matched with the shortcut and without it, must
+ * assign exactly the same voucher to exactly the same document.
+ * ------------------------------------------------------------------------- */
+console.log('\n── the shortcut, and that it changes nothing ──');
+
+/* A book with the three ways a real one fails to line up: the invoice is not
+   booked at all, the amount differs, the number was typed differently. */
+const mixedBook = (n, suppliers) => page.evaluate(([n, S]) => {
+  const bks = [], two = [];
+  for (let i = 0; i < n; i++) {
+    const s = i % S, g = '06' + String.fromCharCode(65 + s % 26) + 'ABCD' + String(1000 + s) + 'X1Z5';
+    const tax = 1000 + (i % 37) * 10, igst = Math.round(tax * 0.18 * 100) / 100;
+    const mo = 4 + (i % 9), mm = String(mo).padStart(2, '0'), date = '2025-' + mm + '-10';
+    const kind = i % 7 === 0 ? i % 3 : -1;
+    two.push({ regn: '06AAGCE4293A1ZX', period: mm + '2025', gstin: g, party: 'SUPPLIER ' + s,
+      invNo: 'INV/' + i, invDate: date, invoiceValue: tax + igst, taxable: tax,
+      igst, cgst: 0, sgst: 0, rcm: false, isCN: false, itcBlocked: false });
+    if (kind === 0) continue;                                   // never booked
+    bks.push({ _ownGstin: '06AAGCE4293A1ZX', date, voucherNo: 'PI/' + i,
+      supplierInvNo: kind === 2 ? 'INV-' + i + '/25-26' : 'INV/' + i,   // typed differently
+      ref: '', party: 'SUPPLIER ' + s, gstin: g,
+      taxable: kind === 1 ? tax + 37 : tax,                            // amount differs
+      igst: kind === 1 ? igst + 6.66 : igst, cgst: 0, sgst: 0,
+      rcmIgst: 0, rcmCgst: 0, rcmSgst: 0, tds: 0 });
+  }
+  window.__BOOK__ = { bks, two };
+  return { books: bks.length, docs: two.length };
+}, [n, suppliers]);
+
+const runBook = (fast) => page.evaluate((fast) => {
+  window.__NO_FAST_MATCH__ = !fast;
+  booksRows = window.__BOOK__.bks.map((r) => ({ ...r }));
+  twoBRows = window.__BOOK__.two.map((r) => ({ ...r }));
+  loadedFiles = [{ name: 'x.json', src: '2B', rows: twoBRows, count: twoBRows.length }];
+  lastBooksMeta = { from: '2025-04-01', to: '2026-03-31' };
+  ['hIGST', 'hINTRA', 'hNIL'].forEach((id) => { const e = document.getElementById(id); if (e) e.checked = true; });
+  const t0 = performance.now();
+  reconcile();
+  const ms = performance.now() - t0;
+  window.__NO_FAST_MATCH__ = false;
+  return { ms: Math.round(ms),
+    pairs: report.recs.map((r) => r.docNo + '=' + (r.vchBk || '') + '/' + r._cat).join('|'),
+    n: report.recs.length };
+}, fast);
+
+const shape = await mixedBook(8000, 120);
+await t('the test book is what it claims to be', () => {
+  assert(shape.docs === 8000, `eight thousand documents, got ${shape.docs}`);
+  assert(shape.books < shape.docs, 'some must be unbooked, or nothing is being tested');
+});
+const withFast = await runBook(true);
+const without = await runBook(false);
+await t('every document gets the same voucher, shortcut or not', () => {
+  assert(withFast.n === without.n, `same row count: ${withFast.n} vs ${without.n}`);
+  if (withFast.pairs !== without.pairs) {
+    const a = withFast.pairs.split('|'), b = without.pairs.split('|');
+    const diff = a.map((x, i) => (x === b[i] ? null : `${x}  vs  ${b[i]}`)).filter(Boolean);
+    throw new Error(`${diff.length} document(s) matched differently, e.g.\n        ${diff.slice(0, 3).join('\n        ')}`);
+  }
+});
+await t('and the shortcut is the faster of the two', () => {
+  assert(withFast.ms <= without.ms,
+    `the shortcut must not cost time: ${withFast.ms}ms with, ${without.ms}ms without`);
+  console.log(`        (${shape.docs.toLocaleString('en-IN')} documents: ${withFast.ms}ms with the shortcut, ${without.ms}ms without)`);
+});
+await t('a large report offers an exceptions-only workbook', async () => {
+  const got = await page.evaluate(() => ({
+    big: BIG_EXPORT, shown: document.getElementById('btnExcOnly').style.display,
+    recs: report.recs.length }));
+  assert(got.recs < got.big, 'this book is below the threshold…');
+  assert(got.shown === 'none', '…so the second button must stay hidden: ' + got.shown);
+});
+await t('exceptions only leaves out the matched rows, and says so', async () => {
+  const got = await page.evaluate(async () => {
+    const seen = {};
+    const realAdd = ExcelJS.Workbook.prototype.addWorksheet;
+    ExcelJS.Workbook.prototype.addWorksheet = function (n) {
+      const ws = realAdd.apply(this, arguments);
+      seen[n] = ws;
+      return ws;
+    };
+    try { await exportXlsx({ exceptionsOnly: true }); }
+    catch (e) { /* saving the file is the browser's job, not what is under test */ }
+    finally { ExcelJS.Workbook.prototype.addWorksheet = realAdd; }
+    const names = Object.keys(seen);
+    const exc = seen['reconciled (exceptions)'];
+    return { seen: names,
+      excRows: exc ? exc.rowCount - 1 : -1,                    // less the header
+      matched: report.recs.filter((r) => r._cat === 'matched').length,
+      total: report.recs.length };
+  });
+  assert(got.seen.indexOf('reconciled (exceptions)') >= 0,
+    `the sheet must be named for what it holds: ${got.seen}`);
+  assert(got.seen.indexOf('About this file') >= 0,
+    `and a workbook missing its matched rows must say so: ${got.seen}`);
+  assert(got.excRows === got.total - got.matched,
+    `it must hold exactly the exceptions: ${got.excRows} rows for ${got.total - got.matched} non-matched`);
+  assert(got.matched > 0, 'and this book must actually have matched rows to leave out');
+  assert(got.seen.indexOf('Credit Notes') >= 0, 'the other sheets stay complete: ' + got.seen);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (errs.length) { console.log('\nBROWSER ERRORS:'); errs.slice(0, 5).forEach((e) => console.log('  ' + e)); }
 await browser.close(); srv.close();

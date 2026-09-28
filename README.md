@@ -29,7 +29,14 @@ portal does when you download **one** month, repeats that for the rest, and
 saves a ZIP to drop straight in. It never sees a password or an OTP, stores
 nothing, and knows nothing about GSTN's API — it learns the endpoints from your
 own click each run, because they are undocumented and change. Read the warning
-on that page before using it. Tests: `node itc-reco/portal-capture.test.mjs`. Tests: `node itc-reco/reco.test.mjs`, `node itc-reco/datepicker.test.mjs` (both need `playwright-core`), `node connector/itc-register.test.mjs`. |
+on that page before using it. Tests: `node itc-reco/portal-capture.test.mjs`.
+**Scale:** a hundred and fifty thousand documents against as many vouchers
+reconcile in about 19 seconds (see MATCHING.md → Scale). Above 40,000 rows the
+Excel asks before building and offers an **exceptions only** workbook, because
+the full one wants well over a gigabyte of browser memory. On the books side the
+connector reads one input-GST ledger at a time and releases it before the next,
+so the size of the books decides how long a read takes rather than whether it
+finishes. Tests: `node itc-reco/reco.test.mjs`, `node itc-reco/datepicker.test.mjs` (both need `playwright-core`), `node connector/itc-register.test.mjs`. |
 **Connector versions — bump on EVERY change, however small.** A build that
 ships without a bump is never offered to any connector in the field: every
 Tally PC keeps running the old file, and the symptom looks like "the fix did

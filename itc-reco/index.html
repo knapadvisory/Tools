@@ -291,6 +291,7 @@
     <div class="row" style="justify-content:space-between">
       <div><h2>5 · Reconciliation</h2><div class="sub" id="repSub"></div></div>
       <button class="btn primary" onclick="exportXlsx()">⬇ Download Excel</button>
+      <button class="btn ghost" id="btnExcOnly" style="display:none" onclick="exportXlsx({exceptionsOnly:true})">⬇ Exceptions only</button>
     </div>
     <div class="statgrid" id="statGrid"></div>
     <div id="repTables"></div>
@@ -1416,9 +1417,13 @@ function invCands(r){
 /* The strongest invoice-number agreement between a 2B number and a books row,
    with the length of the shorter side of that agreement, so the caller can tell
    "INV-2526-0441 both sides" from "6 both sides". */
-function invBest(bForms,r){
+/* `cands` is the books row's invoice-number forms when the caller already has
+   them. Working them out means six regex passes and a handful of arrays, and
+   this is asked once per candidate considered — tens of millions of times on a
+   large book, for rows whose numbers never change during a run. */
+function invBest(bForms,r,cands){
   var im=0,len=0,fs=(typeof bForms==='string')?[bForms]:(bForms||[]);
-  invCands(r).forEach(function(c){
+  (cands||invCands(r)).forEach(function(c){
     fs.forEach(function(bf){
       var s=invMatch(bf,c);
       if(s>im){im=s;len=Math.min(bf.length,c.length);}
@@ -1446,8 +1451,31 @@ function invMatch(a,b){
   return 0;
 }
 var STOP=/\b(PVT|PRIVATE|LTD|LIMITED|LLP|AND|THE|MS|CO|COMPANY|ENTERPRISES?|ENTERPRISE|INDUSTR\w*|TRADERS?|TRADING|CORPORATION|CORP|STEEL|SALES|CENTRE|CENTER)\b/g;
-function nameToks(s){return uniq(String(s||'').toUpperCase().replace(STOP,' ').replace(/[^A-Z0-9 ]/g,' ').split(/\s+/).filter(function(t){return t.length>=3;}));}
-function nameScore(a,b){var A=nameToks(a),B={};nameToks(b).forEach(function(t){B[t]=1;});if(!A.length)return 0;var m=0;A.forEach(function(t){if(B[t])m++;});return m/A.length;}
+function nameToksRaw(s){return uniq(String(s||'').toUpperCase().replace(STOP,' ').replace(/[^A-Z0-9 ]/g,' ').split(/\s+/).filter(function(t){return t.length>=3;}));}
+/* Tokenising is not cheap, and a reconciliation asks for the same few hundred
+   supplier names over and over — once per candidate considered, which at a
+   hundred and fifty thousand documents runs to tens of millions of times. The
+   answer only depends on the string, so it is remembered. Cleared with each
+   run so a long session cannot grow one of these without bound. */
+var _tokCache=Object.create(null),_tokSetCache=Object.create(null),_tokCacheN=0;
+function resetNameCache(){_tokCache=Object.create(null);_tokSetCache=Object.create(null);_tokCacheN=0;}
+function nameToks(s){
+  var k=String(s||'');
+  var v=_tokCache[k];
+  if(v!==undefined)return v;
+  if(_tokCacheN>20000)resetNameCache();      // a pathological book, not a normal one
+  _tokCacheN++;
+  return (_tokCache[k]=nameToksRaw(k));
+}
+function nameTokSet(s){
+  var k=String(s||'');
+  var v=_tokSetCache[k];
+  if(v!==undefined)return v;
+  var o=Object.create(null);
+  nameToks(k).forEach(function(t){o[t]=1;});
+  return (_tokSetCache[k]=o);
+}
+function nameScore(a,b){var A=nameToks(a);if(!A.length)return 0;var B=nameTokSet(b),m=0;for(var i=0;i<A.length;i++)if(B[A[i]])m++;return m/A.length;}
 var GSTTOL=1;
 function r2(n){return Math.round((Number(n)||0)*100)/100;}
 function ymd(dt){var s=String(dt||'').trim();if(!s)return null;var m;
@@ -1722,38 +1750,91 @@ function reconcile(){
 
   var n=booksRows.length,used=new Array(n).fill(false);
   var invIdx={},gstinIdx={},gstAmtIdx={};
+  /* Per-row figures that never change during a run, worked out once instead of
+     once per candidate considered. bGst alone was being recomputed — object
+     allocation and two roundings — tens of millions of times. */
+  resetNameCache();
+  var bkGst=new Float64Array(n),bkTaxable=new Float64Array(n),bkSign=new Int8Array(n);
+  var bkGstin=new Array(n),bkOwnReg=new Array(n),bkCands=new Array(n);
   booksRows.forEach(function(r,i){
-    invCands(r).forEach(function(c){(invIdx[c]||(invIdx[c]=[])).push(i);});
-    var g=normGstin(r.gstin);if(g)(gstinIdx[g]||(gstinIdx[g]=[])).push(i);
-    (gstAmtIdx[Math.round(bGst(r))]||(gstAmtIdx[Math.round(bGst(r))]=[])).push(i);
+    var cands=invCands(r);bkCands[i]=cands;
+    cands.forEach(function(c){(invIdx[c]||(invIdx[c]=[])).push(i);});
+    var g=normGstin(r.gstin);bkGstin[i]=g;if(g)(gstinIdx[g]||(gstinIdx[g]=[])).push(i);
+    var v=bGst(r);bkGst[i]=v;bkTaxable[i]=r.taxable||0;
+    bkSign[i]=v>0.005?1:(v<-0.005?-1:0);
+    bkOwnReg[i]=normGstin(r._ownGstin||'');
+    (gstAmtIdx[Math.round(v)]||(gstAmtIdx[Math.round(v)]=[])).push(i);
   });
+  /* The candidate pool, as a list of row numbers with a stamped seen-marker
+     rather than an object keyed by strings. The object version allocated a
+     string key per candidate and then parsed every one of them back to a
+     number — for a document whose supplier has five hundred other vouchers,
+     a thousand allocations to look at five hundred rows. */
+  var poolMark=new Int32Array(n),poolGen=0,poolList=[];
   function cmpKey(a,b){for(var i=0;i<a.length;i++){if(a[i]!==b[i])return a[i]>b[i]?1:-1;}return 0;}
   /* `floor` is the weakest invoice-number evidence this pass will accept:
      3 = the same number, 2 = one is the other's tail, 0 = anything goes. */
   function findMatch(b,floor){
     floor=floor||0;
     var bForms=invForms(b.invNo),g=normGstin(b.gstin),bg=b.igst+b.cgst+b.sgst;
-    var pool={};
-    function add(list){(list||[]).forEach(function(i){if(!used[i])pool[i]=1;});}
+    /* ---- the perfect match, taken without searching ----
+       Most of a well-kept book is one voucher answering one invoice: the same
+       number, the same supplier, the same registration, the same tax to the
+       rupee and the same taxable value. Its ranking key is [1,1,1,1,3,…], which
+       nothing else can beat — anything tying all five leading terms would have
+       to match the invoice number too, and this only fires when exactly one
+       candidate does. So the answer is already known, and the full search can
+       only arrive at the same row the long way round.
+
+       The long way costs. Building the pool pulls in EVERY unused voucher of
+       that supplier and every one of that tax amount, then scores each with a
+       string similarity. At ECLAT's five thousand rows that is invisible. At a
+       hundred and fifty thousand, with a few hundred suppliers, it is tens of
+       millions of scored candidates and the run stops being a run. */
+    if(g&&bForms.length&&!window.__NO_FAST_MATCH__){
+      var hit=-1,hits=0,bSign0=bg>0.005?1:(bg<-0.005?-1:0);
+      var breg0=normGstin(b.regn||'');
+      for(var fi=0;fi<bForms.length&&hits<2;fi++){
+        var cand=invIdx[bForms[fi]]||[];
+        for(var ci=0;ci<cand.length&&hits<2;ci++){
+          var j=cand[ci];
+          if(used[j]||j===hit)continue;
+          if(bkGstin[j]!==g)continue;
+          if(!breg0||bkOwnReg[j]!==breg0)continue;
+          if(bSign0&&bkSign[j]&&bSign0!==bkSign[j])continue;
+          if(Math.abs(bg-bkGst[j])>2)continue;
+          if(Math.abs((b.taxable||0)-bkTaxable[j])>Math.max(10,Math.abs(b.taxable||0)*0.005))continue;
+          hit=j;hits++;
+        }
+      }
+      if(hits===1)return hit;        // unambiguous; the search would say the same
+    }
+    poolGen++;poolList.length=0;
+    function add(list){
+      if(!list)return;
+      for(var q=0;q<list.length;q++){var i=list[q];
+        if(used[i]||poolMark[i]===poolGen)continue;
+        poolMark[i]=poolGen;poolList.push(i);}
+    }
     bForms.forEach(function(k){add(invIdx[k]);});if(g)add(gstinIdx[g]);add(gstAmtIdx[Math.round(bg)]);
     var best=-1,bestKey=null;
-    Object.keys(pool).forEach(function(ks){
-      var i=+ks,r=booksRows[i];
+    poolList.forEach(function(i){
+      var r=booksRows[i];
       /* A credit note takes credit AWAY; the voucher answering it must do the
          same. Without this, a supplier credit note carrying the original
          invoice number as its reference matches the original PURCHASE — reads
          "credit note booked", and the reversal that was actually missing is
          never reported. Sign only decides when both sides have one, so a
          nil-rated note still matches on its value. */
-      var rgst=bGst(r);
-      var bSign=bg>0.005?1:(bg<-0.005?-1:0),rSign=rgst>0.005?1:(rgst<-0.005?-1:0);
+      var rgst=bkGst[i];
+      var bSign=bg>0.005?1:(bg<-0.005?-1:0),rSign=bkSign[i];
       if(bSign&&rSign&&bSign!==rSign)return;
-      var ib=invBest(bForms,r),im=ib.im;
-      var rg=normGstin(r.gstin),gstEq=!!(g&&rg&&g===rg);
-      var dg=Math.abs(bg-bGst(r)),gstClose=dg<=2,gstNear=dg<=50;
+      var ib=invBest(bForms,r,bkCands[i]),im=ib.im;
+      var rg=bkGstin[i],gstEq=!!(g&&rg&&g===rg);
+      var dg=Math.abs(bg-rgst),gstClose=dg<=2,gstNear=dg<=50;
       var dt=Math.abs((b.taxable||0)-(r.taxable||0)),taxClose=dt<=Math.max(10,Math.abs(b.taxable||0)*0.005);
       var ns=nameScore(b.party,r.party),nameStrong=ns>=0.5;
-      var breg=normGstin(b.regn||''),oreg=normGstin(r._ownGstin||''),sameReg=!!(breg&&oreg&&breg===oreg);
+      var breg=normGstin(b.regn||''),oreg=bkOwnReg[i],sameReg=!!(breg&&oreg&&breg===oreg);
       /* An invoice number carries the match on its own only if it is long
          enough to be distinctive; "6" agreeing with "6" needs the party or the
          tax to agree as well, or two unrelated suppliers' sixth bills pair up. */
@@ -1912,6 +1993,7 @@ function renderReport(){
   var wrongReg=report.recs.filter(function(r){return String(r.remarks).indexOf('wrong registration')>=0;}).length;
   var only2a=report.recs.concat(cn).filter(function(r){return r._only2a;});
   var cnRev=sumF(cby.cnmiss,function(r){return Math.abs(r.gst2b);})+sumF(cby.cnmm,function(r){return Math.abs(r.gstChk);});
+  (function(){var bx=$('btnExcOnly');if(bx)bx.style.display=(report.recs.length+report.cn.length>BIG_EXPORT)?'':'none';})();
   $('repSub').innerHTML=(report.recs.filter(function(r){return r._cat!=='onlybk'&&r._cat!=='onlybkCN'&&r._cat!=='superseded';}).length)+' documents'+(periods2b().text?' from '+esc(periods2b().text):'')+' · '+booksRows.length+' books entries'+(cn.length?' · '+cn.length+' credit/debit notes':'')+' · ITC 2B '+inr(b2bTot)+' (net of notes) vs books '+inr(bkTot)
     +(only2a.length?' · <b style="color:var(--warn)">'+only2a.length+' in 2A only</b>':'')
     +(by.superseded.length+cby.superseded.length?' · <b style="color:var(--mut)">'+(by.superseded.length+cby.superseded.length)+' superseded by amendments (not counted)</b>':'')
@@ -2223,8 +2305,21 @@ function addTieOutSheet(wb){
   ws.views=[{state:'frozen',ySplit:1}];
 }
 function neg(o){return {n:o.n,igst:r2(-o.igst),cgst:r2(-o.cgst),sgst:r2(-o.sgst)};}
-function exportXlsx(){
+/* Above this many rows the workbook stops being something a person opens.
+   Measured: a hundred and fifty thousand documents build in about 45 seconds
+   and need roughly 1.7 GB of the browser's memory — survivable on the machine
+   this was measured on, and not on every machine it will run on. */
+var BIG_EXPORT=40000;
+function exportXlsx(opts){
+  opts=opts||{};
   if(!report||typeof ExcelJS==='undefined'){alert('Report or Excel library not ready.');return;}
+  var total=report.recs.length+report.cn.length;
+  if(!opts.exceptionsOnly&&total>BIG_EXPORT){
+    var exc=report.recs.filter(function(r){return r._cat!=='matched';}).length;
+    if(!confirm(total.toLocaleString('en-IN')+' rows is a very large workbook. It may take a minute and '
+      +'can run the browser out of memory.\n\nOK to build it anyway, or Cancel and use '
+      +'\u201cExceptions only\u201d ('+exc.toLocaleString('en-IN')+' rows) instead.'))return;
+  }
   var wb=new ExcelJS.Workbook();
   function sheet(name,rows){
     var ws=wb.addWorksheet(name);
@@ -2273,7 +2368,13 @@ function exportXlsx(){
   var order={wrongreg:0,mismatch:1,probable:2,only2b:3,onlybk:4,onlybkCN:5,matched:6,superseded:7};
   function rank(c){return order[c]==null?8:order[c];}
   var recs=report.recs.slice().sort(function(a,b){return (rank(a._cat)-rank(b._cat))||((b.gst2b||b.gstBk||0)-(a.gst2b||a.gstBk||0));});
-  sheet('reconciled',recs);
+  var dropped=0;
+  if(opts.exceptionsOnly){
+    var before=recs.length;
+    recs=recs.filter(function(r){return r._cat!=='matched';});
+    dropped=before-recs.length;
+  }
+  sheet(opts.exceptionsOnly?'reconciled (exceptions)':'reconciled',recs);
   var cnOrder={cnmiss:0,cnmm:1,cnok:2};
   sheet('Credit Notes',report.cn.slice().sort(function(a,b){
     return ((cnOrder[a._cat]==null?3:cnOrder[a._cat])-(cnOrder[b._cat]==null?3:cnOrder[b._cat]))||(Math.abs(b.gst2b||0)-Math.abs(a.gst2b||0));}));
@@ -2284,6 +2385,18 @@ function exportXlsx(){
   /* One supplier accounting for a run of unbooked documents is one fact. On its
      own sheet it can be dealt with in one decision instead of scrolling past
      hundreds of rows to reach the findings that matter. */
+  /* A workbook that quietly leaves out the documents that agreed would read as
+     if nothing had. It says so, on a sheet of its own, before anything else. */
+  if(opts.exceptionsOnly){
+    var aw=wb.addWorksheet('About this file');
+    aw.getColumn(1).width=110;
+    aw.addRow(['This workbook shows EXCEPTIONS ONLY.']).font={bold:true};
+    aw.addRow(['']);
+    aw.addRow([dropped.toLocaleString('en-IN')+' document(s) that matched the books cleanly have been left out of the "reconciled (exceptions)" sheet.']);
+    aw.addRow(['They were reconciled and they agreed — they are absent because the full workbook would be too large to open, not because there is anything to look at.']);
+    aw.addRow(['The Tie-out sheet still covers the WHOLE 2B, matched documents included, so its totals will not agree with the rows in this file.']);
+    aw.addRow(['Credit notes, 2A-only documents and the by-supplier summary are complete.']);
+  }
   addTieOutSheet(wb);
   var runs={},unbooked=report.recs.filter(function(r){return r._cat==='only2b';});
   if(unbooked.length<20)unbooked=[];          // nothing to group; the rows say it themselves
