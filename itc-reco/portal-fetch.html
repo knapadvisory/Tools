@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Capture 2B / 2A from the portal · KNAP</title>
+<script src="/session.js" defer></script>
+<style>
+  :root{--ink:#16181d;--mut:#5c6370;--line:#e2e4e9;--bg:#f7f8fa;--warn:#8a5a00;--warnbg:#fff8e6;--warnline:#f0dca8}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 system-ui,Segoe UI,Arial,sans-serif}
+  header{background:#fff;border-bottom:1px solid var(--line);padding:18px 24px}
+  header h1{margin:0;font-size:19px}
+  header .sub{color:var(--mut);font-size:13px;margin-top:3px}
+  main{max-width:860px;margin:0 auto;padding:24px}
+  .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:20px 22px;margin-bottom:16px}
+  h2{font-size:16px;margin:0 0 10px}
+  ol{padding-left:20px;margin:10px 0}
+  li{margin:7px 0}
+  code,kbd{background:#eef0f4;border-radius:4px;padding:1px 5px;font:13px/1.4 ui-monospace,Menlo,Consolas,monospace}
+  .warn{background:var(--warnbg);border:1px solid var(--warnline);color:var(--warn);border-radius:10px;padding:12px 14px;margin:0 0 16px}
+  .warn b{color:#6b4600}
+  pre{background:#14161a;color:#e8eaf0;border-radius:10px;padding:14px;overflow:auto;max-height:260px;
+      font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;margin:10px 0 0}
+  .btn{border:1px solid #c6cad2;background:#fff;border-radius:8px;padding:8px 14px;font-size:14px;cursor:pointer}
+  .btn.primary{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .mut{color:var(--mut);font-size:13px}
+  a{color:#1b62c9}
+</style>
+</head>
+<body>
+<header>
+  <h1>Capture GSTR-2B / 2A from the portal</h1>
+  <div class="sub">Runs in your own logged-in tab · never sees a password or an OTP · <a href="/itc-reco/">back to the reconciliation</a></div>
+</header>
+<main>
+
+  <div class="warn">
+    <b>Read this once.</b> The GST portal publishes no API for taxpayers, so this works by
+    watching what the portal itself does when you click <i>Download</i>, and repeating it for
+    the other months. That is not something GSTN invites, and the endpoints it uses are
+    not promised to stay the same — this can stop working overnight, and when it does it
+    will say so rather than hand you a short file. Keep the pacing slow. If the portal
+    starts refusing, stop and download by hand; it is your client's registration.
+  </div>
+
+  <div class="card">
+    <h2>What it does, and does not</h2>
+    <ul>
+      <li><b>You</b> log in and solve the captcha. The script has no part in it.</li>
+      <li>It never sees a username, a password or an OTP, and stores nothing — closing the tab is the whole cleanup.</li>
+      <li>It sends nothing anywhere. The ZIP it builds is assembled in your browser and saved by your browser.</li>
+      <li>It learns the portal's endpoints from your own click, every run. Nothing about GSTN's API is written into it.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>How to run it</h2>
+    <ol>
+      <li>Sign in at <a href="https://services.gst.gov.in/" target="_blank" rel="noopener">services.gst.gov.in</a> and go to
+        <b>Returns Dashboard</b> for the registration you want.</li>
+      <li>Open the browser console — <kbd>F12</kbd>, then the <b>Console</b> tab.
+        The first time, Chrome asks you to type <code>allow pasting</code> and press Enter before it will let you paste.</li>
+      <li>Copy the script below, paste it into the console, press Enter. A small panel appears at the bottom right.</li>
+      <li>Press <b>Start watching</b>, then download <b>one</b> month's GSTR-2B the normal way — the portal's own button.</li>
+      <li>The panel fills in the month and GSTIN it saw. Tick the months you want, set the pacing, press
+        <b>Fetch and download ZIP</b>.</li>
+      <li>Drop that ZIP straight onto the reconciliation page. It reads a ZIP, and a ZIP of ZIPs.</li>
+    </ol>
+    <p class="mut">Repeat per registration — each one is a separate login context on the portal.</p>
+  </div>
+
+  <div class="card">
+    <h2>The script</h2>
+    <div class="row">
+      <button class="btn primary" id="copy">Copy to clipboard</button>
+      <a class="btn" href="/itc-reco/portal-capture.js" download>Download as .js</a>
+      <span class="mut" id="copied"></span>
+    </div>
+    <pre id="src">loading…</pre>
+  </div>
+
+  <div class="card">
+    <h2>When it does not work</h2>
+    <ul>
+      <li><b>“Nothing came back.”</b> The recording probably missed the download itself. Press
+        <b>Clear and watch again</b>, then click the portal's own Download button — not a page that merely shows the data.</li>
+      <li><b>Some months empty.</b> Normal for months before the registration existed, or a return not yet generated.
+        The panel lists which, and the reconciliation's own coverage check will say the same.</li>
+      <li><b>It stops partway.</b> Slow the pacing down and run the remaining months again; the ZIPs can be dropped together.</li>
+      <li><b>Nothing at all happens.</b> The portal may be blocking pasted scripts. Download by hand —
+        the reconciliation takes the portal's ZIPs exactly as they come.</li>
+    </ul>
+  </div>
+
+</main>
+<script>
+fetch('/itc-reco/portal-capture.js').then(function(r){return r.text();}).then(function(t){
+  document.getElementById('src').textContent=t;
+  document.getElementById('copy').onclick=function(){
+    navigator.clipboard.writeText(t).then(function(){
+      document.getElementById('copied').textContent='copied — paste it into the portal tab’s console';
+    },function(){
+      document.getElementById('copied').textContent='could not copy — select the text below instead';
+    });
+  };
+},function(){document.getElementById('src').textContent='could not load the script';});
+</script>
+</body>
+</html>

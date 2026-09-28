@@ -23,7 +23,13 @@ Sibling sites: [teamhub.knapadvisory.com](https://teamhub.knapadvisory.com) ·
 "ITC auto-drafted in GSTR-2B" line by line. Give that figure in step 4 — type
 it, or drop the portal's **Tax liability and ITC comparison .xlsx** and it is
 read out of the report itself, summing only the months whose returns you loaded
-— and the difference should read nil. Tests: `node itc-reco/reco.test.mjs`, `node itc-reco/datepicker.test.mjs` (both need `playwright-core`), `node connector/itc-register.test.mjs`. |
+— and the difference should read nil. `/itc-reco/portal-fetch.html` hands you a
+script to paste into your own logged-in GST portal tab: it watches what the
+portal does when you download **one** month, repeats that for the rest, and
+saves a ZIP to drop straight in. It never sees a password or an OTP, stores
+nothing, and knows nothing about GSTN's API — it learns the endpoints from your
+own click each run, because they are undocumented and change. Read the warning
+on that page before using it. Tests: `node itc-reco/portal-capture.test.mjs`. Tests: `node itc-reco/reco.test.mjs`, `node itc-reco/datepicker.test.mjs` (both need `playwright-core`), `node connector/itc-register.test.mjs`. |
 **Connector versions — bump on EVERY change, however small.** A build that
 ships without a bump is never offered to any connector in the field: every
 Tally PC keeps running the old file, and the symptom looks like "the fix did

@@ -1049,6 +1049,25 @@ await t('rubbish inside a ZIP is ignored, not read as a return', async () => {
   assert(got.length === 1, `only the return is a return: ${JSON.stringify(got.map((f) => f.name))}`);
   assert(!got[0].error && got[0].count === 1, `and it must parse: ${JSON.stringify(got[0])}`);
 });
+await t('a ZIP of ZIPs is opened too — that is what a portal capture is', async () => {
+  const got = await page.evaluate(async ([a, b]) => {
+    await ensureJszip();
+    const inner1 = await new JSZip().file('returns_R2B_06AAGCE4293A1ZX_042025.json', a).generateAsync({ type: 'blob' });
+    const inner2 = await new JSZip().file('returns_R2B_06AAGCE4293A1ZX_052025.json', b).generateAsync({ type: 'blob' });
+    const outer = new JSZip();
+    outer.file('042025.zip', inner1); outer.file('052025.zip', inner2);
+    const blob = await outer.generateAsync({ type: 'blob' });
+    loadedFiles = [];
+    await handleFiles([new File([blob], 'GSTR_06AAGCE4293A1ZX.zip')]);
+    return loadedFiles.map((f) => ({ name: f.name, count: f.count, src: f.src, error: f.error }));
+  }, [JSON.stringify(j2b([{ no: 'A/1', txval: 1000, igst: 180 }])),
+      JSON.stringify(j2b([{ no: 'A/2', txval: 2000, igst: 360 }]))]);
+  assert(got.length === 2, `both inner ZIPs must be opened, got ${JSON.stringify(got)}`);
+  assert(got.every((f) => !f.error && f.count === 1 && f.src === '2B'),
+    `each must parse as one 2B return: ${JSON.stringify(got)}`);
+  assert(/042025\.zip › returns/.test(got[0].name),
+    `and name the path it came down: ${got[0].name}`);
+});
 await t('a ZIP with nothing readable in it says so, and loses no other file', async () => {
   const got = await dropZip([{ path: 'notes.txt', text: 'nothing here' }], 'wrong.zip');
   assert(got.length === 1 && got[0].error, `an empty ZIP must report itself: ${JSON.stringify(got)}`);

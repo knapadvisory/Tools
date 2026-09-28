@@ -256,6 +256,9 @@
     <div class="drop" id="drop">Drop your GSTR-2B / GSTR-2A <b>.json</b> file(s), the portal's <b>.zip</b> exactly as downloaded, or a template <b>.csv</b> here — or click to choose. Add as many months as you need.
       <input type="file" id="file2b" accept=".json,.csv,.zip" multiple style="display:none">
     </div>
+    <div class="lbl" style="margin-top:8px">Downloading twelve months by hand?
+      <a href="/itc-reco/portal-fetch.html">There is a way to capture them from the portal in one go</a> —
+      it runs in your own logged-in tab and never sees a password.</div>
     <div id="filesLoaded" class="picked" style="margin-top:10px"></div>
     <div class="msg" id="msg2b"></div>
     <div class="row" style="margin-top:12px">
@@ -666,10 +669,16 @@ function readText(file){
 }
 /* One dropped file becomes one or more readable members. A .json or .csv is
    itself; a .zip is every JSON and CSV it holds, at any depth, in name order —
-   so April comes before May whatever order the ZIP stored them in. */
-function expandFile(file){
-  if(!/\.zip$/i.test(file.name))
-    return readText(file).then(function(t){return [{name:file.name,text:t}];});
+   so April comes before May whatever order the ZIP stored them in.
+
+   A ZIP inside a ZIP is opened too, because the portal wraps each month's
+   return in its own, and a capture of a whole year is then a ZIP of twelve.
+   Bounded, so a zip bomb runs out of depth rather than out of memory. */
+function expandFile(file,depth,label){
+  depth=depth||0;label=label||file.name;
+  if(!/\.zip$/i.test(label))
+    return readText(file).then(function(t){return [{name:label,text:t}];});
+  if(depth>3)return Promise.reject(new Error('ZIPs nested more than three deep'));
   return ensureJszip().then(function(JSZip){
     return JSZip.loadAsync(file);
   }).then(function(zip){
@@ -677,7 +686,7 @@ function expandFile(file){
     zip.forEach(function(path,entry){
       if(entry.dir)return;
       if(/(^|\/)(__MACOSX|\.)/.test(path))return;      // macOS resource forks
-      if(!/\.(json|csv)$/i.test(path))return;
+      if(!/\.(json|csv|zip)$/i.test(path))return;
       names.push(path);
     });
     names.sort();
@@ -685,9 +694,18 @@ function expandFile(file){
     var out=[],i=0;
     return (function nextMember(){
       if(i>=names.length)return out;
-      var p=names[i++];
+      var p=names[i++],leaf=p.split('/').pop(),name=label+' › '+leaf;
+      if(/\.zip$/i.test(leaf)){
+        return zip.file(p).async('blob').then(function(b){
+          return expandFile(b,depth+1,name).then(function(inner){
+            out=out.concat(inner);return nextMember();
+          },function(err){
+            out.push({name:name,error:err.message});return nextMember();
+          });
+        });
+      }
       return zip.file(p).async('string').then(function(t){
-        out.push({name:file.name+' › '+p.split('/').pop(),text:t});
+        out.push({name:name,text:t});
         return nextMember();
       });
     })();
@@ -718,7 +736,10 @@ function handleFiles(files){
       if(i>=arr.length){renderFiles();done();return;}
       var file=arr[i++];
       expandFile(file).then(function(members){
-        members.forEach(function(m){loadOneFile(m.name,m.text);});
+        members.forEach(function(m){
+          if(m.error){loadedFiles.push({name:m.name,count:0,rows:[],error:m.error});return;}
+          loadOneFile(m.name,m.text);
+        });
       },function(err){
         loadedFiles.push({name:file.name,count:0,rows:[],error:err.message});
       }).then(function(){next();});
