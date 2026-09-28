@@ -28,7 +28,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import v8 from 'node:v8';
 
-const VERSION = '4.76';
+const VERSION = '4.77';
 // Bumped WITH connector/version.json — the two are compared to decide a
 // self-update, so a mismatch either loops every connector in the field or
 // hides the build. connector/version.test.mjs fails the pair apart.
@@ -3608,7 +3608,7 @@ async function readItcRegister(url, company, from, to, taxLedgers, opts = {}) {
       if (!vouchersSeen) {
         throw new Error(sawReport
           ? 'EXPORT_EMPTY: this file is a report as it appears on screen (Ledger Vouchers / Day Book columns), not the vouchers themselves \u2014 it has no GSTIN, no taxable value and no ledger legs. '
-            + 'In TallyPrime use Alt+E \u2192 Transactions (not Current), format XML, set the period and choose the Purchase voucher type; then again for Debit Note. That writes the vouchers whole.'
+            + 'In TallyPrime use Alt+E \u2192 Transactions (not Current): All Vouchers, format XML, the period \u2014 a month at a time if the file is large. That writes the vouchers whole; only those touching the tagged input-GST ledgers are read.'
           : 'EXPORT_EMPTY: no <VOUCHER> in the file. In TallyPrime use Alt+E \u2192 Transactions, format XML \u2014 not Excel, and not "Current", which exports only the report on screen.');
       }
       filterNote = `read from a Tally export file \u2014 ${vouchersSeen.toLocaleString('en-IN')} vouchers scanned, ${rows.length.toLocaleString('en-IN')} with input GST; no live Tally was asked`;
@@ -5584,7 +5584,7 @@ const server = http.createServer(async (req, res) => {
         trace('export scanned', { mb: Math.round(st.bytes / 1048576), vouchers: st.vouchers, ledgers: led.size, report: st.report });
         if (!st.vouchers) {
           json(res, 200, { ok: false, report: st.report, error: st.report
-            ? 'This file is a report as it appears on screen (Ledger Vouchers / Day Book columns), not the vouchers themselves. In TallyPrime use Alt+E \u2192 Transactions (not Current), format XML, period, voucher type Purchase; then again for Debit Note.'
+            ? 'This file is a report as it appears on screen (Ledger Vouchers / Day Book columns), not the vouchers themselves. In TallyPrime use Alt+E \u2192 Transactions (not Current): All Vouchers, format XML, the period \u2014 a month at a time if the file is large.'
             : 'No <VOUCHER> in this file. In TallyPrime use Alt+E \u2192 Transactions, format XML \u2014 not Excel, and not "Current".' });
           return;
         }

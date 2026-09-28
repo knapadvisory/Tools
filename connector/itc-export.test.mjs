@@ -158,6 +158,44 @@ t('a report exported "as displayed" is named as such here too', () => {
   assert(/Transactions/.test(cenRep.error), cenRep.error);
 });
 
+console.log('\n── an All Vouchers export: sales, receipts, payments and journals mixed in ──');
+/* TallyPrime 4's Transactions export has no voucher-type filter — it is All
+   Vouchers or nothing. So the file the field will actually produce holds the
+   whole company's year, and the read must take from it exactly the vouchers
+   that touch the tagged input-GST ledgers and not one more. */
+const other = (i, type, legs) => `<TALLYMESSAGE xmlns:UDF="TallyUDF">
+<VOUCHER REMOTEID="o-${i}" VCHTYPE="${type}" ACTION="Create" OBJVIEW="Accounting Voucher View">
+<DATE>${dnum(i % 150)}</DATE><GUID>og-${i}</GUID><VOUCHERTYPENAME>${type}</VOUCHERTYPENAME><VOUCHERNUMBER>${type.slice(0, 2).toUpperCase()}/${i}</VOUCHERNUMBER>
+<PARTYLEDGERNAME>${legs[0][0]}</PARTYLEDGERNAME><CMPGSTIN>06AAACE1234F1Z5</CMPGSTIN><ISCANCELLED>No</ISCANCELLED><ISOPTIONAL>No</ISOPTIONAL>
+${legs.map(([nm, amt, dp]) => `<ALLLEDGERENTRIES.LIST><LEDGERNAME>${nm}</LEDGERNAME><ISDEEMEDPOSITIVE>${dp}</ISDEEMEDPOSITIVE><AMOUNT>${amt}</AMOUNT></ALLLEDGERENTRIES.LIST>`).join('')}
+</VOUCHER>
+</TALLYMESSAGE>`;
+const mixed = [];
+for (let i = 0; i < 600; i++) mixed.push(vch(i, (i % ITC_EVERY) === 0));                                 // 120 purchases with ITC
+for (let i = 0; i < 900; i++) mixed.push(other(i, 'Sales', [['Customer ' + (i % 40), '-23600', 'Yes'], ['Sales', '20000', 'No'], ['Output IGST', '3600', 'No']]));
+for (let i = 0; i < 700; i++) mixed.push(other(i + 1000, 'Receipt', [['Customer ' + (i % 40), '23600', 'No'], ['HDFC Bank', '-23600', 'Yes']]));
+for (let i = 0; i < 500; i++) mixed.push(other(i + 2000, 'Payment', [['Supplier ' + (i % 50), '-11800', 'Yes'], ['HDFC Bank', '11800', 'No']]));
+/* the month-end ITC set-off: Input IGST CREDITED against Output IGST, no party — a journal, not a purchase */
+for (let i = 0; i < 12; i++) mixed.push(other(i + 3000, 'Journal', [['Output IGST', '-3600', 'Yes'], ['Input IGST', '3600', 'No']]).replace(/<PARTYLEDGERNAME>[^<]*<\/PARTYLEDGERNAME>/, '<PARTYLEDGERNAME></PARTYLEDGERNAME>'));
+const MIXED = wrap(mixed.join('\n'));
+const all = await send(Buffer.from(MIXED, 'utf8'), { label: 'All Vouchers' });
+t('only the purchases that touch the tagged input ledger come out', () => {
+  assert(all.j.ok, 'the read failed: ' + JSON.stringify(all.j).slice(0, 200));
+  assert(all.j.rows.length === 120, `120 ITC purchases among 2,712 vouchers, got ${all.j.rows.length}`);
+  assert(all.j.rows.every((r) => r.voucherType === 'Purchase'), 'a non-purchase came through: ' + JSON.stringify(all.j.rows.find((r) => r.voucherType !== 'Purchase')));
+});
+t('the set-off journals are not counted as negative ITC', () => {
+  assert(!all.j.rows.some((r) => /^JO\//.test(r.voucherNo)), 'an ITC set-off journal was read as a purchase');
+});
+const cenAll = await census(Buffer.from(MIXED, 'utf8'), 'census of All Vouchers');
+t('and the census shows the whole company, so the right ledgers can be picked from it', () => {
+  const by = Object.fromEntries(cenAll.ledgers.map((l) => [l.name, l]));
+  assert(by['Output IGST'] && by['Input IGST'] && by['HDFC Bank'] && by['Sales'], 'every ledger touched must be listed: ' + Object.keys(by).length);
+  assert(by['Input IGST'].vouchers === 120 + 12, `Input IGST is touched by 120 purchases and 12 set-off journals: ${by['Input IGST'].vouchers}`);
+  const types = Object.fromEntries(cenAll.types.map((x) => [x.name, x.vouchers]));
+  assert(types.Sales === 900 && types.Purchase === 600 && types.Journal === 12, JSON.stringify(types));
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 conn.kill();
 process.exit(fail ? 1 : 0);

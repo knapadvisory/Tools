@@ -202,7 +202,7 @@
   <!-- 1b · a Tally nobody can connect to -->
   <div class="card" id="card1b">
     <h2>1b · Or — a remote / hosted Tally: start from its export</h2>
-    <div class="lbl" style="margin:4px 0 10px">Tally shown through a remote-app window has no port this tool can reach. Inside that window, from the Gateway press <b>Alt+E → Transactions</b> (not <i>Current</i>), format <b>XML</b>, the period, voucher type <b>Purchase</b> — save to your local drive. Then again for <b>Debit Note</b> (your reversals). Drop both here. The file is the company: every ledger in it is listed in step 2 for you to tag, and nothing above needs to be connected.</div>
+    <div class="lbl" style="margin:4px 0 10px">Tally shown through a remote-app window has no port this tool can reach. Inside that window, from the Gateway press <b>Alt+E → Transactions</b> (not <i>Current</i>, and not the Registers — those export only the columns on screen). <b>Type of Voucher entries: All Vouchers</b> — TallyPrime has no voucher-type filter here, so the file holds sales and receipts too; that is fine, only the vouchers touching the ledgers you tag are read. Format <b>XML (Data Interchange)</b>, <b>Folder Path</b> on your own drive (not the server’s Program Files), and the <b>Period</b> — one month at a time if a year is too large a file; drop all twelve here together. The file is the company: every ledger in it is listed in step 2 for you to tag, and nothing above needs to be connected.</div>
     <div class="drop" id="dropExport">Drop the Tally export <b>.xml</b> file(s) here, or click to choose.
       <input type="file" id="exportFiles" accept=".xml,text/xml" multiple style="display:none">
     </div>
@@ -237,7 +237,7 @@
         <label class="lbl">To <input type="date" id="toDate" class="kdate"></label>
         <span id="fyQuick" class="fyq"></span>
         <button class="btn primary" id="btnFetch" onclick="fetchItc()">Fetch books ITC →</button>
-        <button class="btn ghost" id="btnExport" onclick="document.getElementById('exportXml').click()" title="Tally cannot be reached from here? Export its vouchers from inside Tally — TallyPrime: Alt+E → Transactions (not Current), format XML, period, voucher type Purchase — and load that file instead">⬆ Load a Tally export (.xml)</button>
+        <button class="btn ghost" id="btnExport" onclick="document.getElementById('exportXml').click()" title="Tally cannot be reached from here? Export its vouchers from inside Tally — TallyPrime: Alt+E → Transactions (not Current), All Vouchers, format XML — and load that file instead">⬆ Load a Tally export (.xml)</button>
         <input type="file" id="exportXml" accept=".xml,text/xml" style="display:none" onchange="loadExportXml(this.files[0]);this.value=''">
         <button class="btn ghost sm" onclick="downloadDiag()" title="Collect the connector's version, memory ceiling and logs into one file to send">⬇ Diagnostics</button>
       </div>
