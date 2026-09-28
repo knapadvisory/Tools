@@ -28,7 +28,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import v8 from 'node:v8';
 
-const VERSION = '4.70';
+const VERSION = '4.71';
 // Bumped WITH connector/version.json — the two are compared to decide a
 // self-update, so a mismatch either loops every connector in the field or
 // hides the build. connector/version.test.mjs fails the pair apart.
@@ -345,6 +345,7 @@ const SHAPE_PROBE_MB = Number(process.env.KNAP_SHAPE_PROBE_MB || 20);
    patient attempt in case the machine is merely slow. */
 const LIVENESS_MS = Number(process.env.KNAP_LIVENESS_MS || 20000);
 const LIVENESS_SLOW_MS = Number(process.env.KNAP_LIVENESS_SLOW_MS || 60000);
+const LEDGER_ATTEMPT_MS = Number(process.env.KNAP_LEDGER_ATTEMPT_MS || 60000);
 /* capMb: a caller that is only PROBING can set its own, much smaller ceiling.
    A probe exists to find out whether a request shape filters; one that is still
    streaming at 20 MB has answered that question already, and downloading the
@@ -2431,8 +2432,14 @@ const dcDenseSet = new Set();
 async function readVouchersRamp(url, from, to, onXml, prog, opts = {}) {
   const attemptMs = opts.attemptMs || 120000;
   const failFast = !!opts.failFast;
-  const maxWin = opts.maxWin || 31;              // invoice-level reads want smaller windows
+  let maxWin = opts.maxWin || 31;               // invoice-level reads want smaller windows
   let win = opts.firstWin || 5;                  // days
+  /* Once a window has timed out, that width is the ceiling for the rest of the
+     read. Without this the window doubles back up to the maximum after every
+     recovery, times out again, halves again — a sawtooth that spends a full
+     timeout on each climb. On a book that answers two days and not twenty, a
+     year of that is most of an hour of waiting for answers already known not to
+     come. */
   let cursor = from.getTime();
   const toMs = to.getTime();
   while (cursor <= toMs) {
@@ -2456,6 +2463,8 @@ async function readVouchersRamp(url, from, to, onXml, prog, opts = {}) {
         if (/released/i.test(msg)) throw e;                         // user pressed Release
         if (/timed out|timeout/i.test(msg) && failFast) throw new Error('AGEING_TOO_DENSE');
         if (/timed out|timeout/i.test(msg) && attempt === 0) {
+          maxWin = Math.max(2, Math.min(maxWin, Math.floor(win / 2)));
+          trace('window too wide — ceiling lowered', { timedOutAt: win, ceiling: maxWin });
           win = 2;
           end = Math.min(cursor + 1 * DAY_MS, toMs);                // just two days
           await new Promise((r) => setTimeout(r, 4000));            // let Tally breathe
@@ -3112,22 +3121,49 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
         }
       }
       dcProgress.phase = 'Asking Tally which vouchers touch these ledgers…';
-      const probeEnd = new Date(Math.min(to.getTime(), from.getTime() + 20 * DAY_MS));
+      /* The sample the shortcut is proved against. It only has to hold SOME ITC
+         vouchers — and it has to come back.
+
+         It used to be a flat twenty days at a ninety-second timeout, and on
+         SHIVAM that was the whole problem: one day of one ledger answers in
+         SEVEN MILLISECONDS, and twenty days of the day book never answers at
+         all. Tally is honouring the window; the window was simply too wide, and
+         asking wide first cost ninety seconds before anything else could be
+         tried. So it starts at three days and widens only while Tally keeps up,
+         and a window that does not come back leaves the last one that did. */
+      let probeEnd = new Date(from.getTime());
       let want = null, plainCount = 0;
       try {
-        trace('probe: day book, 20 days', { to: probeEnd.toISOString().slice(0, 10) });
-        const plain = await tallyFetch(url, dcVoucherRequest(from, probeEnd, ITC_FETCH), 90000);
-        want = itcGuids(plain);
-        plainCount = (plain.match(/<VOUCHER[\s>]/gi) || []).length;
-        trace('probe done', { chars: plain.length, vouchers: plainCount, itcVouchers: want.size });
+        for (const days of [3, 10, 20]) {
+          if (dcCancel) throw new Error('released by user');
+          const end = new Date(Math.min(to.getTime(), from.getTime() + (days - 1) * DAY_MS));
+          trace('probe: day book', { days, to: end.toISOString().slice(0, 10) });
+          const t0 = Date.now();
+          const plain = await tallyFetch(url, dcVoucherRequest(from, end, ITC_FETCH), 30000);
+          want = itcGuids(plain);
+          plainCount = (plain.match(/<VOUCHER[\s>]/gi) || []).length;
+          probeEnd = end;
+          const ms = Date.now() - t0;
+          trace('probe done', { days, ms, chars: plain.length, vouchers: plainCount, itcVouchers: want.size });
+          if (want.size >= 5 || ms > 12000) break;      // enough to prove against, or slowing
+          if (end.getTime() >= to.getTime()) break;
+        }
+        if (!want) throw new Error('the day book returned nothing at any window');
       } catch (e) {
         if (/released/i.test(String(e && e.message))) throw e;
+        if (want && want.size) {
+          /* A wider window timed out but a narrower one had already answered.
+             That is not a dead day book — it is the ceiling, and the sample in
+             hand is a real one. */
+          trace('day book: kept the narrower sample', { to: probeEnd.toISOString().slice(0, 10), itcVouchers: want.size });
+        } else {
         /* Tally answered the ledger masters a moment ago, so it is running and
            reachable. It just will not serve a day book. Remembered, because if
            the ledger shapes fail too there is no route left, and the report
            should say that rather than blame the period. */
         dayBookDead = true;
         trace('day book would not answer', { error: String((e && e.message) || e).slice(0, 120) });
+        }
       }
 
       /* ---- 1. straight off Tally's ledger index ----
@@ -3161,12 +3197,35 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
             /* Prove it on the SAMPLE window first — one small request per
                ledger. Only a shape that accounts for every ITC voucher the day
                book showed is then run over the whole period. */
+            /* The sample window. With a day book to compare against it MUST be
+               the same window, or the completeness check compares two different
+               questions. Without one it is free to widen until the answer holds
+               vouchers — which is the only way a shape can prove itself at all
+               on a book whose day book will not answer.
+
+               Thirty seconds, not ninety: a window Tally is going to answer, it
+               answers quickly, and three shapes at ninety seconds each is four
+               and a half minutes spent learning nothing. */
+            let sampleEnd = probeEnd;
+            if (!proved) {
+              sampleEnd = new Date(from.getTime());
+              for (const days of [1, 3, 9, 27]) {
+                if (dcCancel) throw new Error('released by user');
+                const end = new Date(Math.min(to.getTime(), from.getTime() + (days - 1) * DAY_MS));
+                dcProgress.sub = `sizing a window for ${shape.what} — ${days} day(s)`;
+                const part = await tallyFetch(url, ledgerVouchersRequest(ledgerNames[0], from, end, shape), 30000, SHAPE_PROBE_MB);
+                sampleEnd = end;
+                const n = (part.match(/<VOUCHER[\s>]/gi) || []).length;
+                trace('shape sample window', { shape: shape.what, days, vouchers: n });
+                if (n > 0 || end.getTime() >= to.getTime()) break;
+              }
+            }
             const probeParts = [];
             for (const nm of ledgerNames) {
               if (dcCancel) throw new Error('released by user');
               dcProgress.sub = `trying ${shape.what} on “${nm}”…`;
               trace('probe shape', { shape: shape.what, ledger: nm });
-              const part = await tallyFetch(url, ledgerVouchersRequest(nm, from, probeEnd, shape), 90000, SHAPE_PROBE_MB);
+              const part = await tallyFetch(url, ledgerVouchersRequest(nm, from, sampleEnd, shape), 30000, SHAPE_PROBE_MB);
               trace('probe shape done', { shape: shape.what, ledger: nm, chars: part.length });
               probeParts.push(part);
             }
@@ -3227,7 +3286,7 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
                and peak memory is one ledger's answer rather than all of them.
                There is no budget to exceed any more. */
             ledgerPlan = { shape, ledgerNames };
-            filterNote = `read straight from Tally's ledger index (${shape.what}) — ${ledgerNames.length} ledger request(s) instead of scanning the day book`
+            filterNote = `read straight from Tally's ledger index (${shape.what}) — ${ledgerNames.length} ledger(s), walked in windows, instead of scanning the day book`
               + (proved ? '' : '; the day book would not answer, so this was NOT cross-checked against it');
           } catch (e) {
             if (/released/i.test(String(e && e.message))) throw e;
@@ -3368,20 +3427,32 @@ async function readItcRegister(url, company, from, to, taxLedgers) {
       // memory it needs.
       dcProgress.phase = 'ITC register — reading the ledgers\u2019 vouchers\u2026';
       const { shape, ledgerNames: plannedLedgers } = ledgerPlan;
-      let done = 0, seenAny = false;
+      let done = 0;
+      const before = rows.length;
       for (const nm of plannedLedgers) {
         if (dcCancel) throw new Error('released by user');
-        dcProgress.sub = `reading the vouchers of \u201c${nm}\u201d\u2026 \u00b7 ${rows.length.toLocaleString('en-IN')} with input GST`;
-        trace('full period read', { shape: shape.what, ledger: nm });
-        let part = await tallyFetch(url, ledgerVouchersRequest(nm, from, to, shape), 180000);
-        trace('full period read done', { shape: shape.what, ledger: nm, chars: part.length });
-        if (!seenAny && itcGuids(part).size) seenAny = true;
-        await eat(part);
-        part = null;                                    // released before the next
-        dcProgress.monthsDone = Math.round(totalDays * (++done / plannedLedgers.length));
+        const mine = done;
+        /* A whole year in one request is what SHIVAM would not answer, while a
+           single day came back in seven milliseconds. So the period is walked
+           in windows that size themselves: they double while Tally keeps up and
+           halve when it labours, and a window that times out is retried
+           narrower rather than sinking the read. One window is held at a time,
+           parsed and released, so this costs time on a big book and not memory. */
+        trace('ledger read, windowed', { shape: shape.what, ledger: nm });
+        await readVouchersRamp(url, from, to, eat,
+          (endDate) => {
+            const within = (endDate.getTime() - from.getTime()) / Math.max(1, to.getTime() - from.getTime());
+            dcProgress.monthsDone = Math.round(totalDays * (mine + Math.min(1, within)) / plannedLedgers.length);
+            dcProgress.sub = `\u201c${nm}\u201d to ${endDate.toISOString().slice(0, 10)} \u00b7 `
+              + `${rows.length.toLocaleString('en-IN')} with input GST`;
+          },
+          { firstWin: 2, attemptMs: LEDGER_ATTEMPT_MS, maxWin: 31,
+            request: (a, b) => ledgerVouchersRequest(nm, a, b, shape) });
+        done++;
+        dcProgress.monthsDone = Math.round(totalDays * done / plannedLedgers.length);
       }
       trace('ledger-index read complete', { ledgers: plannedLedgers.length, rows: rows.length });
-      if (!seenAny) throw new Error('the ledger read returned no input-GST vouchers');
+      if (rows.length === before) throw new Error('the ledger read returned no input-GST vouchers');
       dcProgress.monthsDone = totalDays;
     } else {
       /* The last route. If the day book already refused once, its failing again

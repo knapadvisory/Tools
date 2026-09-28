@@ -706,14 +706,52 @@ quietly dropped them would read as though nothing had reconciled. The Tie-out
 sheet still covers the whole 2B either way, which that sheet also says, since
 its totals will not add up to the rows in the file.
 
+### It was never refusing — the window was too wide
+
+The liveness probe in 4.70 was built on the belief that Tally would serve no
+vouchers for SHIVAM at all. Its first run disproved that in seven milliseconds:
+
+```
+13:50:33.768  liveness probe   … "CGST Input Available (RCM)", ms 20000
+13:50:33.775  liveness probe answered   {"chars":1497}
+```
+
+One day of one ledger: instant. Twenty days of the day book, immediately after:
+ninety seconds and nothing. Tally honours the date window. Every question this
+tool asked was simply too wide, and asking wide *first* cost ninety seconds
+before anything narrower could be tried.
+
+From **4.71** every question starts narrow and widens only while Tally keeps up:
+
+- the **day-book sample** starts at three days and grows to ten and twenty,
+  stopping as soon as it holds five ITC vouchers or takes over twelve seconds.
+  A width that does not come back leaves the last one that did — a narrower
+  sample is still a real sample, and is no reason to declare the day book dead;
+- the **shape probe** asks for thirty seconds, not ninety. Where there is no
+  day-book sample to compare against, it sizes its own window (1, 3, 9, 27 days)
+  until the answer holds vouchers, which is the only way a shape can prove
+  itself on a book whose day book will not answer;
+- the **full read** walks each ledger in windows that size themselves, doubling
+  while Tally keeps up and halving when it labours. One window is held at a
+  time, parsed and released.
+
+And a width that has timed out once becomes the **ceiling** for the rest of that
+read. Without that the window doubles back to the maximum after every recovery,
+times out again and halves again — a sawtooth spending a full timeout on every
+climb, which over a year is most of an hour waiting for answers already known
+not to come.
+
+A stub Tally that answers four days and never answers more reads a year of
+3,000 vouchers in 96 windowed requests, finds all 602 ITC vouchers, and never
+falls back to the day book.
+
 ### When Tally will not serve vouchers at all
 
-SHIVAM's trace on 4.69 settled a question the size numbers could not. Tally
-answered the ledger list for that company in **0.28 seconds** — 708 ledgers,
-284,905 characters — and then returned nothing at all: the day book timed out at
-ninety seconds, and so did each of the three ledger shapes, on the first ledger
-alone, a reverse-charge ledger that should hold almost nothing. Eight minutes to
-learn one thing.
+The liveness check earns its place even though SHIVAM turned out not to need it.
+On 4.69 that company answered its ledger list in **0.28 seconds** — 708 ledgers,
+284,905 characters — and then nothing came back for eight minutes, and there was
+no way to tell a Tally that cannot serve vouchers from one that is merely being
+asked badly.
 
 That one thing is now asked first, and cheaply. **One day of one ledger** is the
 smallest voucher question there is; a healthy Tally answers it in milliseconds

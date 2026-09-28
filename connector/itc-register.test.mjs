@@ -13,10 +13,16 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 
 const TOTAL = 3000, ITC_EVERY = 5;           // 600 ITC vouchers among 3000
+/* Real calendar dates, not 20250401 + n. The naive version invents 20250435,
+   which no window a windowed reader asks for can ever contain — the stub would
+   then "lose" vouchers that a real Tally never had. */
+const DAY0 = Date.UTC(2025, 3, 1);
+const dnum = (k) => { const x = new Date(DAY0 + k * 86400000);
+  return x.getUTCFullYear() * 10000 + (x.getUTCMonth() + 1) * 100 + x.getUTCDate(); };
 let mode = 'good', stats = { plain: 0, filtered: 0, ledger: 0, bytes: 0 };
 
 const vch = (i, itc) => `<VOUCHER VCHTYPE="Purchase">
-<DATE>${20250401 + Math.floor(i / 20)}</DATE><GUID>g-${i}</GUID>
+<DATE>${dnum(Math.floor(i / 20))}</DATE><GUID>g-${i}</GUID>
 <VOUCHERTYPENAME>Purchase</VOUCHERTYPENAME><VOUCHERNUMBER>PI/${i}</VOUCHERNUMBER>
 <PARTYLEDGERNAME>Supplier ${i % 50}</PARTYLEDGERNAME><SUPPLIERINVOICENO>INV-${i}</SUPPLIERINVOICENO>
 <ISCANCELLED>No</ISCANCELLED><ISOPTIONAL>No</ISOPTIONAL><CMPGSTIN>06AAACE1234F1Z5</CMPGSTIN>
@@ -87,6 +93,16 @@ const srv = http.createServer((req, res) => {
        which is what a timeout is. */
     if (mode === 'mute') return;                          // answer no voucher request, ever
 
+    /* SHIVAM, as the 4.70 trace finally showed it: ONE day of one ledger came
+       back in seven milliseconds, and twenty days never came back at all. Tally
+       honours the window; the window was too wide. Anything past four days here
+       is simply never answered. */
+    if (mode === 'narrow') {
+      const span = Math.round((Date.UTC(Math.floor(to / 10000), Math.floor(to / 100) % 100 - 1, to % 100)
+                             - Date.UTC(Math.floor(from / 10000), Math.floor(from / 100) % 100 - 1, from % 100)) / 86400000);
+      if (span > 4) { stats.refusedWide = (stats.refusedWide || 0) + 1; return; }
+    }
+
     /* Tally's ledger index: only the vouchers that hit the named ledger.
        In "noLedgerIndex" the server refuses it, as an older Tally would. */
     if (isLedger) {
@@ -104,6 +120,7 @@ const srv = http.createServer((req, res) => {
                       // the ledger — nothing can be trusted here
                       deadNoFilter: ['collection-voucher-childof'],
                       mute: [],
+                      narrow: ['collection-voucher-ledger'],
                       filterOnly: [], bad: [], noLedgerIndex: [] }[mode] || [];
       if (!knows.includes(shape)) { res.statusCode = 200; return res.end('<ENVELOPE></ENVELOPE>'); }
       if (mode === 'noFilter' || mode === 'deadNoFilter') {
@@ -118,7 +135,7 @@ const srv = http.createServer((req, res) => {
       const out = [];
       for (let i = 0; i < TOTAL; i++) {
         if ((i % ITC_EVERY) !== 0) continue;
-        const d = 20250401 + Math.floor(i / 20);
+        const d = dnum(Math.floor(i / 20));
         if (d < from || d > to) continue;                 // a real ledger read honours the window
         if (mode === 'ledgerMisses' && i === ITC_EVERY * 3) continue;   // silently short
         out.push(vch(i, true));
@@ -132,7 +149,7 @@ const srv = http.createServer((req, res) => {
     }
     const out = [];
     for (let i = 0; i < TOTAL; i++) {
-      const d = 20250401 + Math.floor(i / 20);
+      const d = dnum(Math.floor(i / 20));
       if (d < from || d > to) continue;
       const itc = (i % ITC_EVERY) === 0;
       // "bad": the filter silently omits one ITC voucher that the plain read returns
@@ -217,9 +234,10 @@ mode = 'good';
 const led = await run('ledger index');
 t('the whole period comes from the ledger index', () => {
   assert(/ledger index/.test(led.note), 'note should record the ledger read: ' + led.note);
-  // one day of one ledger to check Tally answers at all, then one small
-  // request per ledger to PROVE the shape, then one for the period
-  assert(led.stats.ledger === 3, `expected a liveness check, a probe and a full read, got ${led.stats.ledger}`);
+  /* The period is walked in windows now, so the count depends on how wide
+     Tally lets them be. What matters is that the ledger index did the work and
+     the day book was not scanned. */
+  assert(led.stats.ledger >= 3, `the ledger index must be read, got ${led.stats.ledger} requests`);
   assert(led.stats.plain <= 1, `only the proving window should be scanned, got ${led.stats.plain}`);
   assert(led.stats.filtered === 0, 'the day-book filter should not be needed');
 });
@@ -414,6 +432,47 @@ t('it does not keep hammering a Tally that will not answer', () => {
     `one day of one ledger per shape, then one more — got ${mute.stats.ledger} requests`);
 });
 conn3.kill();
+
+/* ---------------------------------------------------------------------------
+ * A Tally that answers narrow windows and never answers wide ones.
+ *
+ * This is SHIVAM as the 4.70 trace finally showed it, and it is the opposite of
+ * what 4.70 concluded. ONE day of ONE ledger came back in seven milliseconds:
+ *
+ *   13:50:33.768  liveness probe   … "CGST Input Available (RCM)", ms 20000
+ *   13:50:33.775  liveness probe answered   {"chars":1497}
+ *
+ * and then twenty days of the day book timed out at ninety seconds, and each
+ * shape timed out at ninety more. Tally was never refusing. It honours the
+ * window, and every question this tool asked was too wide.
+ * ------------------------------------------------------------------------- */
+console.log('\n── narrow windows answer, wide ones never do ──');
+const conn4 = spawn('node', [new URL('./knap-tally-connector.mjs', import.meta.url).pathname],
+  { env: { ...process.env, PORT: '8901', KNAP_LIVENESS_MS: '600', KNAP_LIVENESS_SLOW_MS: '900',
+           KNAP_LEDGER_ATTEMPT_MS: '900' },
+    stdio: ['ignore', 'pipe', 'pipe'] });
+await new Promise((r) => setTimeout(r, 2500));
+mode = 'narrow';
+const narrow = await run('narrow windows only', { port: 8901 });
+t('the read finishes, and finds every ITC voucher', () => {
+  assert(narrow.j.ok !== false,
+    'it must not fail — narrow windows work: ' + JSON.stringify(narrow.j).slice(0, 200));
+  const expected = Math.ceil(TOTAL / ITC_EVERY) + 2;
+  assert(narrow.j.rows.length === expected,
+    `expected ${expected} rows, got ${narrow.j.rows.length}`);
+});
+t('it found the ceiling instead of asking wide over and over', () => {
+  /* A year in windows of four days is about ninety requests per ledger. Many
+     more than that means the window kept climbing back up and timing out. */
+  assert(narrow.stats.refusedWide > 0, 'the test must actually have refused some wide windows');
+  assert(narrow.stats.refusedWide < 25,
+    `it must settle on a width that works, not keep retrying wide: ${narrow.stats.refusedWide} refusals`);
+});
+t('and it did not fall back to scanning the day book', () => {
+  assert(/ledger index/.test(narrow.note), 'the ledger route must have carried it: ' + narrow.note);
+  assert(/windows/.test(narrow.note), 'and the note should say how: ' + narrow.note);
+});
+conn4.kill();
 
 console.log(`\n${pass} passed, ${fail} failed`);
 conn.kill(); srv.close();
