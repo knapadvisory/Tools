@@ -87,6 +87,7 @@
     <button data-v="topng" type="button">PDF → JPG</button>
     <button data-v="frompng" type="button">JPG → PDF</button>
     <button data-v="compress" type="button">Compress</button>
+    <button data-v="md" type="button">PDF → Markdown</button>
     <button data-v="xls" type="button">Excel → PDF</button>
   </div>
 </div>
@@ -249,6 +250,39 @@
       <div id="cResult" class="hide" style="margin-top:16px;border:1px solid var(--rule);border-radius:10px;padding:14px 16px;background:#fafbfa">
         <div id="cResultText"></div>
         <div class="row"><button class="btn" id="cDl" type="button">⬇ Download</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PDF -> MARKDOWN -->
+  <div id="v_md" class="view hide">
+    <div class="card">
+      <h2>PDF → Markdown</h2>
+      <p class="sub">Turn a PDF into a <b>.md</b> file an AI model can read: headings, paragraphs, lists and simple tables, with a marker at every page. Several files come back as a ZIP. Runs in your browser — nothing is uploaded.</p>
+      <div class="drop" id="dDrop">Drop PDFs here, or click to choose <input type="file" id="dFile" accept="application/pdf" multiple hidden></div>
+      <ul class="files" id="dList"></ul>
+      <div id="dInfo" class="muted" style="margin-top:10px"></div>
+
+      <div id="dPanel" class="hide">
+        <div class="row" style="margin-top:16px">
+          <label class="chk"><input type="checkbox" id="dFront" checked> Front matter — title, source file, page count at the top (what a model uses for context)</label>
+        </div>
+        <label class="chk"><input type="checkbox" id="dPages" checked> Mark every page — <code>&lt;!-- page 3 --&gt;</code> and a rule, so a citation can say where it came from</label>
+        <label class="chk"><input type="checkbox" id="dHead" checked> Headings from font size — the larger the text, the higher the heading</label>
+        <label class="chk"><input type="checkbox" id="dStrip" checked> Drop running headers and footers — the same line in the same place on most pages (page numbers, titles)</label>
+        <div class="hint">Reads the text the PDF carries. <b>A scanned page has no text to read</b> — it is a picture — and comes through as a marker saying so, not as invented words. Tables are rebuilt where the columns line up; a complex layout may come out as lines. Check anything a model will be asked to rely on.</div>
+      </div>
+
+      <div class="bar" id="dBar"><div></div></div>
+      <div class="row">
+        <button class="btn" id="dGo" type="button" disabled>Convert</button>
+        <button class="btn ghost" id="dStop" type="button" style="display:none">Stop</button>
+        <span class="muted" id="dStat"></span>
+      </div>
+      <div id="dResult" class="hide" style="margin-top:16px;border:1px solid var(--rule);border-radius:10px;padding:14px 16px;background:#fafbfa">
+        <div id="dResultText"></div>
+        <div class="row"><button class="btn" id="dDl" type="button">⬇ Download</button><button class="btn ghost" id="dCopy" type="button">Copy to clipboard</button><span class="muted" id="dCopied"></span></div>
+        <pre id="dPreview" class="hide" style="margin-top:12px;max-height:320px;overflow:auto;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;background:#fff;border:1px solid var(--rule);border-radius:8px;padding:10px 12px;white-space:pre-wrap"></pre>
       </div>
     </div>
   </div>

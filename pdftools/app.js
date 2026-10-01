@@ -1188,3 +1188,246 @@ $('#xGo').addEventListener('click',function(){
     hideBar('xBar'); $('#xGo').disabled=false; $('#xStat').textContent='Error: '+e.message;
   });
 });
+
+
+/* ================= PDF -> MARKDOWN =================
+   For reading with an AI model. A PDF carries its text as positioned
+   fragments with no notion of paragraph, heading or list; a model given that
+   raw stream wastes its attention reassembling it, and gets it wrong. This
+   rebuilds the structure from the positions and sizes, and marks every page
+   so an answer can say where it came from.
+
+   What it will not do: read a scanned page. There is no text there — it is a
+   picture — and it comes through as a marker saying so, never as invented
+   words. */
+var mdQueue=[], mdBusy=false, mdStop=false, mdOut=null, mdOutName='', mdLast=null;
+
+setupDrop('#dDrop','#dFile',function(fs){
+  fs.forEach(function(f){
+    if(f.type==='application/pdf'||/\.pdf$/i.test(f.name)) mdQueue.push({file:f,name:f.name,size:f.size,status:'',md:null});
+  });
+  mdOut=null; $('#dResult').classList.add('hide'); $('#dStat').textContent='';
+  dRenderQueue();
+});
+function dRenderQueue(){
+  var host=$('#dList'); host.innerHTML='';
+  mdQueue.forEach(function(it,i){
+    var li=document.createElement('li');
+    li.innerHTML='<span class="nm" title="'+it.name.replace(/"/g,'&quot;')+'">'+it.name+'</span>'
+      +'<span class="muted" style="white-space:nowrap">'+fmtSize(it.size)+'</span>'
+      +'<span class="muted" style="min-width:190px;text-align:right">'+(it.status||'')+'</span>'
+      +'<button class="x" title="Remove">✕</button>';
+    li.querySelector('.x').onclick=function(){ if(mdBusy) return; mdQueue.splice(i,1); dRenderQueue(); };
+    host.appendChild(li);
+  });
+  $('#dInfo').innerHTML = mdQueue.length ? '<b>'+mdQueue.length+' file(s)</b>, '+fmtSize(mdQueue.reduce(function(a,b){return a+b.size;},0))+' in total.' : '';
+  $('#dPanel').classList.toggle('hide', mdQueue.length===0);
+  $('#dGo').disabled = mdQueue.length===0 || mdBusy;
+}
+
+/* ---- the conversion ---- */
+function mdEsc(s){ return String(s).replace(/([\\`*_{}\[\]#+!|~<>])/g,'\\$1'); }
+function mdCellEsc(s){ return String(s).replace(/\|/g,'\\|').trim(); }
+function mdNormKey(s){ return String(s).toLowerCase().replace(/\d+/g,'#').replace(/\s+/g,' ').trim(); }
+
+/* Fragments -> lines. pdf.js gives each run of text its own transform; the
+   y of the baseline and the font height group runs into lines, the x orders
+   them, and a gap wider than a quarter of the font size is a space. */
+function mdLinesOf(content,viewport){
+  var items=content.items.filter(function(t){ return t.str && t.str.trim().length; });
+  var runs=items.map(function(t){
+    var tr=t.transform, size=Math.hypot(tr[2],tr[3])||Math.abs(tr[3])||t.height||10;
+    return { x:tr[4], y:tr[5], w:t.width||0, size:size, str:t.str, bold:/bold|black|heavy|semibold|demi/i.test(t.fontName||'') };
+  });
+  runs.sort(function(a,b){ return (b.y-a.y)||(a.x-b.x); });
+  var lines=[];
+  runs.forEach(function(r){
+    var L=lines[lines.length-1];
+    if(L && Math.abs(L.y-r.y) <= Math.max(2, Math.min(L.size,r.size)*0.5)){ L.runs.push(r); }
+    else lines.push({ y:r.y, size:r.size, runs:[r] });
+  });
+  lines.forEach(function(L){
+    L.runs.sort(function(a,b){ return a.x-b.x; });
+    var text='', cells=[], cur='', curX=L.runs[0].x, lastEnd=null, maxSize=0, boldN=0, chars=0;
+    L.runs.forEach(function(r){
+      var gap = lastEnd==null ? 0 : r.x-lastEnd;
+      if(lastEnd!=null && gap > r.size*2.5){ cells.push({x:curX,t:cur.trim()}); cur=''; curX=r.x; text+='  '; }
+      else if(lastEnd!=null && gap > r.size*0.22 && !/\s$/.test(cur) && !/^\s/.test(r.str)) { cur+=' '; text+=' '; }
+      cur+=r.str; text+=r.str; lastEnd=r.x+r.w;
+      maxSize=Math.max(maxSize,r.size); chars+=r.str.length; if(r.bold) boldN+=r.str.length;
+    });
+    cells.push({x:curX,t:cur.trim()});
+    L.text=text.replace(/\s+/g,' ').trim(); L.cells=cells.filter(function(c){return c.t;});
+    L.x=L.runs[0].x; L.size=maxSize; L.bold= chars? boldN/chars>0.8 : false; L.height=viewport.height;
+  });
+  return lines.filter(function(L){ return L.text; });
+}
+
+function mdHeadingLevel(L,body,opts){
+  if(!opts.headings) return 0;
+  var r=L.size/body;
+  if(L.text.length>120) return 0;
+  if(r>=1.6) return 1;
+  if(r>=1.3) return 2;
+  if(r>=1.12 || (L.bold && r>=1.0 && L.text.length<=80 && !/[.:;,]$/.test(L.text))) return 3;
+  return 0;
+}
+
+/* A run of lines that each break into the same columns is a table. Looking
+   for it conservatively: at least two lines, at least three cells each, and
+   the cell starts agreeing to within a character and a half. */
+function mdTableAt(lines,i,body){
+  var first=lines[i]; if(!first.cells || first.cells.length<3) return null;
+  var cols=first.cells.map(function(c){return c.x;}), n=cols.length, j=i, rows=[];
+  while(j<lines.length){
+    var L=lines[j]; if(!L.cells || L.cells.length<2 || L.cells.length>n+1) break;
+    var ok=L.cells.every(function(c){ return cols.some(function(x){ return Math.abs(x-c.x) <= body*1.5; }); });
+    if(!ok) break;
+    var row=new Array(n).fill('');
+    L.cells.forEach(function(c){ var k=0,best=1e9; cols.forEach(function(x,ci){ var d=Math.abs(x-c.x); if(d<best){best=d;k=ci;} }); row[k]=row[k]?row[k]+' '+c.t:c.t; });
+    rows.push(row); j++;
+  }
+  if(rows.length<2) return null;
+  return { rows:rows, next:j };
+}
+
+async function pdfToMarkdown(bytes,opts,onPct){
+  opts=opts||{};
+  var pdf=await loadPdfjs(bytes), n=pdf.numPages;
+  var pages=[], sizes={}, scanned=[];
+  for(var p=1;p<=n;p++){
+    if(mdStop) throw new Error('stopped');
+    var pg=await pdf.getPage(p), vp=pg.getViewport({scale:1});
+    var content=await pg.getTextContent();
+    var lines=mdLinesOf(content,vp);
+    var chars=lines.reduce(function(a,L){return a+L.text.length;},0);
+    if(chars<5){ scanned.push(p); pages.push({n:p,lines:[],scanned:true}); }
+    else {
+      lines.forEach(function(L){ var k=Math.round(L.size*2)/2; sizes[k]=(sizes[k]||0)+L.text.length; });
+      pages.push({n:p,lines:lines,scanned:false});
+    }
+    pg.cleanup && pg.cleanup();
+    if(onPct) onPct(Math.round(p/n*90));
+    await cYield();
+  }
+  var body=10, bestN=0; Object.keys(sizes).forEach(function(k){ if(sizes[k]>bestN){bestN=sizes[k];body=+k;} });
+
+  /* Running headers and footers: the same text (digits aside) at the same
+     height on more than half the pages. Dropped before anything else, so a
+     page number never ends a paragraph. */
+  var drop={};
+  if(opts.strip && n>=3){
+    var seen={};
+    pages.forEach(function(P){ var here={}; P.lines.forEach(function(L){ var k=mdNormKey(L.text)+'@'+Math.round(L.y/8); if(!here[k]){here[k]=1; seen[k]=(seen[k]||0)+1;} }); });
+    Object.keys(seen).forEach(function(k){ if(seen[k] > n/2) drop[k]=1; });
+  }
+
+  var out=[], meta=null;
+  try{ meta=await pdf.getMetadata(); }catch(e){}
+  var title=(meta&&meta.info&&meta.info.Title&&String(meta.info.Title).trim())||'';
+  if(opts.front){
+    out.push('---');
+    out.push('title: '+JSON.stringify(title||opts.name.replace(/\.pdf$/i,'')));
+    out.push('source: '+JSON.stringify(opts.name));
+    out.push('pages: '+n);
+    if(scanned.length) out.push('scanned_pages: ['+scanned.join(', ')+']');
+    out.push('converted: '+new Date().toISOString().slice(0,10));
+    out.push('---'); out.push('');
+  }
+  var headings=0, words=0, tables=0;
+  pages.forEach(function(P){
+    if(opts.pages){ out.push(''); out.push('<!-- page '+P.n+' -->'); if(P.n>1) out.push(''); }
+    if(P.scanned){ out.push('<!-- page '+P.n+': no text layer (scanned image) — nothing to read here -->'); out.push(''); return; }
+    var lines=P.lines.filter(function(L){ return !drop[mdNormKey(L.text)+'@'+Math.round(L.y/8)]; });
+    var para=[], i=0;
+    function flush(){ if(para.length){ out.push(para.join(' ').replace(/(\w)- (\w)/g,function(m,a,b){ return /[a-z]/.test(b)? a+b : m; })); out.push(''); words+=para.join(' ').split(/\s+/).length; para=[]; } }
+    while(i<lines.length){
+      var L=lines[i];
+      var tb=mdTableAt(lines,i,body);
+      if(tb){
+        flush(); tables++;
+        var w=tb.rows[0].length;
+        out.push('| '+tb.rows[0].map(mdCellEsc).join(' | ')+' |');
+        out.push('|'+new Array(w).fill('---').join('|')+'|');
+        tb.rows.slice(1).forEach(function(r){ out.push('| '+r.map(mdCellEsc).join(' | ')+' |'); });
+        out.push(''); i=tb.next; continue;
+      }
+      var h=mdHeadingLevel(L,body,opts);
+      if(h){ flush(); headings++; out.push(new Array(h+1).join('#')+' '+L.text.replace(/\s+/g,' ')); out.push(''); i++; continue; }
+      var m;
+      if((m=L.text.match(/^[•◦▪·●\-–—*]\s+(.*)$/))){ flush(); out.push('- '+m[1]); i++; if(!(lines[i]&&/^[•◦▪·●\-–—*]\s+/.test(lines[i].text))) out.push(''); continue; }
+      if((m=L.text.match(/^(\d{1,3})[.)]\s+(.*)$/))){ flush(); out.push(m[1]+'. '+m[2]); i++; if(!(lines[i]&&/^\d{1,3}[.)]\s+/.test(lines[i].text))) out.push(''); continue; }
+      if((m=L.text.match(/^\(?([a-z]|[ivx]{1,4})[.)]\s+(.*)$/))){ flush(); out.push('- '+m[2]); i++; continue; }
+      /* a body line: continues the paragraph unless the gap, the indent or
+         what comes next says otherwise */
+      var prev=lines[i-1];
+      if(para.length && prev){
+        var gap=prev.y-L.y, indentJump=Math.abs(L.x-prev.x)>body*2 && L.x>prev.x;
+        if(gap > L.size*1.9 || indentJump) flush();
+      }
+      para.push(L.text); i++;
+    }
+    flush();
+  });
+  if(onPct) onPct(100);
+  var md=out.join('\n').replace(/\n{3,}/g,'\n\n').trim()+'\n';
+  return { md:md, pages:n, scanned:scanned, headings:headings, words:words, tables:tables, body:body };
+}
+
+$('#dStop').addEventListener('click',function(){ mdStop=true; });
+$('#dGo').addEventListener('click',function(){
+  if(!mdQueue.length||mdBusy) return;
+  var opts={ front:$('#dFront').checked, pages:$('#dPages').checked, headings:$('#dHead').checked, strip:$('#dStrip').checked };
+  mdBusy=true; mdStop=false; mdOut=null; $('#dResult').classList.add('hide'); $('#dGo').disabled=true; $('#dStop').style.display='';
+  bar('dBar',0);
+  (async function(){
+    var done=[], t0=Date.now();
+    for(var i=0;i<mdQueue.length;i++){
+      if(mdStop) break;
+      var it=mdQueue[i], base=i, n=mdQueue.length;
+      it.status='reading…'; dRenderQueue(); $('#dStat').textContent=(n>1?('File '+(i+1)+' of '+n+' — '):'')+it.name;
+      try{
+        var r=await pdfToMarkdown(await ab(it.file), Object.assign({name:it.name},opts), function(p){ bar('dBar',Math.round(((base+p/100)/n)*100)); });
+        it.md=r.md; it.res=r;
+        it.status=r.pages+' page'+(r.pages===1?'':'s')+' · '+r.words.toLocaleString('en-IN')+' words'+(r.scanned.length?' · '+r.scanned.length+' scanned':'');
+        done.push({it:it});
+      }catch(e){
+        if(/stopped/.test(e.message)){ it.status='stopped'; dRenderQueue(); break; }
+        it.status='failed: '+e.message; done.push({it:it,error:e.message});
+      }
+      dRenderQueue(); await cYield();
+    }
+    return {done:done, secs:Math.round((Date.now()-t0)/1000)};
+  })().then(async function(res){
+    hideBar('dBar'); mdBusy=false; $('#dGo').disabled=false; $('#dStop').style.display='none'; $('#dStat').textContent='';
+    var ok=res.done.filter(function(d){return !d.error;});
+    $('#dPreview').classList.add('hide'); $('#dCopied').textContent='';
+    if(!ok.length){
+      $('#dResultText').innerHTML='<span style="color:#b42318">Nothing was produced.</span>'+(res.done.length?'<div class="muted" style="margin-top:6px">'+res.done.map(function(d){return d.it.name+' — '+d.error;}).join('<br>')+'</div>':'');
+      $('#dResult').classList.remove('hide'); $('#dDl').style.display='none'; $('#dCopy').style.display='none'; return;
+    }
+    $('#dDl').style.display='';
+    var scannedAll=ok.reduce(function(a,d){return a+d.it.res.scanned.length;},0);
+    var warn=scannedAll? ' <span style="color:#b42318">'+scannedAll+' page(s) had no text layer — they are scans, and are marked as such rather than read.</span>' : '';
+    if(ok.length===1){
+      var d=ok[0];
+      mdOut=new Blob([d.it.md],{type:'text/markdown'}); mdOutName=d.it.name.replace(/\.pdf$/i,'')+'.md'; mdLast=d.it.md;
+      $('#dResultText').innerHTML='<b>'+d.it.res.pages+' page(s) → '+fmtSize(mdOut.size)+' of Markdown</b> — '+d.it.res.headings+' heading(s), '+d.it.res.tables+' table(s), '+d.it.res.words.toLocaleString('en-IN')+' words.'+warn;
+      $('#dCopy').style.display='';
+      $('#dPreview').textContent=d.it.md.length>6000? d.it.md.slice(0,6000)+'\n\n… ('+fmtSize(mdOut.size)+' in all — download for the rest)' : d.it.md;
+      $('#dPreview').classList.remove('hide');
+    } else {
+      var zip=new JSZip();
+      ok.forEach(function(d){ zip.file(d.it.name.replace(/\.pdf$/i,'')+'.md', d.it.md); });
+      mdOut=await zip.generateAsync({type:'blob'}); mdOutName='markdown.zip'; mdLast=null;
+      $('#dResultText').innerHTML='<b>'+ok.length+' file(s) → '+ok.length+' Markdown file(s)</b> in a ZIP, in '+res.secs+'s.'+warn;
+      $('#dCopy').style.display='none';
+    }
+    $('#dResult').classList.remove('hide');
+  });
+});
+$('#dDl').addEventListener('click',function(){ if(mdOut) dl(mdOut,mdOutName); });
+$('#dCopy').addEventListener('click',function(){
+  if(!mdLast) return;
+  navigator.clipboard.writeText(mdLast).then(function(){ $('#dCopied').textContent='copied'; }, function(){ $('#dCopied').textContent='could not copy — download instead'; });
+});
