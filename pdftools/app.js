@@ -1232,7 +1232,9 @@ function mdNormKey(s){ return String(s).toLowerCase().replace(/\d+/g,'#').replac
 
 /* Fragments -> lines. pdf.js gives each run of text its own transform; the
    y of the baseline and the font height group runs into lines, the x orders
-   them, and a gap wider than a quarter of the font size is a space. */
+   them, and a gap wider than a quarter of the font size is a space. Each
+   line keeps its runs, with their start and end x — the table builder works
+   from those, never from the joined text. */
 function mdLinesOf(content,viewport){
   var items=content.items.filter(function(t){ return t.str && t.str.trim().length; });
   var runs=items.map(function(t){
@@ -1248,49 +1250,231 @@ function mdLinesOf(content,viewport){
   });
   lines.forEach(function(L){
     L.runs.sort(function(a,b){ return a.x-b.x; });
-    var text='', cells=[], cur='', curX=L.runs[0].x, lastEnd=null, maxSize=0, boldN=0, chars=0;
+    /* runs that touch are one run — pdf.js often splits a word at a kerning
+       pair, and a cell must not be split with it */
+    var merged=[];
     L.runs.forEach(function(r){
-      var gap = lastEnd==null ? 0 : r.x-lastEnd;
-      if(lastEnd!=null && gap > r.size*2.5){ cells.push({x:curX,t:cur.trim()}); cur=''; curX=r.x; text+='  '; }
-      else if(lastEnd!=null && gap > r.size*0.22 && !/\s$/.test(cur) && !/^\s/.test(r.str)) { cur+=' '; text+=' '; }
-      cur+=r.str; text+=r.str; lastEnd=r.x+r.w;
-      maxSize=Math.max(maxSize,r.size); chars+=r.str.length; if(r.bold) boldN+=r.str.length;
+      var m=merged[merged.length-1];
+      /* a number beside text, that close, is the next cell of a table and
+         not the tail of a sentence — "RTGS/ICICR42025 5000000.00" is a remark
+         and an amount, however little space the column left between them */
+      var tokenish=function(t){ t=String(t).trim(); return mdIsNum(t) || /^\d{1,2}-[A-Za-z]{3}-\d{2,4}$/.test(t) || /^\d{1,2}[\/.]\d{1,2}[\/.]\d{2,4}$/.test(t); };
+      var numSwitch = m && (tokenish(r.str) || tokenish(m.str.split(' ').pop()));
+      if(m && r.x-(m.x+m.w) < r.size*0.22 && !/\s$/.test(m.str) && !/^\s/.test(r.str) && !numSwitch){ m.str+=r.str; m.w=(r.x+r.w)-m.x; m.bold=m.bold&&r.bold; }
+      else if(m && r.x-(m.x+m.w) < r.size*1.0 && !numSwitch){ m.str+=' '+r.str.replace(/^\s+/,''); m.w=(r.x+r.w)-m.x; m.bold=m.bold&&r.bold; }
+      else merged.push({ x:r.x, w:r.w, size:r.size, str:r.str.replace(/^\s+/,''), bold:r.bold });
     });
-    cells.push({x:curX,t:cur.trim()});
-    L.text=text.replace(/\s+/g,' ').trim(); L.cells=cells.filter(function(c){return c.t;});
-    L.x=L.runs[0].x; L.size=maxSize; L.bold= chars? boldN/chars>0.8 : false; L.height=viewport.height;
+    L.runs=merged.map(function(r){ r.str=r.str.replace(/\s+/g,' ').trim(); r.end=r.x+r.w; return r; }).filter(function(r){return r.str;});
+    /* One item, two numbers: "1768592.00 -7910524.33" came out of the PDF as a
+       single run — a deposit and a balance that no gap rule can see apart. A
+       run holding two or more numeric tokens is split at its spaces, each
+       token given the share of the width its characters account for. Tokens
+       that belong together still land in the same column and are rejoined. */
+    var split=[];
+    L.runs.forEach(function(r){
+      var toks=r.str.split(' ');
+      var nums=toks.filter(function(t){return mdIsNum(t);}).length;
+      if(toks.length<2 || nums<1 || (nums<2 && !toks.some(function(t){return !mdIsNum(t);}))){ split.push(r); return; }
+      var len=r.str.length, at=0;
+      toks.forEach(function(t){
+        var x0=r.x + r.w*(at/len), x1=r.x + r.w*((at+t.length)/len);
+        split.push({ x:x0, w:x1-x0, end:x1, size:r.size, str:t, bold:r.bold });
+        at+=t.length+1;
+      });
+    });
+    L.runs=split;
+    L.text=L.runs.map(function(r){return r.str;}).join(' ');
+    L.x=L.runs.length?L.runs[0].x:0; L.size=L.runs.reduce(function(a,r){return Math.max(a,r.size);},0);
+    var chars=0,boldN=0; L.runs.forEach(function(r){ chars+=r.str.length; if(r.bold) boldN+=r.str.length; });
+    L.bold= chars? boldN/chars>0.8 : false;
   });
   return lines.filter(function(L){ return L.text; });
 }
 
-function mdHeadingLevel(L,body,opts){
+/* A heading stands out from what follows it: larger than the next line, not
+   merely larger than the page average. A 12pt label block above a 9pt table
+   is not six headings — nothing in it is bigger than its neighbour. A line
+   ending in a colon is a label, never a heading. */
+function mdHeadingLevel(L,next,body,opts){
   if(!opts.headings) return 0;
+  if(L.text.length>120 || /:$/.test(L.text)) return 0;
   var r=L.size/body;
-  if(L.text.length>120) return 0;
+  var stands = !next || L.size > next.size+0.5;
+  if(!stands) return 0;
   if(r>=1.6) return 1;
   if(r>=1.3) return 2;
-  if(r>=1.12 || (L.bold && r>=1.0 && L.text.length<=80 && !/[.:;,]$/.test(L.text))) return 3;
+  if(r>=1.12 || (L.bold && r>=1.0 && L.text.length<=80 && !/[.;,]$/.test(L.text))) return 3;
   return 0;
 }
 
-/* A run of lines that each break into the same columns is a table. Looking
-   for it conservatively: at least two lines, at least three cells each, and
-   the cell starts agreeing to within a character and a half. */
-function mdTableAt(lines,i,body){
-  var first=lines[i]; if(!first.cells || first.cells.length<3) return null;
-  var cols=first.cells.map(function(c){return c.x;}), n=cols.length, j=i, rows=[];
-  while(j<lines.length){
-    var L=lines[j]; if(!L.cells || L.cells.length<2 || L.cells.length>n+1) break;
-    var ok=L.cells.every(function(c){ return cols.some(function(x){ return Math.abs(x-c.x) <= body*1.5; }); });
-    if(!ok) break;
-    var row=new Array(n).fill('');
-    L.cells.forEach(function(c){ var k=0,best=1e9; cols.forEach(function(x,ci){ var d=Math.abs(x-c.x); if(d<best){best=d;k=ci;} }); row[k]=row[k]?row[k]+' '+c.t:c.t; });
-    rows.push(row); j++;
-  }
-  if(rows.length<2) return null;
-  return { rows:rows, next:j };
-}
+/* ---- tables ----
+   The hard case is a bank statement: a row wraps over three or four lines
+   (the Remarks cell, and a balance so wide the column breaks it into "-",
+   "29662943.7", "3"); the columns sit closer together than any gap on a
+   single line would reveal; the amounts are right-aligned, so what is stable
+   is where they END, not where they start; and the table runs on for sixty
+   pages without repeating its header.
 
+   So columns are learned from the whole zone, not from one line: numeric runs
+   are claimed first by clusters of their right edge; the text runs that remain
+   are split by rivers — x-intervals where no line has ink. A line is a new
+   row when it fills the first column or most columns; otherwise it continues
+   the row above, cell by cell, numeric fragments joined without a space. */
+function mdIsNum(s){ return /^[-+(]?[\d,]*\.?\d+\)?%?$|^(NA|N\/A|-|—|nil)$/i.test(s.trim()); }
+
+/* Columns from the header, when there is one. Header words stack: "Sr" over
+   "No", "Withdrawl" over "(Dr)". The first header line's runs are the
+   anchors; the second line's runs join the nearest anchor. Each anchor keeps
+   its span and its centre, and a data run belongs to the anchor whose centre
+   is nearest its own — which is right whether the column is left-aligned,
+   centred (the amounts and the balance in a bank statement) or right-aligned,
+   because a column's header is laid out the way its data is. */
+function mdHeaderAnchors(zone){
+  var L0=zone[0]; if(!L0 || L0.runs.length<3) return null;
+  var allText=function(L){ return L.runs.every(function(r){ return !mdIsNum(r.str); }); };
+  if(!allText(L0)) return null;
+  var anchors=L0.runs.map(function(r){ return { text:r.str, left:r.x, right:r.end }; });
+  var used=1, size=L0.size;
+  var L1=zone[1];
+  if(L1 && allText(L1) && L1.runs.length>=2 && L1.runs.length<=anchors.length && (L0.y-L1.y) < size*1.6){
+    var got=anchors.map(function(){return [];});
+    L1.runs.forEach(function(r){
+      var c=(r.x+r.end)/2, best=-1, d=1e9;
+      anchors.forEach(function(a,i){ var ac=(a.left+a.right)/2, dd=Math.abs(ac-c); if(dd<d){d=dd;best=i;} });
+      if(best>=0 && d <= Math.max(size*4, 40)) got[best].push(r);
+    });
+    /* "Withdrawl Deposit" printed too close to split, with "(Dr)" and "(Cr)"
+       beneath: two second-line words under one anchor mean the anchor is two
+       columns, cut at the word boundary between them. */
+    var rebuilt=[];
+    anchors.forEach(function(a,i){
+      var under=got[i];
+      var words=a.text.split(' ');
+      if(under.length>=2 && words.length>=under.length){
+        var per=Math.floor(words.length/under.length), at=0, len=a.text.length, pos=0;
+        under.forEach(function(r,k){
+          var take = k===under.length-1 ? words.length-at : per;
+          var txt=words.slice(at,at+take).join(' ');
+          var left=a.left + (a.right-a.left)*(pos/len), right=a.left + (a.right-a.left)*((pos+txt.length)/len);
+          rebuilt.push({ text:txt+' '+r.str, left:Math.min(left,r.x), right:Math.max(right,r.end) });
+          pos+=txt.length+1; at+=take;
+        });
+      } else {
+        under.forEach(function(r){ a.text+=' '+r.str; a.left=Math.min(a.left,r.x); a.right=Math.max(a.right,r.end); });
+        rebuilt.push(a);
+      }
+    });
+    anchors=rebuilt;
+    used=2;
+  }
+  anchors.forEach(function(a){ a.centre=(a.left+a.right)/2; a.kind='anchor'; });
+  return { cols:anchors, used:used, anchored:true, size:size };
+}
+/* Columns from rivers, when there is no header: x-intervals where no line of
+   the zone has ink separate the columns. Alignment does not matter to a
+   river, but a wide cell that happens to reach across a thin one closes it —
+   the header route is better whenever it is available. */
+function mdRiverColumns(lines){
+  var size=lines.reduce(function(a,L){return a+L.size;},0)/Math.max(1,lines.length);
+  var spans=[];
+  lines.forEach(function(L){ L.runs.forEach(function(r){ spans.push([r.x, r.end]); }); });
+  spans.sort(function(a,b){return a[0]-b[0];});
+  var cols=[];
+  spans.forEach(function(sp){
+    var t=cols[cols.length-1];
+    if(t && sp[0] <= t.right + size*0.45){ t.right=Math.max(t.right,sp[1]); t.n++; }
+    else cols.push({ left:sp[0], right:sp[1], n:1, kind:'river' });
+  });
+  cols=cols.filter(function(c){ return c.n>=2; });
+  cols.forEach(function(c){ c.centre=(c.left+c.right)/2; });
+  return { cols:cols, anchored:false, size:size };
+}
+function mdColumnOf(model,r){
+  var cols=model.cols, size=model.size||10, best=-1;
+  if(model.anchored){
+    var c=(r.x+r.end)/2, d=1e9;
+    cols.forEach(function(a,i){ var dd=Math.abs(a.centre-c); if(dd<d){d=dd;best=i;} });
+    return best;
+  }
+  var bestOv=0;
+  cols.forEach(function(col,i){ var ov=Math.min(r.end,col.right+size*0.5)-Math.max(r.x,col.left-size*0.5); if(ov>bestOv){bestOv=ov;best=i;} });
+  if(best<0){ var dm=1e9; cols.forEach(function(col,i){ var dd=Math.abs(col.centre-(r.x+r.end)/2); if(dd<dm){dm=dd;best=i;} }); }
+  return best;
+}
+/* Does this zone look like it belongs to a model learned earlier — the same
+   table continuing on the next page without its header? Most runs must land
+   near some column, and the lines must spread over two or more of them. */
+function mdFits(model,lines){
+  var hit=0, total=0, size=model.size||10;
+  lines.forEach(function(L){ L.runs.forEach(function(r){ total++; var c=(r.x+r.end)/2;
+    if(model.cols.some(function(col){ return c>=col.left-size*3 && c<=col.right+size*3; })) hit++; }); });
+  return total>=4 && hit/total>=0.8;
+}
+/* Which lines on this page are a table, and what its columns are. A zone is
+   a run of consecutive lines broken by a tall vertical gap or by a change of
+   font size — a 12pt label block above a 9pt table is two zones, not one.
+   Trailing one-run lines are kept: they are the wrapped tail of the last
+   row, not stragglers. */
+function mdFindTable(lines,start,known){
+  var zone=[], i=start;
+  for(; i<lines.length; i++){
+    var L=lines[i], prev=zone[zone.length-1];
+    if(prev){
+      if(prev.y-L.y > prev.size*2.2) break;                       // a gap: the block ended
+      if(Math.abs(L.size-zone[0].size) > 1.6 && zone.length>=2 && Math.abs(L.size-prev.size) > 1.6) break;
+    }
+    if(L.runs.length>=2 || (zone.length && L.runs.length===1)) zone.push(L); else break;
+  }
+  var multiLines=zone.filter(function(L){return L.runs.length>=2;}).length;
+  /* A table continuing from the page before may have only a row or two left
+     — the last page of a statement. With a model already in hand that the
+     lines fit, that is still the table; without one, a zone this short is
+     not enough evidence to call anything a table. */
+  var continues = known && zone.length>=1 && multiLines>=1 && mdFits(known,zone);
+  if((zone.length<3 || multiLines<2) && !continues) return null;
+  var anchors=mdHeaderAnchors(zone), model=null, dataStart=0;
+  /* A page that starts straight in with a data row — "4 | S9643946 | 23-Sep-"
+     — must not have that row mistaken for a header: when a known model fits
+     and the first line carries numbers, it is the table carrying on. */
+  var firstNumeric=zone[0].runs.some(function(r){ var s=r.str.replace(/\s/g,''); return mdIsNum(s) || /^\d{1,2}-[A-Za-z]{3}-/.test(s); });
+  if(continues && (firstNumeric || !anchors || anchors.cols.length<3)) model=known;
+  else if(anchors && anchors.cols.length>=3){ model=anchors; dataStart=anchors.used; }
+  else { model=mdRiverColumns(zone); if(model.cols.length<2) return null; }
+  var data=zone.slice(dataStart);
+  var multi=data.filter(function(L){ var seen={}; L.runs.forEach(function(r){ seen[mdColumnOf(model,r)]=1; }); return Object.keys(seen).length>=2; }).length;
+  if(multi < Math.max(1, multiLines*0.4)) return null;
+  return { lines:data, header: dataStart? model.cols.map(function(a){return a.text;}) : null, model:model, next:start+zone.length };
+}
+function mdBuildRows(zone,model){
+  var n=model.cols.length, rows=[], cur=null;
+  zone.forEach(function(L){
+    var cells=new Array(n).fill(null), filled=0;
+    L.runs.forEach(function(r){ var k=mdColumnOf(model,r); cells[k]=cells[k]? cells[k]+' '+r.str : r.str; });
+    cells.forEach(function(c){ if(c!=null) filled++; });
+    var newRow = !cur || cells[0]!=null || filled>=Math.max(2,Math.ceil(n*0.5));
+    if(newRow){ cur={cells:cells.map(function(c){return c||'';}), lines:1}; rows.push(cur); }
+    else {
+      cur.lines++;
+      cells.forEach(function(c,k){ if(c==null) return;
+        var have=cur.cells[k];
+        if(!have) cur.cells[k]=c;
+        /* a number broken across lines — "-", "29662943.7", "3" — and a
+           reference number whose digits ran on to the next line are joined
+           without a space; words get one */
+        else if((mdIsNum(have.replace(/\s/g,''))||/\d$/.test(have)) && /^[\d.,]+$/.test(c)) cur.cells[k]=have+c;
+        else if(/\/$/.test(have) && /^[A-Za-z0-9]/.test(c)) cur.cells[k]=have+c;          // "040700503644/HD" + "FC0002763" is one reference
+        else if(/\d-[A-Za-z]{3}-$/.test(have) && /^\d{2,4}$/.test(c)) cur.cells[k]=have+c;   // "23-Sep-" + "2025"
+        else cur.cells[k]=have+' '+c;
+      });
+    }
+  });
+  return rows;
+}
+function mdRowIsHeader(row,model){
+  var cells=row.cells.filter(Boolean); if(cells.length<2) return false;
+  var numeric=cells.filter(function(c){return mdIsNum(c.replace(/\s/g,''));}).length;
+  return numeric===0 && cells.length>=Math.ceil(model.cols.length*0.5);
+}
 async function pdfToMarkdown(bytes,opts,onPct){
   opts=opts||{};
   var pdf=await loadPdfjs(bytes), n=pdf.numPages;
@@ -1334,30 +1518,41 @@ async function pdfToMarkdown(bytes,opts,onPct){
     out.push('converted: '+new Date().toISOString().slice(0,10));
     out.push('---'); out.push('');
   }
-  var headings=0, words=0, tables=0;
+  var headings=0, words=0, tables=0, lastHeader=null, lastModel=null;
   pages.forEach(function(P){
     if(opts.pages){ out.push(''); out.push('<!-- page '+P.n+' -->'); if(P.n>1) out.push(''); }
+    var tablesBefore=tables;
     if(P.scanned){ out.push('<!-- page '+P.n+': no text layer (scanned image) — nothing to read here -->'); out.push(''); return; }
     var lines=P.lines.filter(function(L){ return !drop[mdNormKey(L.text)+'@'+Math.round(L.y/8)]; });
     var para=[], i=0;
     function flush(){ if(para.length){ out.push(para.join(' ').replace(/(\w)- (\w)/g,function(m,a,b){ return /[a-z]/.test(b)? a+b : m; })); out.push(''); words+=para.join(' ').split(/\s+/).length; para=[]; } }
     while(i<lines.length){
       var L=lines[i];
-      var tb=mdTableAt(lines,i,body);
+      var tb=mdFindTable(lines,i,lastModel);
       if(tb){
-        flush(); tables++;
-        var w=tb.rows[0].length;
-        out.push('| '+tb.rows[0].map(mdCellEsc).join(' | ')+' |');
-        out.push('|'+new Array(w).fill('---').join('|')+'|');
-        tb.rows.slice(1).forEach(function(r){ out.push('| '+r.map(mdCellEsc).join(' | ')+' |'); });
-        out.push(''); i=tb.next; continue;
+        var rows=mdBuildRows(tb.lines,tb.model);
+        var continued = tb.model===lastModel && !!lastHeader;                  // the table from the page before, carrying on
+        if(rows.length>=1 && (rows.length>=2 || tb.header || continued)){
+          flush(); tables++;
+          var hdr=tb.header;
+          if(!hdr && rows.length>1 && mdRowIsHeader(rows[0],tb.model)){ hdr=rows[0].cells; rows=rows.slice(1); }
+          if(!hdr && tb.model===lastModel && lastHeader) hdr=lastHeader;      // the table continuing from the page before
+          var w=tb.model.cols.length;
+          lastModel=tb.model; if(hdr) lastHeader=hdr;
+          if(hdr) out.push('| '+hdr.map(mdCellEsc).join(' | ')+' |');
+          else out.push('| '+new Array(w).fill(' ').join(' | ')+' |');
+          out.push('|'+new Array(w).fill('---').join('|')+'|');
+          rows.forEach(function(r){ out.push('| '+r.cells.map(mdCellEsc).join(' | ')+' |'); words+=r.cells.join(' ').split(/\s+/).length; });
+          out.push(''); i=tb.next; continue;
+        }
       }
-      var h=mdHeadingLevel(L,body,opts);
+      var h=mdHeadingLevel(L,lines[i+1],body,opts);
       if(h){ flush(); headings++; out.push(new Array(h+1).join('#')+' '+L.text.replace(/\s+/g,' ')); out.push(''); i++; continue; }
       var m;
       if((m=L.text.match(/^[•◦▪·●\-–—*]\s+(.*)$/))){ flush(); out.push('- '+m[1]); i++; if(!(lines[i]&&/^[•◦▪·●\-–—*]\s+/.test(lines[i].text))) out.push(''); continue; }
       if((m=L.text.match(/^(\d{1,3})[.)]\s+(.*)$/))){ flush(); out.push(m[1]+'. '+m[2]); i++; if(!(lines[i]&&/^\d{1,3}[.)]\s+/.test(lines[i].text))) out.push(''); continue; }
       if((m=L.text.match(/^\(?([a-z]|[ivx]{1,4})[.)]\s+(.*)$/))){ flush(); out.push('- '+m[2]); i++; continue; }
+      if(L.bold && L.size<=body*1.05 && L.text.length<=80 && !/:$/.test(L.text) && !para.length){ out.push('**'+L.text+'**'); out.push(''); i++; continue; }
       /* a body line: continues the paragraph unless the gap, the indent or
          what comes next says otherwise */
       var prev=lines[i-1];
@@ -1368,6 +1563,7 @@ async function pdfToMarkdown(bytes,opts,onPct){
       para.push(L.text); i++;
     }
     flush();
+    if(tables===tablesBefore){ lastModel=null; lastHeader=null; }   // a page with no table ends the run
   });
   if(onPct) onPct(100);
   var md=out.join('\n').replace(/\n{3,}/g,'\n\n').trim()+'\n';

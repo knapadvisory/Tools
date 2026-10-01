@@ -163,6 +163,88 @@ await t('two PDFs come back as a ZIP of two .md files', async () => {
   assert(names.join() === 'note.md,scan.md', 'members: ' + names);
 });
 
+console.log('\n── a bank statement: wrapped rows, centred amounts, a two-line header, no header on page 2 ──');
+/* Laid out the way a bank statement that came from the field is: nine
+   columns closer together than any gap on one line reveals, a header whose
+   words stack over two lines, a Remarks cell wrapping over three lines, an
+   amount column that is CENTRED, a balance so wide the column breaks it into
+   "-", "31120874.2", "3", a date wrapped as "23-Sep-" / "2025", and page 2
+   carrying straight on with no header. */
+await page.evaluate(async () => {
+  const { PDFDocument, StandardFonts } = PDFLib;
+  const doc = await PDFDocument.create();
+  const F = await doc.embedFont(StandardFonts.Helvetica);
+  const W = 595.28, H = 841.89;
+  const cols = [44, 80, 133, 187, 259, 340, 425, 478, 530];           // column centres-ish
+  const centred = (pg, txt, cx, y, size) => pg.drawText(txt, { x: cx - F.widthOfTextAtSize(txt, size) / 2, y, size, font: F });
+  const left = (pg, txt, x, y, size) => pg.drawText(txt, { x, y, size, font: F });
+  const rows = [
+    { sr: '1', id: 'S1120044', d: ['02-Apr-2025', '02-Apr-2025'], rem: ['004512003387:Int.', 'Coll:03-03-2025 to', '01-04-2025'], wd: '193166.00', dp: 'NA', bal: ['-', '31120874.2', '3'] },
+    { sr: '2', id: 'S1120391', d: ['02-Apr-2025', '02-Apr-2025'], rem: ['RTGS-', 'XBNKR52025040', '21188047-MEHRA', 'STORES'], wd: 'NA', dp: '274253.00', bal: ['-', '30846621.2', '3'] },
+    { sr: '3', id: 'S1120875', d: ['04-Apr-2025', '04-Apr-2025'], rem: ['RTGS/XBNKR42025', '040700112233/YB', 'NK0004410/STAR'], wd: '5000000.00', dp: 'NA', bal: ['-', '30750939.0', '1'] },
+    { sr: '4', id: 'S1121002', d: ['23-Sep-', '2025'], d2: '23-Sep-2025', rem: ['penal charges'], wd: '3219.78', dp: 'NA', bal: ['-', '30750939.0', '1'] },
+  ];
+  const drawRows = (pg, list, y0) => {
+    let y = y0;
+    for (const r of list) {
+      left(pg, r.sr, cols[0], y, 9); left(pg, r.id, cols[1], y, 9);
+      left(pg, r.d[0], cols[2], y, 9); left(pg, r.d2 || r.d[1], cols[3], y, 9);
+      centred(pg, r.rem[0], cols[5], y, 9); centred(pg, r.wd, cols[6], y, 9); centred(pg, r.dp, cols[7], y, 9); centred(pg, r.bal[0], cols[8], y, 9);
+      let yy = y - 9;
+      if (r.d2) { left(pg, r.d[1], cols[2], yy, 9); }
+      for (let k = 1; k < Math.max(r.rem.length, r.bal.length); k++) {
+        if (r.rem[k]) centred(pg, r.rem[k], cols[5], yy, 9);
+        if (r.bal[k]) centred(pg, r.bal[k], cols[8], yy, 9);
+        yy -= 9;
+      }
+      y = yy - 4;
+    }
+    return y;
+  };
+  const p1 = doc.addPage([W, H]);
+  left(p1, 'Detailed Statement', 36, H - 80, 12);
+  left(p1, 'Name:', 38, H - 110, 12); left(p1, 'ANAND EXPORTS', 157, H - 110, 12); left(p1, 'A/C Type:', 323, H - 110, 12); left(p1, 'CAA', 442, H - 110, 12);
+  left(p1, 'Address:', 38, H - 130, 12); left(p1, 'GURUGRAM', 157, H - 130, 12); left(p1, 'Cust ID:', 323, H - 130, 12); left(p1, '412380977', 442, H - 130, 12);
+  left(p1, 'A/C No:', 38, H - 150, 12); left(p1, '004512003387', 157, H - 150, 12); left(p1, 'IFSC Code:', 323, H - 150, 12); left(p1, 'XBNK0000412', 442, H - 150, 12);
+  const hy = H - 340;
+  [['Sr', 'No'], ['Tran', 'ID'], ['Value', 'Date'], ['Transaction', 'Date'], ['Cheque', 'no/ RefNo'], ['Transaction', 'Remarks'], ['Withdrawl', '(Dr)'], ['Deposit', '(Cr)'], ['Balance', '']].forEach(([a, b], i) => {
+    left(p1, a, cols[i], hy, 10); if (b) left(p1, b, cols[i], hy - 10, 10);
+  });
+  drawRows(p1, rows.slice(0, 3), hy - 26);
+  const p2 = doc.addPage([W, H]);
+  drawRows(p2, rows.slice(3), H - 50);
+  window.__stmt = await doc.save();
+});
+if (process.env.DUMP) fs.writeFileSync(process.env.DUMP, Buffer.from(await page.evaluate(() => btoa(String.fromCharCode.apply(null, window.__stmt))), 'base64'));
+await feed([['__stmt', 'statement.pdf']]);
+const st = await convert();
+const smd = st.md || '';
+console.log('\n' + smd.split('\n').filter((l) => /^\|/.test(l)).map((l) => '    ' + l.slice(0, 150)).join('\n') + '\n');
+await t('the two-line header becomes nine columns', () => {
+  assert(/^\| Sr No \| Tran ID \| Value Date \| Transaction Date \| Cheque no\/ RefNo \| Transaction Remarks \| Withdrawl \(Dr\) \| Deposit \(Cr\) \| Balance \|$/m.test(smd),
+    'header:\n' + (smd.match(/^\| Sr.*$/m) || ['(none)'])[0]);
+});
+await t('a row wrapped over three lines is one row, its remarks joined', () => {
+  assert(/^\| 1 \| S1120044 \| 02-Apr-2025 \| 02-Apr-2025 \|  \| 004512003387:Int\. Coll:03-03-2025 to 01-04-2025 \| 193166\.00 \| NA \| -31120874\.23 \|$/m.test(smd),
+    'row 1:\n' + (smd.match(/^\| 1 \|.*$/m) || ['(none)'])[0]);
+});
+await t('a balance broken into "-", "31120874.2", "3" is one number again', () => {
+  assert(/-31120874\.23/.test(smd) && !/\| -3 \|/.test(smd), 'the balance fragments must be joined without spaces');
+});
+await t('a number beside a remark, however close, is its own cell', () => {
+  assert(/^\| 3 \| S1120875 \| .* \| RTGS\/XBNKR42025 040700112233\/YB NK0004410\/STAR \| 5000000\.00 \| NA \| -30750939\.01 \|$/m.test(smd),
+    'row 3:\n' + (smd.match(/^\| 3 \|.*$/m) || ['(none)'])[0]);
+});
+await t('page 2 carries the header forward, and a wrapped date is mended', () => {
+  const after = smd.slice(smd.indexOf('<!-- page 2 -->'));
+  assert(/^\| Sr No \| Tran ID/m.test(after), 'the header must be repeated on page 2');
+  assert(/^\| 4 \| S1121002 \| 23-Sep-2025 \| 23-Sep-2025 \|/m.test(after), 'row 4:\n' + (after.match(/^\| 4 \|.*$/m) || ['(none)'])[0]);
+});
+await t('the label block above the table is its own small table, and nothing in it is a heading', () => {
+  assert(/^\| Name: \| ANAND EXPORTS \| A\/C Type: \| CAA \|$/m.test(smd), 'label block:\n' + (smd.match(/^\| Name.*$/m) || ['(none)'])[0]);
+  assert(!/^#+ /m.test(smd.replace(/^---[\s\S]*?---/, '')), 'no headings in a statement: ' + (smd.match(/^#+ .*$/m) || [''])[0]);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (errs.length) { console.log('\nBROWSER ERRORS:'); errs.slice(0, 5).forEach((e) => console.log('  ' + e)); }
 await browser.close(); srv.close();
