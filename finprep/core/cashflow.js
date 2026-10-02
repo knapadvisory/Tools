@@ -127,6 +127,19 @@ export function buildCashFlow(r, opts = {}) {
     const v = cashEffect(id);
     if (v !== 0) financing.push({ label: `Proceeds from ${r.caption(id)}`, amount: v });
   }
+  // The owners of a non-corporate entity put capital in and draw it out. The
+  // movement in their LEDGER balances (before the year's profit is added, which
+  // is not cash) is the net of the two. Remuneration or interest credited to
+  // the accounts rather than paid out sits inside this movement and offsets
+  // the charge taken above PBT — which is exactly its cash effect: none.
+  if (r.nce) {
+    const v = add(cashEffect('owners_capital'), cashEffect('partners_current'));
+    if (v !== 0) {
+      financing.push({ label: 'Capital introduced less drawings by the owners (net)', amount: v });
+      assumptions.push({ id: 'CF-OWN',
+        text: 'Owners’ capital movement is shown net of drawings and includes any remuneration or interest credited to the accounts rather than paid. The capital account statement shows the gross figures.' });
+    }
+  }
   const bor = schedules.borrowings || null;
   if (bor && (bor.drawn != null || bor.repaid != null)) {
     if (bor.drawn != null) financing.push({ label: 'Proceeds from borrowings', amount: toPaise(bor.drawn) });

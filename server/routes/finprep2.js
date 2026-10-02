@@ -12,9 +12,10 @@ import { handle, uid, now, log, sealSnapshot, isSealed } from '../db.js';
 import { build, validateJournal } from '../../finprep/core/engine.js';
 import { buildCashFlow } from '../../finprep/core/cashflow.js';
 import { toPaise, toRupees, SCALES, permittedScales } from '../../finprep/core/money.js';
-import { captionFor } from '../../finprep/core/schedule3.js';
-import { presentationModel } from '../../finprep/core/notes.js';
+import { captionFor, CONSTITUTIONS, constitutionOf, divisionForConstitution, frameworkLabel } from '../../finprep/core/schedule3.js';
+import { presentationModel, sectionTitles } from '../../finprep/core/notes.js';
 import { sectionOf as sectionOfLine, linesFor, SECTIONS } from '../../finprep/core/schedule3.js';
+import { OWNER_LEDGER_KINDS } from '../../finprep/core/owners.js';
 import { assessAll, requiredFacts, RULE_DEFS } from '../../finprep/core/applicability.js';
 import { observe } from '../../finprep/core/observations.js';
 import { subGroupOf } from '../../finprep/core/subgroup.js';
@@ -61,19 +62,74 @@ const bad = (res, msg, code = 400) => res.status(code).json({ ok: false, error: 
 
 /* ---------- engagements ------------------------------------------------- */
 router.post('/engagements', (req, res) => {
-  const { clientName, cin, fyStart, fyEnd, division } = req.body || {};
+  const { clientName, cin, pan, fyStart, fyEnd } = req.body || {};
+  let { division, constitution } = req.body || {};
   if (!clientName || !fyStart || !fyEnd) return bad(res, 'clientName, fyStart and fyEnd are required');
-  if (division && !['AS', 'INDAS'].includes(division)) return bad(res, 'division must be AS or INDAS');
+  constitution = constitution || 'company';
+  if (!CONSTITUTIONS[constitution]) return bad(res, 'constitution must be one of ' + Object.keys(CONSTITUTIONS).join(', '));
+  if (division && !['AS', 'INDAS', 'NCE'].includes(division)) return bad(res, 'division must be AS, INDAS or NCE');
+  // The constitution decides the format. A company picks AS or Ind AS; every
+  // other constitution reports in the ICAI non-corporate format.
+  division = divisionForConstitution(constitution, division);
   const id = uid('eng');
-  db().prepare(`INSERT INTO engagements (id,client_name,cin,fy_start,fy_end,division,created_at,created_by)
-                VALUES (?,?,?,?,?,?,?,?)`)
-    .run(id, clientName, cin || null, fyStart, fyEnd, division || 'AS', now(), actor(req));
-  log(id, actor(req), 'engagement.created', { clientName, fyStart, fyEnd });
-  res.json({ ok: true, id });
+  db().prepare(`INSERT INTO engagements (id,client_name,cin,pan,fy_start,fy_end,division,constitution,created_at,created_by)
+                VALUES (?,?,?,?,?,?,?,?,?,?)`)
+    .run(id, clientName, cin || null, pan || null, fyStart, fyEnd, division, constitution, now(), actor(req));
+  log(id, actor(req), 'engagement.created', { clientName, fyStart, fyEnd, constitution, division });
+  res.json({ ok: true, id, division, constitution });
 });
 
 router.get('/engagements', (_req, res) => {
-  res.json({ ok: true, engagements: db().prepare('SELECT * FROM engagements ORDER BY created_at DESC').all() });
+  const rows = db().prepare('SELECT * FROM engagements ORDER BY created_at DESC').all();
+  res.json({ ok: true, engagements: rows.map((e) => ({ ...e, constitutionLabel: constitutionOf(e.constitution).label })) });
+});
+
+router.get('/constitutions', (_req, res) => {
+  res.json({ ok: true, constitutions: Object.entries(CONSTITUTIONS).map(([key, c]) =>
+    ({ key, label: c.label, isCorporate: c.isCorporate, owners: c.owners, ownerRole: c.ownerRole,
+       division: divisionForConstitution(key), framework: frameworkLabel(divisionForConstitution(key)) })) });
+});
+
+/* ---------- owners: proprietor, partners, karta ------------------------- */
+function loadOwners(engagementId) {
+  return db().prepare('SELECT * FROM owners WHERE engagement_id=? ORDER BY sort, rowid').all(engagementId).map((o) => ({
+    id: o.id, name: o.name, role: o.role || '', ratio: o.ratio, pan: o.pan || '',
+    ledgers: (() => { try { return JSON.parse(o.ledgers || '{}'); } catch { return {}; } })(),
+    split: o.split_paise == null ? null : toRupees(o.split_paise),
+  }));
+}
+router.get('/engagements/:id/owners', (req, res) => {
+  const eng = db().prepare('SELECT * FROM engagements WHERE id=?').get(req.params.id);
+  if (!eng) return bad(res, 'engagement not found', 404);
+  res.json({ ok: true, owners: loadOwners(eng.id), profitTo: eng.profit_to || 'capital',
+    constitution: eng.constitution, kinds: OWNER_LEDGER_KINDS });
+});
+/** Replace the owners as a set — ratios, PAN, ledgers by kind, manual split. */
+router.put('/engagements/:id/owners', (req, res) => {
+  const eng = db().prepare('SELECT * FROM engagements WHERE id=?').get(req.params.id);
+  if (!eng) return bad(res, 'engagement not found', 404);
+  const { owners, profitTo } = req.body || {};
+  if (!Array.isArray(owners)) return bad(res, 'owners[] is required');
+  if (profitTo && !['capital', 'current'].includes(profitTo)) return bad(res, 'profitTo must be capital or current');
+  const d = db();
+  d.exec('BEGIN');
+  try {
+    d.prepare('DELETE FROM owners WHERE engagement_id=?').run(eng.id);
+    const ins = d.prepare('INSERT INTO owners (id,engagement_id,name,role,ratio,pan,ledgers,split_paise,sort) VALUES (?,?,?,?,?,?,?,?,?)');
+    owners.forEach((o, i) => {
+      if (!o || !String(o.name || '').trim()) return;
+      const ledgers = {};
+      for (const k of OWNER_LEDGER_KINDS) ledgers[k] = Array.isArray(o.ledgers && o.ledgers[k]) ? o.ledgers[k].map(String) : [];
+      const ratio = Number(o.ratio);
+      ins.run(o.id && /^own_/.test(o.id) ? o.id : uid('own'), eng.id, String(o.name).trim(), o.role || null,
+        Number.isFinite(ratio) && ratio > 0 ? ratio : 0, o.pan || null, JSON.stringify(ledgers),
+        (o.split == null || o.split === '') ? null : toPaise(o.split), i);
+    });
+    if (profitTo) d.prepare('UPDATE engagements SET profit_to=? WHERE id=?').run(profitTo, eng.id);
+    d.exec('COMMIT');
+  } catch (e) { d.exec('ROLLBACK'); return bad(res, e.message, 500); }
+  log(eng.id, actor(req), 'owners.saved', { count: owners.length, profitTo });
+  res.json({ ok: true, owners: loadOwners(eng.id), profitTo: profitTo || eng.profit_to });
 });
 
 /* ---------- snapshots (immutable once sealed) --------------------------- */
@@ -92,14 +148,17 @@ router.post('/engagements/:id/snapshots', (req, res) => {
                VALUES (?,?,?,?,?,?,?,?,?)`)
       .run(sid, eng.id, source, method, connectorVersion || null, company || null, periodFrom || null, periodTo || null, now());
 
-    const insL = d.prepare(`INSERT INTO ledgers (id,snapshot_id,tally_id,name,grp,primary_grp,group_path,gstin,is_revenue)
-                            VALUES (?,?,?,?,?,?,?,?,?)`);
+    const insL = d.prepare(`INSERT INTO ledgers (id,snapshot_id,tally_id,name,grp,primary_grp,group_path,gstin,is_revenue,mov_dr_paise,mov_cr_paise)
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
     const insB = d.prepare('INSERT INTO balances (snapshot_id,ledger_id,period,amount_paise) VALUES (?,?,?,?)');
     let ctrl = { current: 0, prior: 0 };
     for (const l of ledgers) {
       const lid = uid('led');
+      // gross movements for the period, when the source supplied them
+      const hasMov = l.drTotal != null || l.crTotal != null;
       insL.run(lid, sid, l.id || l.tallyId || null, l.name, l.group || null, l.primary || null,
-        JSON.stringify(l.groupPath || []), l.gstin || null, l.isRevenue ? 1 : 0);
+        JSON.stringify(l.groupPath || []), l.gstin || null, l.isRevenue ? 1 : 0,
+        hasMov ? Math.abs(toPaise(l.drTotal || 0)) : null, hasMov ? Math.abs(toPaise(l.crTotal || 0)) : null);
       for (const p of ['current', 'prior']) {
         const amt = toPaise(l[p] == null ? 0 : l[p]);
         insB.run(sid, lid, p, amt);
@@ -194,6 +253,8 @@ function loadForBuild(engagementId, snapshotId) {
       groupPath: JSON.parse(r.group_path || '[]'), gstin: r.gstin, isRevenue: !!r.is_revenue,
       // balances already integer paise — hand them over as rupees for a single conversion point
       balances: { current: toRupees(b.current || 0), prior: toRupees(b.prior || 0) },
+      mov: (r.mov_dr_paise != null || r.mov_cr_paise != null)
+        ? { dr: toRupees(r.mov_dr_paise || 0), cr: toRupees(r.mov_cr_paise || 0) } : null,
     };
   });
 
@@ -214,11 +275,21 @@ function loadForBuild(engagementId, snapshotId) {
 
   const jrows = d.prepare('SELECT * FROM journals WHERE engagement_id=? AND superseded=0').all(engagementId);
   const journals = jrows.map((j) => ({
-    id: j.id, approved: !!j.approved, period: j.period, narration: j.narration,
+    id: j.id, approved: !!j.approved, period: j.period, narration: j.narration, kind: j.kind,
+    createdAt: j.created_at, approvedBy: j.approved_by,
     entries: d.prepare('SELECT * FROM journal_entries WHERE journal_id=?').all(j.id)
-      .map((e) => ({ ledgerId: e.ledger_id, lineId: e.line_id, amount: toRupees(e.amount_paise) })),
+      .map((e) => ({ id: e.id, ledgerId: e.ledger_id, lineId: e.line_id, amount: toRupees(e.amount_paise) })),
   }));
-  return { eng, snap, ledgers, overrides, journals, priorOverrides, subOverrides };
+  const owners = loadOwners(engagementId);
+  return { eng, snap, ledgers, overrides, journals, priorOverrides, subOverrides, owners };
+}
+
+/** Everything build() needs from a loaded context — one place, so the screen,
+ *  the export and the release all compute the same statements. */
+function buildArgs(ctx) {
+  return { ledgers: ctx.ledgers, journals: ctx.journals, division: ctx.eng.division,
+    constitution: ctx.eng.constitution || 'company', owners: ctx.owners || [], profitTo: ctx.eng.profit_to || 'capital',
+    overrides: ctx.overrides, priorOverrides: ctx.priorOverrides };
 }
 
 router.get('/engagements/:id/statements', (req, res) => {
@@ -233,8 +304,7 @@ router.get('/engagements/:id/statements', (req, res) => {
 function buildPayload(ctx, schedules = {}) {
   const scaleKey = SCALES[ctx.eng.scale] ? ctx.eng.scale : 'full';
   SCALE_DIV = SCALES[scaleKey].div;
-  const r = build({ ledgers: ctx.ledgers, journals: ctx.journals,
-    division: ctx.eng.division, overrides: ctx.overrides, priorOverrides: ctx.priorOverrides });
+  const r = build(buildArgs(ctx));
   const cf = buildCashFlow(r, { schedules });
   const model = presentationModel(r, { subOverrides: ctx.subOverrides || {} });
   const allChecks = r.checks.concat(cf.checks);
@@ -260,8 +330,10 @@ function buildPayload(ctx, schedules = {}) {
       drcr: cur.amount >= 0 ? 'Dr' : 'Cr',
       current: toRupees(natural(cur.amount, cur.lineId)) / SCALE_DIV,
       prior: toRupees(natural(pri.amount, pri.lineId)) / SCALE_DIV,
-      lineId: cur.lineId, lineCaption: captionFor(cur.lineId, r.division),
+      lineId: cur.lineId, lineCaption: captionFor(cur.lineId, r.division, r.constitution),
       note: r.noteNumbers.get(cur.lineId) || null,
+      movDr: l.mov ? toRupees(l.mov.dr) / SCALE_DIV : null,
+      movCr: l.mov ? toRupees(l.mov.cr) / SCALE_DIV : null,
       // Grouping ▸ Sub-grouping ▸ Ledger, as Tally holds it
       tallySubGroup: subGroupOf(l),
       subGroup: (lineOfLedger.get(l.name) || {}).noteLine || null,
@@ -269,20 +341,30 @@ function buildPayload(ctx, schedules = {}) {
     };
   });
 
+  const con = constitutionOf(ctx.eng.constitution);
   return {
     meta: {
-      entity: ctx.eng.client_name, cin: ctx.eng.cin || '', division: ctx.eng.division,
+      entity: ctx.eng.client_name, cin: ctx.eng.cin || '', pan: ctx.eng.pan || '', division: r.division,
+      constitution: ctx.eng.constitution || 'company', constitutionLabel: con.label,
+      ownersLabel: con.owners, ownerRole: con.ownerRole, framework: frameworkLabel(r.division),
+      owners: (r.ownersUsed || []).map((o) => ({ id: o.id, name: o.name, role: o.role || con.ownerRole, pan: o.pan || '', ratio: o.ratio })),
+      profitTo: ctx.eng.profit_to || 'capital',
       currentLabel: fmtDate(ctx.eng.fy_end), priorLabel: priorLabel(ctx.eng.fy_end),
+      fyStart: ctx.eng.fy_start, fyEnd: ctx.eng.fy_end,
       status: releasable ? 'Draft' : 'Draft — blocked',
       snapshotId: ctx.snap.id, takenAt: ctx.snap.taken_at,
       scale: scaleKey,
       scaleLabel: SCALES[scaleKey].label,
       permittedScales: permittedScales(r.value('revenue_operations', 'current') * -1 || 0),
+      sectionTitles: sectionTitles(r.division),
     },
     trialBalance,
     balanceSheet: rupDeep(model.balanceSheet),
     profitAndLoss: rupDeep(model.profitAndLoss),
     notes: rupDeep(model.notes),
+    ownersAccounts: model.ownersAccounts ? rupDeep(model.ownersAccounts) : null,
+    journals: ctx.journals.map((j) => ({ ...j, entries: j.entries.map((e) => ({ ...e,
+      ledgerName: (ctx.ledgers.find((l) => l.id === e.ledgerId) || {}).name || null })) })),
     cashFlow: rupDeep({ ...cf, checks: undefined }),
     checks: allChecks.map((c) => ({ ...c, amount: c.amount != null ? toRupees(c.amount) / SCALE_DIV : undefined })),
     disclosures: model.disclosures,
@@ -300,8 +382,7 @@ router.post('/engagements/:id/release', (req, res) => {
   // The SAME build as the one that was reviewed and exported. Leaving the
   // imported comparatives out here would seal a version whose prior column
   // differs from the one on screen.
-  const r = build({ ledgers: ctx.ledgers, journals: ctx.journals, division: ctx.eng.division,
-    overrides: ctx.overrides, priorOverrides: ctx.priorOverrides });
+  const r = build(buildArgs(ctx));
   const cf = buildCashFlow(r, { schedules: (req.body && req.body.schedules) || {} });
   const blocking = r.checks.concat(cf.checks).filter((c) => c.severity === 'CRITICAL');
   const wanted = (req.body && req.body.status) || 'reviewed';
@@ -411,14 +492,16 @@ router.post('/engagements/:id/scale', (req, res) => {
 /* The grouping dropdown must offer EVERY head, not only the ones already in
  * use — otherwise a head can never be assigned for the first time.           */
 router.get('/lines', (req, res) => {
-  const division = ['AS', 'INDAS'].includes(req.query.division) ? req.query.division : 'AS';
+  const division = ['AS', 'INDAS', 'NCE'].includes(req.query.division) ? req.query.division : 'AS';
+  const constitution = CONSTITUTIONS[req.query.constitution] ? req.query.constitution : null;
   const SECTION_TITLE = {
-    EQUITY: 'Shareholders’ funds / Equity', NCL: 'Non-current liabilities', CL: 'Current liabilities',
+    EQUITY: division === 'NCE' ? 'Owners’ funds' : 'Shareholders’ funds / Equity',
+    NCL: 'Non-current liabilities', CL: 'Current liabilities',
     NCA: 'Non-current assets', CA: 'Current assets', INCOME: 'Income', EXPENSE: 'Expenses',
     TAX: 'Tax expense', OCI: 'Other comprehensive income', UNCLASSIFIED: 'Unassigned',
   };
   const lines = linesFor(division).map((l) => ({
-    lineId: l.id, caption: captionFor(l.id, division), section: l.section,
+    lineId: l.id, caption: captionFor(l.id, division, constitution), section: l.section,
     sectionTitle: SECTION_TITLE[l.section] || l.section,
     statement: (SECTIONS[l.section] || {}).statement || '',
   }));

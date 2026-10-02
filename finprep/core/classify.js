@@ -94,6 +94,24 @@ const RULES = [
   { when: (c) => c.isPL && anyWord(c.gn, ['change in inventory', 'change in stock', 'increase decrease in stock']),
     then: () => R('changes_in_inventories', 'high', 'Changes in inventories') },
 
+  // ===== owners of a non-corporate entity ================================
+  // Appropriations to the partners are charged in the statement of profit and
+  // loss and credited to their capital accounts; they are neither employee
+  // costs nor finance costs, so these rules run before both.
+  { when: (c) => c.nce && c.isPL && (anyWord(c.gn, ['partner remuneration', 'remuneration to partner', 'partner salary',
+                                                     'salary to partner', 'working partner salary', 'partner commission',
+                                                     'remuneration to proprietor', 'proprietor remuneration'])
+                                       || (anyWord(c.gn, ['partner']) && anyWord(c.gn, ['remuneration', 'salary', 'commission']))),
+    then: () => R('partners_remuneration', 'high', 'Remuneration to partners — an appropriation, not an employee cost') },
+  { when: (c) => c.nce && c.isPL && (anyWord(c.gn, ['interest on capital', 'interest on partner capital', 'interest to partner',
+                                                     'interest on partner', 'interest on proprietor capital'])
+                                       || (anyWord(c.gn, ['partner']) && anyWord(c.gn, ['interest']))),
+    then: () => R('interest_on_capital', 'high', 'Interest on partners’ capital — an appropriation, not a finance cost') },
+  // In a firm, a ledger called just "Remuneration" (or "Remuneration - Ramesh")
+  // is almost always the partners'; employees get "salary". Flagged for review.
+  { when: (c) => c.nce && c.isPL && anyWord(c.gn, ['remuneration']) && !anyWord(c.gn, ['director', 'staff', 'employee', 'manager']),
+    then: () => R('partners_remuneration', 'medium', 'Remuneration in a firm — taken as the partners’; confirm', { review: true }) },
+
   // ===== employee benefits ===============================================
   { when: (c) => c.isPL && anyWord(c.gn, ['salary', 'wage', 'bonus', 'staff', 'employee', 'provident fund', 'pf',
                                           'gratuity', 'esi', 'leave encashment', 'remuneration', 'stipend',
@@ -123,9 +141,19 @@ const RULES = [
                                 // Tally writes the P&L ledger as "Profit & Loss A/c"
                                 'profit and loss a c', 'profit loss a c', 'p l a c']),
     then: () => R('reserves_surplus', 'high', 'Reserves and surplus') },
-  { when: (c) => anyWord(c.path, ['capital account', 'share capital', 'equity share capital',
+  // A non-corporate entity has owners, not shareholders. Tally books the
+  // proprietor's or partners' accounts under "Capital Account"; a partner's
+  // current account and a drawings ledger sit there too. Drawings carry a
+  // debit balance and simply reduce the capital account — no altLine, because
+  // netting IS the right presentation inside an owner's own account.
+  { when: (c) => c.nce && !c.isPL && (anyWord(c.path, ['capital account']) ||
+                 anyWord(c.name, ['capital', 'drawing', 'partner current', 'current account', 'proprietor'])),
+    then: (c) => (anyWord(c.name, ['current account', 'current a c', 'partner current'])
+      ? R('partners_current', 'high', 'Partner’s current account')
+      : R('owners_capital', 'high', anyWord(c.name, ['drawing']) ? 'Drawings — reduces the owner’s capital' : 'Owner’s capital account')) },
+  { when: (c) => !c.nce && (anyWord(c.path, ['capital account', 'share capital', 'equity share capital',
                                   'preference share capital']) ||
-                 anyWord(c.name, ['share capital', 'equity share capital', 'preference share capital']),
+                 anyWord(c.name, ['share capital', 'equity share capital', 'preference share capital'])),
     then: () => R('share_capital', 'high', 'Under Share Capital / Capital Account',
       { review: true, needs: ['confirm issued, subscribed and paid-up capital',
                               'a proprietor or partner capital account is not share capital'] }) },
@@ -238,7 +266,7 @@ const RULES = [
 const GSTIN_RX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/;
 
 /** Build the matching context for a ledger. */
-function context(led) {
+function context(led, opts = {}) {
   const chain = (led.groupPath && led.groupPath.length ? led.groupPath.slice() : [led.group, led.primary])
     .filter((x) => x && !/^primary$/i.test(String(x)));
   const path = norm(chain.join(' '));
@@ -249,15 +277,17 @@ function context(led) {
   return {
     name, path, gn: (path + name.slice(1)), isPL,
     hasGstin: !!(led.gstin && GSTIN_RX.test(String(led.gstin).toUpperCase())),
+    nce: !!opts.nce,                      // non-corporate entity: owners, not shareholders
   };
 }
 
 /**
  * Classify a ledger into a RULE (not yet a final line — the side matters).
  * Returns { line, altLine, confidence, reason, review, needs }.
+ * `opts.nce` selects the owners' lines of the non-corporate format.
  */
-export function classifyLedger(led) {
-  const c = context(led);
+export function classifyLedger(led, opts = {}) {
+  const c = context(led, opts);
   for (const rule of RULES) {
     let ok = false;
     try { ok = rule.when(c); } catch { ok = false; }

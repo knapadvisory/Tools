@@ -28,7 +28,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import v8 from 'node:v8';
 
-const VERSION = '4.79';
+const VERSION = '4.80';
 // Bumped WITH connector/version.json — the two are compared to decide a
 // self-update, so a mismatch either loops every connector in the field or
 // hides the build. connector/version.test.mjs fails the pair apart.
@@ -843,9 +843,13 @@ function accumulateTB(xml, sums, seen, cal, fromKey, toKey, seenSig) {
       if (dpStr) c = /yes/i.test(dpStr) ? amt : -amt;
       else { c = -rawAmt; cal.noFlag++; } // Tally standard fallback: debit is negative
       let s = sums[name];
-      if (!s) s = sums[name] = { dr: 0, priorDr: 0 };
+      if (!s) s = sums[name] = { dr: 0, priorDr: 0, gDr: 0, gCr: 0 };
       s.dr = r2(s.dr + c);
       if (isPrior) s.priorDr = r2(s.priorDr + c);
+      // Gross debits and gross credits inside the period, kept apart. A net
+      // balance cannot say how much a partner introduced and how much they
+      // drew; the capital account statement needs both sides.
+      else if (c >= 0) s.gDr = r2(s.gDr + c); else s.gCr = r2(s.gCr - c);
     }
     cal.vouchers++;
   }
@@ -4773,7 +4777,7 @@ const server = http.createServer(async (req, res) => {
         })(gn, 0);
         const ledgers = [...names].map((name) => {
           const m = masters[name] || { parent: '', openingDr: 0 };
-          const mv = sums[name] || { dr: 0, priorDr: 0 };
+          const mv = sums[name] || { dr: 0, priorDr: 0, gDr: 0, gCr: 0 };
           const open = m.openingDr || 0;
           const path = groupPathOf(m.parent, groups); // ["Sundry Creditors","Current Liabilities"]
           return {
@@ -4784,6 +4788,8 @@ const server = http.createServer(async (req, res) => {
             isRevenue: !!(groups[m.parent] && anyRevenueAncestor(m.parent)),
             current: r2(open + mv.dr),        // closing at period-to
             prior: r2(open + mv.priorDr),     // balance at period-from
+            drTotal: r2(mv.gDr || 0),         // gross debits in the period (v4.80+)
+            crTotal: r2(mv.gCr || 0),         // gross credits in the period
           };
         }).filter((l) => Math.abs(l.current) > 0.005 || Math.abs(l.prior) > 0.005);
 

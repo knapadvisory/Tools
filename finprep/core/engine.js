@@ -20,9 +20,10 @@
  * ==========================================================================*/
 
 import { toPaise, add, sub, neg, format } from './money.js';
-import { line, sectionOf, sideOf, linesFor, captionFor, assignNoteNumbers, SECTIONS } from './schedule3.js';
+import { line, sectionOf, sideOf, linesFor, captionFor, assignNoteNumbers, SECTIONS, constitutionOf } from './schedule3.js';
 import { classifyLedger, lineForBalance } from './classify.js';
 import { subGroupOf } from './subgroup.js';
+import { ownersAccounts, normaliseOwners, autoAssign } from './owners.js';
 
 const SEV = { CRITICAL: 'CRITICAL', HIGH: 'HIGH', REVIEW: 'REVIEW', INFO: 'INFO' };
 
@@ -39,6 +40,12 @@ export function normaliseLedgers(raw, periods = ['current', 'prior']) {
       const v = l.balances ? l.balances[p] : l[p];
       balances[p] = toPaise(v == null ? 0 : v);
     }
+    // Gross debit and credit movements for the current period, when the
+    // source supplied them (the connector sums them from the vouchers). The
+    // owners' capital accounts need both sides; a net balance cannot say how
+    // much was introduced and how much drawn.
+    const dr = l.mov ? l.mov.dr : l.drTotal, cr = l.mov ? l.mov.cr : l.crTotal;
+    const mov = (dr != null || cr != null) ? { dr: Math.abs(toPaise(dr || 0)), cr: Math.abs(toPaise(cr || 0)) } : null;
     return {
       id: l.id || l.ledgerId || `L${i}:${l.name}`,   // stable-ish; real id comes from Tally when available
       name: l.name,
@@ -48,6 +55,7 @@ export function normaliseLedgers(raw, periods = ['current', 'prior']) {
       gstin: l.gstin || '',
       isRevenue: !!l.isRevenue,
       balances,
+      mov,
     };
   });
 }
@@ -73,9 +81,14 @@ export function validateJournal(j) {
 }
 
 /* ---------- the build --------------------------------------------------- */
-export function build({ ledgers, journals = [], periods = ['current', 'prior'], division = 'AS', overrides = {}, priorOverrides = null }) {
+export function build({ ledgers, journals = [], periods = ['current', 'prior'], division = 'AS',
+                        constitution = 'company', owners = [], profitTo = 'capital',
+                        overrides = {}, priorOverrides = null }) {
   const leds = normaliseLedgers(ledgers, periods);
   const checks = [];
+  // A non-corporate constitution reports in the ICAI format whatever was asked.
+  const nce = division === 'NCE' || !constitutionOf(constitution).isCorporate;
+  if (nce) division = 'NCE';
 
   // ---- 1. Original trial balance -------------------------------------
   const originalTB = leds.map((l) => ({ ledgerId: l.id, name: l.name, balances: { ...l.balances } }));
@@ -127,7 +140,7 @@ export function build({ ledgers, journals = [], periods = ['current', 'prior'], 
   for (const l of leds) {
     const ov = overrides[l.id] || overrides[l.name];
     const rule = ov ? { line: ov, altLine: null, confidence: 'high', reason: 'manual override', review: false, needs: [] }
-                    : classifyLedger(l);
+                    : classifyLedger(l, { nce });
     const perPeriod = {};
     for (const p of periods) {
       const bal = adjustedTB.find((r) => r.ledgerId === l.id).balances[p];
@@ -145,7 +158,7 @@ export function build({ ledgers, journals = [], periods = ['current', 'prior'], 
     }
     if (rule.review) {
       checks.push({ id: `MAP-${l.id}`, severity: SEV.REVIEW,
-        message: `"${l.name}" → ${captionFor(perPeriod[periods[0]].lineId, division)} (${rule.confidence} confidence: ${rule.reason})` });
+        message: `"${l.name}" → ${captionFor(perPeriod[periods[0]].lineId, division, constitution)} (${rule.confidence} confidence: ${rule.reason})` });
     }
     ledgerInfo.push({ ...l, rule, perPeriod });
   }
@@ -233,24 +246,42 @@ export function build({ ledgers, journals = [], periods = ['current', 'prior'], 
   }
 
   const bs = {};
+  const profitAccount = profitTo === 'current' ? 'partners_current' : 'owners_capital';
   for (const p of periods) {
     // reserves close on PAT (C2). Reserve ledgers carry the opening accumulated
     // balance; the year's result is added here, after tax.
     const reservesOpening = pres('reserves_surplus', p);
     // An imported comparative for reserves is last year's CLOSING figure, so the
     // year's profit is already inside it and must not be added again.
-    const reserves = (p === periods[1] && priorSet.has('reserves_surplus'))
-      ? reservesOpening
-      : add(reservesOpening, pl[p].pat);
-    const equity = add(pres('share_capital', p), reserves,
-                       pres('share_warrants', p), pres('share_application_money', p));
+    const isPriorImported = (id) => p === periods[1] && priorSet.has(id);
+    let reserves, equity, ownersCapital = 0, partnersCurrent = 0;
+    if (nce) {
+      // A non-corporate entity's profit belongs to its owners: it closes into
+      // the capital (or current) accounts by the profit-sharing ratio, and the
+      // reserves carry only what the books hold in them. Only the CURRENT
+      // year's profit is added: the comparative capital figure is last year's
+      // closing balance, which already has last year's profit inside it (the
+      // books appropriate it before the year opens), so the comparative P&L is
+      // a comparative only — see the prior-period check below.
+      reserves = reservesOpening;
+      const ownersLedger = pres('owners_capital', p);
+      const currentLedger = pres('partners_current', p);
+      const addProfit = p === periods[0];
+      ownersCapital = add(ownersLedger, (addProfit && profitAccount === 'owners_capital') ? pl[p].pat : 0);
+      partnersCurrent = add(currentLedger, (addProfit && profitAccount === 'partners_current') ? pl[p].pat : 0);
+      equity = add(ownersCapital, partnersCurrent, reserves);
+    } else {
+      reserves = isPriorImported('reserves_surplus') ? reservesOpening : add(reservesOpening, pl[p].pat);
+      equity = add(pres('share_capital', p), reserves,
+                   pres('share_warrants', p), pres('share_application_money', p));
+    }
     const ncl = presSection('NCL', p);
     const cl = presSection('CL', p);
     const nca = presSection('NCA', p);
     const ca = presSection('CA', p);
     const eqLiab = add(equity, ncl, cl);
     const assets = add(nca, ca);
-    bs[p] = { reservesOpening, reserves, equity, ncl, cl, nca, ca, eqLiab, assets,
+    bs[p] = { reservesOpening, reserves, equity, ownersCapital, partnersCurrent, ncl, cl, nca, ca, eqLiab, assets,
               difference: sub(assets, eqLiab) };
   }
 
@@ -262,9 +293,19 @@ export function build({ ledgers, journals = [], periods = ['current', 'prior'], 
     unclCr[p] = add(...recs.filter((r) => r.amount < 0).map((r) => r.amount));
     const net = lineVal('unclassified', p);
 
-    if (tbSum[p] !== 0) {
-      checks.push({ id: `TB-${p}`, severity: SEV.CRITICAL, amount: tbSum[p],
-        message: `Trial balance for "${p}" does not sum to nil — out by ${format(tbSum[p])}. The source books do not balance; this is not a presentation issue.` });
+    // For a non-corporate entity the comparative column holds last year's
+    // closing balance sheet (profit already in the capital) beside last year's
+    // P&L as a comparative, so the two halves of that column do not sum to nil
+    // together. The balance sheet half must still tie on its own.
+    let tbCheck = tbSum[p];
+    if (nce && p !== periods[0]) {
+      const PL = ['INCOME', 'EXPENSE', 'TAX', 'OCI'];
+      tbCheck = add(...leds.map((l) => (PL.includes(sectionOf(ledgerInfo.find((x) => x.id === l.id).perPeriod[p].lineId)) ? 0
+        : adjustedTB.find((r) => r.ledgerId === l.id).balances[p])));
+    }
+    if (tbCheck !== 0) {
+      checks.push({ id: `TB-${p}`, severity: SEV.CRITICAL, amount: tbCheck,
+        message: `Trial balance for "${p}" does not sum to nil — out by ${format(tbCheck)}. The source books do not balance; this is not a presentation issue.` });
     }
     if (net !== 0 || unclDr[p] !== 0 || unclCr[p] !== 0) {
       checks.push({ id: `UNCL-${p}`, severity: SEV.CRITICAL, amount: net,
@@ -280,29 +321,51 @@ export function build({ ledgers, journals = [], periods = ['current', 'prior'], 
       message: `${rejected.length} journal(s) are recorded but not approved; they are excluded from the adjusted trial balance.` });
   }
 
+  // ---- 5b. The owners' capital accounts of a non-corporate entity -------
+  let ownersResult = null, ownersUsed = owners;
+  if (nce) {
+    const normalised = normaliseOwners(owners);
+    const auto = autoAssign(normalised, ledgerInfo);
+    ownersUsed = auto.owners;
+    const adjusted = new Map(adjustedTB.map((r) => [r.ledgerId, r.balances]));
+    ownersResult = ownersAccounts({
+      ledgers: ledgerInfo, adjusted, pat: pl[periods[0]].pat, owners: ownersUsed, profitTo,
+      faceCapital: bs[periods[0]].ownersCapital, faceCurrent: bs[periods[0]].partnersCurrent, constitution,
+    });
+    ownersResult.assignments = auto.assignments;
+    checks.push(...ownersResult.checks);
+    // the profit account must exist on the face even when no ledger sits on it
+    if (pl[periods[0]].pat !== 0) {
+      const cur = byLine.get(profitAccount) || {};
+      if (!cur[periods[0]]) { cur[periods[0]] = 0; byLine.set(profitAccount, cur); }
+    }
+  }
+
   // information each used head still needs before it can be called complete
   const used = new Set([...byLine.keys()].filter((id) => periods.some((p) => lineVal(id, p) !== 0)));
+  if (nce && pl[periods[0]].pat !== 0) used.add(profitAccount);
   const noteNumbers = assignNoteNumbers(used, division);
   const disclosureGaps = [];
   for (const id of used) {
     const def = line(id);
     if (def && def.requires && def.requires.length) {
-      disclosureGaps.push({ lineId: id, caption: captionFor(id, division), note: noteNumbers.get(id) || null, requires: def.requires });
+      disclosureGaps.push({ lineId: id, caption: captionFor(id, division, constitution), note: noteNumbers.get(id) || null, requires: def.requires });
     }
   }
 
   const releasable = !checks.some((c) => c.severity === SEV.CRITICAL);
 
   return {
-    division, periods,
+    division, periods, constitution, nce, profitTo,
     originalTB, adjustedTB, journals: { approved, rejected },
     ledgers: ledgerInfo,
     byLine, trace, noteNumbers, used,
     tbSum, unclassified: { dr: unclDr, cr: unclCr },
     pl, bs, checks, disclosureGaps, releasable,
+    owners: ownersResult, ownersUsed,
     priorOverridesApplied: [...priorSet],
     /** helpers for the presentation layer */
-    value: lineVal, presented: pres, caption: (id) => captionFor(id, division),
+    value: lineVal, presented: pres, caption: (id) => captionFor(id, division, constitution),
   };
 }
 

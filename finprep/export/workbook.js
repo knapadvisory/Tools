@@ -113,15 +113,27 @@ const TOP_DOUBLE = { top: { style: 'thin', color: { argb: INK.rule } },
  * statement this is and for which period, the scale the figures are in, and
  * the status of the file. Returns the first free row.
  */
+/** The reporting framework a set of statements is prepared under. */
+function frameworkOf(meta) {
+  if (meta.framework) return meta.framework;
+  if (meta.division === 'NCE') return 'ICAI Guidance Note on Financial Statements of Non-Corporate Entities';
+  return meta.division === 'INDAS'
+    ? 'Schedule III, Division II — Indian Accounting Standards'
+    : 'Schedule III, Division I — Accounting Standards';
+}
+/** CIN for a company, PAN for everyone else, plus the constitution. */
+function identityLine(meta) {
+  return [meta.cin ? `CIN: ${meta.cin}` : (meta.pan ? `PAN: ${meta.pan}` : null),
+          meta.division === 'NCE' && meta.constitutionLabel ? meta.constitutionLabel : null,
+          frameworkOf(meta)].filter(Boolean).join('   ·   ');
+}
+
 function masthead(ws, meta, title, lastCol, extra) {
   const L = colLetter(lastCol);
   ws.mergeCells(`A1:${L}1`);
   put(ws, 1, 1, txt(meta.entity) || 'Entity', { font: { bold: true, size: 13, color: { argb: INK.title } } });
 
-  const div = meta.division === 'INDAS'
-    ? 'Schedule III, Division II — Indian Accounting Standards'
-    : 'Schedule III, Division I — Accounting Standards';
-  const id = [meta.cin ? `CIN: ${meta.cin}` : null, div].filter(Boolean).join('   ·   ');
+  const id = identityLine(meta);
   ws.mergeCells(`A2:${L}2`);
   put(ws, 2, 1, id, { font: { size: 9, color: { argb: INK.muted } } });
 
@@ -172,33 +184,46 @@ function columnHeads(ws, r, meta, heads) {
  */
 function signatures(ws, meta, r) {
   const a = meta.auditor || {};
-  const board = arr(meta.directors).length ? arr(meta.directors)
-              : [{ name: '', din: '' }, { name: '', din: '' }];
   const muted = { font: { size: 9, color: { argb: INK.muted } } };
   const bold = { font: { bold: true, size: 9 } };
   const plain = { font: { size: 9 } };
+  // Who signs for the entity: the board of a company; the proprietor, the
+  // partners or the karta of a non-corporate entity, each with their PAN.
+  const nce = meta.division === 'NCE';
+  const owners = arr(meta.owners);
+  const signers = nce
+    ? (owners.length ? owners.map((o) => ({ name: o.name, role: o.role || meta.ownerRole || 'Partner', id: o.pan ? `PAN ${o.pan}` : '' }))
+                     : [{ name: '', role: meta.ownerRole || 'Partner', id: '' }, { name: '', role: meta.ownerRole || 'Partner', id: '' }])
+    : (arr(meta.directors).length ? arr(meta.directors) : [{ name: '', din: '' }, { name: '', din: '' }])
+        .map((d) => ({ name: d.name, role: 'Director', id: `DIN ${d.din || '__________'}` }));
+  const forLine = nce ? `For ${txt(meta.entity)}` : 'For and on behalf of the Board of Directors';
 
   r += 1;
   put(ws, r, 1, `For ${a.firm || '________________________'}`, bold);
-  put(ws, r, 3, 'For and on behalf of the Board of Directors', bold);
+  put(ws, r, 3, forLine, bold);
   r += 1;
   put(ws, r, 1, 'Chartered Accountants', plain);
-  put(ws, r, 3, txt(meta.entity), plain);
+  put(ws, r, 3, nce ? (meta.constitutionLabel || '') : txt(meta.entity), plain);
   r += 1;
   put(ws, r, 1, `Firm registration no. ${a.frn || '____________'}`, muted);
   r += 3;                                                  // room to sign
+  // signers two to a row, in columns C and D
+  const rows = [];
+  for (let i = 0; i < signers.length; i += 2) rows.push(signers.slice(i, i + 2));
   put(ws, r, 1, a.partner || '________________________', plain);
-  put(ws, r, 3, board[0].name || '________________________', plain);
-  if (board[1]) put(ws, r, 4, board[1].name || '________________________', plain);
+  rows.forEach((pair, k) => {
+    const rr = r + k * 4;
+    pair.forEach((s, j) => {
+      put(ws, rr, 3 + j, s.name || '________________________', plain);
+      put(ws, rr + 1, 3 + j, s.role, muted);
+      if (s.id) put(ws, rr + 2, 3 + j, s.id, muted);
+    });
+  });
   r += 1;
   put(ws, r, 1, 'Partner', muted);
-  put(ws, r, 3, 'Director', muted);
-  if (board[1]) put(ws, r, 4, 'Director', muted);
   r += 1;
   put(ws, r, 1, `Membership no. ${a.membership || '__________'}`, muted);
-  put(ws, r, 3, `DIN ${board[0].din || '__________'}`, muted);
-  if (board[1]) put(ws, r, 4, `DIN ${board[1].din || '__________'}`, muted);
-  r += 2;
+  r += Math.max(2, (rows.length - 1) * 4 + 2);
   put(ws, r, 1, `Place: ${meta.place || '____________'}`, plain);
   put(ws, r, 3, `Place: ${meta.place || '____________'}`, plain);
   r += 1;
@@ -403,8 +428,13 @@ function buildNotes(ws, p, tbIndex, link) {
     totalRowByNote.set(Number(note.number), { row: r, current: num(note.current), prior: num(note.prior) });
     r += 1;
 
+    if (note.kind === 'owners' && note.schedule) {
+      put(ws, r, 1, '        The owner-wise statement of this account is on the sheet "Capital Accounts".',
+          { font: { size: 8, italic: true, color: { argb: INK.muted } } });
+      r += 1;
+    }
     for (const req of arr(note.requires)) {
-      put(ws, r, 1, '        Schedule III requires: ' + txt(req),
+      put(ws, r, 1, `        ${meta.division === 'NCE' ? 'The format requires' : 'Schedule III requires'}: ` + txt(req),
           { font: { size: 8, italic: true, color: { argb: INK.muted } } });
       put(ws, r, 4, 'See the Disclosures register',
           { font: { size: 8, italic: true, color: { argb: INK.muted } } });
@@ -413,6 +443,78 @@ function buildNotes(ws, p, tbIndex, link) {
     r += 1;
   }
   return totalRowByNote;
+}
+
+/* --------------------------------------------------- owners' capital accounts */
+
+/**
+ * One table per account (capital, and current where used): a column for each
+ * owner, one for anything not yet assigned to an owner, and a total that is
+ * the figure on the face. Rows: opening, introduced, interest, remuneration,
+ * share of profit, drawings, closing. The closing row is a SUM of the rows
+ * above it, so the sheet shows its own arithmetic.
+ */
+function buildCapitalAccounts(ws, p) {
+  const meta = p.meta;
+  const oa = p.ownersAccounts || {};
+  const label = txt(meta.ownersLabel) || 'Owners';
+  let r = masthead(ws, meta, `${label}’ accounts for the year ended ${meta.currentLabel}`, 8, false);
+  frame(ws, [46, 18, 18, 18, 18, 18, 18, 18], r - 1);
+
+  for (const key of ['capital', 'current']) {
+    const s = oa[key];
+    if (!s) continue;
+    const owners = arr(s.owners);
+    const hasUn = arr(s.unallocated).length > 0;
+    const heads = [{ label: key === 'capital' ? `${label}’ capital accounts` : `${label}’ current accounts` }]
+      .concat(owners.map((o) => ({ label: o.name + (o.ratio ? `\n(ratio ${o.ratio})` : ''), right: true })))
+      .concat(hasUn ? [{ label: `Unallocated\n(${s.unallocated.length} ledger${s.unallocated.length === 1 ? '' : 's'})`, right: true }] : [])
+      .concat([{ label: 'Total', right: true }]);
+    ws.getRow(r).height = 28;
+    r = columnHeads(ws, r, meta, heads);
+    const first = r;
+    const closingIdx = arr(s.rows).findIndex((x) => x.key === 'closing');
+    arr(s.rows).forEach((row, i) => {
+      const isClosing = row.key === 'closing', isOpening = row.key === 'opening';
+      const sign = row.key === 'drawings' ? -1 : 1;           // drawings reduce the account
+      const f = { font: { size: 9, bold: isClosing || isOpening }, border: isClosing ? TOP_DOUBLE : undefined };
+      put(ws, r, 1, (isClosing || isOpening ? '' : '    ') + txt(row.caption), f);
+      let c = 2;
+      const cells = [];
+      const writeCell = (val) => {
+        const v = sign * num(val);
+        if (isClosing && closingIdx > 0) {
+          const col = colLetter(c);
+          money(ws, r, c, num(val), `SUM(${col}${first}:${col}${r - 1})`, f);
+        } else money(ws, r, c, v, null, Object.assign({ numFmt: NUM_BR }, f));
+        cells.push(c); c += 1;
+      };
+      owners.forEach((o) => writeCell((row.byOwner || {})[o.id] || 0));
+      if (hasUn) writeCell(row.unallocated || 0);
+      // the total column adds across
+      const totalFormula = cells.length ? `SUM(${colLetter(cells[0])}${r}:${colLetter(cells[cells.length - 1])}${r})` : null;
+      money(ws, r, c, isClosing ? num(row.total) : sign * num(row.total), totalFormula, Object.assign({ numFmt: NUM_BR }, f));
+      r += 1;
+    });
+    r += 1;
+    const notes = [];
+    if (s.profitTo) notes.push(`Share of profit ${txt(s.shareBasis || 'by profit-sharing ratio')}; the parts add back to the profit for the year exactly.`);
+    const noGross = owners.filter((o) => !o.hasGross).map((o) => o.name);
+    if (noGross.length) notes.push(`Capital introduced and drawings are shown net for ${noGross.join(', ')} — the source did not supply gross movements.`);
+    const cred = owners.filter((o) => o.credited).map((o) => o.name);
+    if (cred.length) notes.push(`Remuneration and interest for ${cred.join(', ')} are shown as credited to the account because it received at least that much in credits during the year.`);
+    if (hasUn) notes.push(`Unallocated: ${s.unallocated.join('; ')}.`);
+    for (const n of notes) {
+      ws.mergeCells(`A${r}:${colLetter(2 + owners.length + (hasUn ? 1 : 0))}${r}`);
+      put(ws, r, 1, '· ' + n, { font: { size: 8, italic: true, color: { argb: INK.muted } }, align: { wrapText: true, vertical: 'top' } });
+      ws.getRow(r).height = 24;
+      r += 1;
+    }
+    r += 2;
+  }
+  if (!oa.capital && !oa.current) {
+    put(ws, r, 1, 'No owners’ account is in use.', { font: { size: 9, italic: true } });
+  }
 }
 
 /* -------------------------------------------------------------- face sheets */
@@ -454,12 +556,8 @@ function buildBalanceSheet(ws, p, noteTotals, link) {
   const L = 'D';
   ws.mergeCells(`A${r}:${L}${r}`);
   put(ws, r, 1, txt(meta.entity) || 'Entity', { font: { bold: true, size: 13, color: { argb: INK.title } } });
-  const div = meta.division === 'INDAS'
-    ? 'Schedule III, Division II — Indian Accounting Standards'
-    : 'Schedule III, Division I — Accounting Standards';
   ws.mergeCells(`A${r + 1}:${L}${r + 1}`);
-  put(ws, r + 1, 1, [meta.cin ? `CIN: ${meta.cin}` : null, div].filter(Boolean).join('   ·   '),
-      { font: { size: 9, color: { argb: INK.muted } } });
+  put(ws, r + 1, 1, identityLine(meta), { font: { size: 9, color: { argb: INK.muted } } });
   ws.mergeCells(`A${r + 2}:${L}${r + 2}`);
   put(ws, r + 2, 1, `Balance sheet as at ${meta.currentLabel}`,
       { font: { bold: true, size: 11, color: { argb: INK.title } } });
@@ -635,7 +733,7 @@ function buildProfitAndLoss(ws, p, noteTotals, link) {
   const patFormula = taxRows.length
     ? (col) => `${col}${pbtRow}-SUM(${taxRows.map((x) => col + x).join(',')})`
     : (col) => `${col}${pbtRow}`;
-  totalRow('Profit for the year', pl.pat, patFormula, true);
+  totalRow((pl.pat && pl.pat.caption) || 'Profit for the year', pl.pat, patFormula, true);
 
   r += 1;
   put(ws, r, 1, 'The accompanying notes form an integral part of these financial statements.',
@@ -874,6 +972,7 @@ export function buildWorkbook(ExcelJS, payload) {
     balanceSheet: p.balanceSheet || {},
     profitAndLoss: p.profitAndLoss || {},
     notes: arr(p.notes),
+    ownersAccounts: p.ownersAccounts || null,
     cashFlow: p.cashFlow || {},
     checks: arr(p.checks),
     disclosures: arr(p.disclosures),
@@ -886,14 +985,18 @@ export function buildWorkbook(ExcelJS, payload) {
   wb.calcProperties = wb.calcProperties || {};
   wb.calcProperties.fullCalcOnLoad = true;      // recalculate, but the cache is already right
 
-  // Created in presentation order; filled in dependency order below.
+  // Created in presentation order; filled in dependency order below. A
+  // non-corporate entity gets its owners' accounts as a sheet of their own.
+  const sheetNames = SHEETS.slice();
+  if (model.ownersAccounts) sheetNames.splice(sheetNames.indexOf('Notes') + 1, 0, 'Capital Accounts');
   const ws = {};
-  for (const name of SHEETS) ws[name] = wb.addWorksheet(name, { properties: { tabColor: undefined } });
+  for (const name of sheetNames) ws[name] = wb.addWorksheet(name, { properties: { tabColor: undefined } });
 
   const link = { leaves: 0, unlinked: 0, unlinkedNames: [], faceLinked: 0, faceUnlinked: 0, faceUnlinkedNames: [] };
 
   const tbIndex = buildTrialBalance(ws['Trial Balance'], model);
   const noteTotals = buildNotes(ws.Notes, model, tbIndex, link);
+  if (ws['Capital Accounts']) buildCapitalAccounts(ws['Capital Accounts'], model);
   const faceRowByLine = buildBalanceSheet(ws['Balance Sheet'], model, noteTotals, link);
   buildProfitAndLoss(ws['Profit & Loss'], model, noteTotals, link);
   buildCashFlow(ws['Cash Flow'], model, faceRowByLine);

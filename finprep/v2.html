@@ -58,12 +58,16 @@
   .tabs button{border:1px solid var(--rule);background:#fff;padding:7px 13px;border-radius:7px;cursor:pointer;font:inherit;font-size:13px}
   .tabs button.on{background:var(--green);color:#fff;border-color:var(--green);font-weight:600}
   td select.assign{width:100%;min-width:190px;font-size:12px;padding:4px}
+  td select.pick{width:100%;min-width:130px;font-size:11px;padding:2px;height:58px}
+  table.own th,table.own td{padding:5px 7px;font-size:12px;white-space:nowrap}
+  table.own td.r{font-variant-numeric:tabular-nums}
+  table.own tr.tot td{font-weight:700;border-top:2px solid var(--rule)}
 </style>
 </head>
 <body>
 <div class="band">
   <a href="/">← All tools</a>
-  <h1>Financial statements <span class="muted" style="color:#cfe6d7;font-weight:400">· Schedule III</span></h1>
+  <h1>Financial statements <span class="muted" id="bandSub" style="color:#cfe6d7;font-weight:400">· Schedule III and ICAI non-corporate formats</span></h1>
   <span class="pill info" id="engPill" style="background:#245a3c;color:#cfe6d7">no engagement</span>
   <select id="scalePick" title="Schedule III requires the figures to be rounded off" style="font-size:12px;padding:4px 6px">
     <option value="full">₹ in full</option><option value="hundreds">₹ in hundreds</option>
@@ -103,13 +107,16 @@
       </div>
       <h3 style="margin:0 0 10px;font-size:13px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em">Start a new engagement</h3>
       <div class="row">
-        <div style="flex:1;min-width:240px"><label>Client legal name</label><input id="cName" placeholder="ABC Private Limited" style="width:100%"></div>
-        <div><label>CIN</label><input id="cCin" placeholder="U74999XX2019PTC000000"></div>
+        <div style="flex:1;min-width:240px"><label>Client legal name</label><input id="cName" placeholder="ABC Private Limited / M/s ABC Traders" style="width:100%"></div>
+        <div><label>Constitution</label><select id="cCon"></select></div>
+        <div id="cCinWrap"><label>CIN</label><input id="cCin" placeholder="U74999XX2019PTC000000"></div>
+        <div><label>PAN</label><input id="cPan" placeholder="AAAAA0000A" style="width:120px"></div>
         <div><label>FY start</label><input id="cStart" type="date" value="2025-04-01"></div>
         <div><label>FY end</label><input id="cEnd" type="date" value="2026-03-31"></div>
-        <div><label>Framework</label><select id="cDiv"><option value="AS">AS · Division I</option><option value="INDAS">Ind AS · Division II</option></select></div>
+        <div id="cDivWrap"><label>Framework</label><select id="cDiv"><option value="AS">AS · Division I</option><option value="INDAS">Ind AS · Division II</option></select></div>
         <button class="btn" id="engNew" type="button">Create</button>
       </div>
+      <div id="cFramework" class="muted" style="margin-top:6px"></div>
       <div id="m1" class="muted" style="margin-top:8px"></div>
     </div>
   </section>
@@ -172,6 +179,22 @@
 
   <!-- 3 GROUPING -->
   <section id="s4" class="hidden">
+    <div class="card hidden" id="ownCard">
+      <h2 id="ownTitle">Partners and profit sharing</h2>
+      <p class="sub">The year’s profit is divided by these ratios, to the paisa, and each partner’s capital account is prepared from their own ledgers — opening, capital introduced, drawings, interest, remuneration, share of profit, closing. Ledgers are matched by the partner’s name where they carry it; set the rest here. A manual share, if entered for every partner, replaces the ratio for this year and must add up to the profit.</p>
+      <div class="row">
+        <div><label>The year’s profit closes into</label><select id="ownProfitTo"><option value="capital">the capital accounts</option><option value="current">the current accounts</option></select></div>
+        <button class="btn ghost sm" id="ownAdd" type="button">+ Add</button>
+        <button class="btn sm" id="ownSave" type="button">Save &amp; rebuild</button>
+        <span id="mOwn" class="muted"></span>
+      </div>
+      <div class="wrap" style="margin-top:10px;max-height:none"><table class="fin" id="ownTbl"><thead><tr>
+        <th>Name</th><th>Role</th><th>PAN</th><th class="r" title="Profit-sharing ratio, as in the deed — 60 and 40, or 3 and 2">Ratio</th>
+        <th class="r" title="Leave blank to share by ratio">Manual share ₹</th>
+        <th>Capital ledgers</th><th>Current a/c</th><th>Drawings</th><th>Remuneration</th><th>Interest on capital</th><th></th>
+      </tr></thead><tbody id="ownRows"></tbody></table></div>
+      <div id="ownNote" class="muted" style="margin-top:8px"></div>
+    </div>
     <div class="card">
       <h2>Review the grouping</h2>
       <p class="sub">Every ledger, the Schedule III head it reached, and the line it will appear on in the note. Ledgers of the same nature share one note line — edit the caption to move a ledger onto a different line, or give it its own. Approved decisions are remembered for this engagement.</p>

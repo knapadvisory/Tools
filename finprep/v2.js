@@ -13,7 +13,10 @@ const inr = (n) => (n == null || n === '' ? '' :
   (n < 0 ? '(' + Math.abs(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ')'
          : n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })));
 
-const S = { eng: null, payload: null, ledgers: null, maxStep: 1, tab: 'bs', heads: [], inputs: null, prior: null, comparatives: [] };
+const S = { eng: null, payload: null, ledgers: null, maxStep: 1, tab: 'bs', heads: [], inputs: null, prior: null, comparatives: [],
+            constitutions: [], owners: [], profitTo: 'capital' };
+/** Is the open engagement a non-corporate entity (ICAI format)? */
+const isNCE = () => !!(S.eng && S.eng.division === 'NCE');
 
 /* ---------- plumbing ---------------------------------------------------- */
 async function api(path, opts = {}) {
@@ -62,6 +65,25 @@ document.querySelectorAll('#stepper .step').forEach((el) =>
   el.addEventListener('click', () => go(+el.dataset.step)));
 
 /* ---------- 1. engagement ---------------------------------------------- */
+/** The constitutions the server knows, and the framework each one reports in. */
+async function loadConstitutions() {
+  try {
+    const { constitutions } = await api('/constitutions');
+    S.constitutions = constitutions;
+    $('cCon').innerHTML = constitutions.map((c) => `<option value="${esc(c.key)}">${esc(c.label)}</option>`).join('');
+    onConstitutionPick();
+  } catch (e) { msg('m1', 'Could not reach the server: ' + e.message, 'bad'); }
+}
+function onConstitutionPick() {
+  const c = S.constitutions.find((x) => x.key === $('cCon').value) || {};
+  $('cDivWrap').classList.toggle('hidden', !c.isCorporate);
+  $('cCinWrap').classList.toggle('hidden', !c.isCorporate);
+  $('cFramework').textContent = c.isCorporate
+    ? 'A company reports under Schedule III — pick Division I (AS) or Division II (Ind AS).'
+    : (c.framework ? `Reports in the ${c.framework}: owners’ funds in place of share capital, with ${String(c.owners || 'the owners').toLowerCase()}’ capital accounts prepared owner by owner.` : '');
+}
+$('cCon').onchange = onConstitutionPick;
+
 async function loadEngagements() {
   try {
     const { engagements } = await api('/engagements');
@@ -69,28 +91,97 @@ async function loadEngagements() {
     $('engExisting').classList.toggle('hidden', engagements.length === 0);
     $('engFirst').classList.toggle('hidden', engagements.length > 0);
     $('engList').innerHTML = engagements.map((e) =>
-      `<option value="${e.id}">${esc(e.client_name)} — FY ${esc(e.fy_start)} to ${esc(e.fy_end)} (${e.division})</option>`).join('');
+      `<option value="${e.id}">${esc(e.client_name)} — FY ${esc(e.fy_start)} to ${esc(e.fy_end)} · ${esc(e.constitutionLabel || e.constitution || 'Company')} (${e.division})</option>`).join('');
   } catch (e) { msg('m1', 'Could not reach the server: ' + e.message, 'bad'); }
 }
 async function openEngagement(id) {
   const { engagements } = await api('/engagements');
   S.eng = engagements.find((e) => e.id === id);
   if (!S.eng) return;
+  S.heads = [];                                         // the chart depends on the division
   $('engPill').textContent = S.eng.client_name + ' · FY ' + S.eng.fy_end.slice(0, 4);
+  $('bandSub').textContent = S.eng.division === 'NCE' ? '· ICAI non-corporate format · ' + (S.eng.constitutionLabel || '')
+    : S.eng.division === 'INDAS' ? '· Schedule III, Division II' : '· Schedule III, Division I';
   $('pFrom').value = S.eng.fy_start; $('pTo').value = S.eng.fy_end;
   if (S.eng.scale) $('scalePick').value = S.eng.scale;
+  $('ownCard').classList.toggle('hidden', !isNCE());
   reach(3); go(2);
   await loadInputs();
+  if (isNCE()) await loadOwners();
   try { await refresh(); } catch { /* no snapshot yet — expected */ }
 }
 $('engNew').onclick = async () => {
   try {
     const { id } = await api('/engagements', { method: 'POST', body: JSON.stringify({
-      clientName: $('cName').value.trim(), cin: $('cCin').value.trim(),
+      clientName: $('cName').value.trim(), cin: $('cCin').value.trim(), pan: $('cPan').value.trim().toUpperCase(),
+      constitution: $('cCon').value,
       fyStart: $('cStart').value, fyEnd: $('cEnd').value, division: $('cDiv').value }) });
     msg('m1', 'Engagement created.', 'ok');
     await loadEngagements(); $('engList').value = id; await openEngagement(id);
   } catch (e) { msg('m1', e.message, 'bad'); }
+};
+
+/* ---------- owners: proprietor, partners, karta ------------------------- */
+const OWNER_KINDS = [['capital', 'owners_capital'], ['current', 'partners_current'], ['drawings', 'owners_capital'],
+                     ['remuneration', 'partners_remuneration'], ['interest', 'interest_on_capital']];
+async function loadOwners() {
+  if (!S.eng) return;
+  const j = await api(`/engagements/${S.eng.id}/owners`);
+  S.owners = j.owners || []; S.profitTo = j.profitTo || 'capital';
+  $('ownProfitTo').value = S.profitTo;
+  const con = S.constitutions.find((c) => c.key === S.eng.constitution) || {};
+  $('ownTitle').textContent = (con.owners || 'Owners') + ' and profit sharing';
+  renderOwners();
+}
+/** Ledgers a picker may offer: those on the kind's line, plus any already chosen. */
+function ownerLedgerOptions(kind, lineId, chosen) {
+  const tb = (S.payload && S.payload.trialBalance) || [];
+  const names = new Set(tb.filter((r) => r.lineId === lineId).map((r) => r.ledger));
+  for (const c of chosen) names.add(c);
+  return [...names].sort().map((n) => `<option value="${esc(n)}"${chosen.includes(n) ? ' selected' : ''}>${esc(n)}</option>`).join('');
+}
+function renderOwners() {
+  const con = S.constitutions.find((c) => c.key === (S.eng || {}).constitution) || {};
+  const auto = ((S.payload || {}).ownersAccounts || {}).assignments || [];
+  $('ownRows').innerHTML = S.owners.map((o, i) => `<tr data-i="${i}">
+    <td><input class="o-name" value="${esc(o.name)}" style="width:150px"></td>
+    <td><input class="o-role" value="${esc(o.role || con.ownerRole || '')}" style="width:110px"></td>
+    <td><input class="o-pan" value="${esc(o.pan || '')}" style="width:110px;text-transform:uppercase"></td>
+    <td class="r"><input class="o-ratio" type="number" min="0" step="any" value="${o.ratio || ''}" style="width:70px;text-align:right"></td>
+    <td class="r"><input class="o-split" type="number" step="0.01" value="${o.split == null ? '' : o.split}" placeholder="by ratio" style="width:120px;text-align:right"></td>
+    ${OWNER_KINDS.map(([k, line]) => `<td><select multiple class="pick" data-kind="${k}" title="Hold Ctrl to pick several">${ownerLedgerOptions(k, line, (o.ledgers || {})[k] || [])}</select></td>`).join('')}
+    <td><button class="btn ghost sm" data-del="${i}" type="button" title="Remove">×</button></td>
+  </tr>`).join('') || `<tr><td colspan="11" class="muted">No ${String(con.owners || 'owners').toLowerCase()} recorded yet — press “+ Add”.</td></tr>`;
+  $('ownRows').querySelectorAll('[data-del]').forEach((b) => b.onclick = () => { readOwnerRows(); S.owners.splice(+b.dataset.del, 1); renderOwners(); });
+  const sum = S.owners.reduce((t, o) => t + (Number(o.ratio) || 0), 0);
+  $('ownNote').innerHTML = (auto.length
+    ? `Matched by name: ${auto.map((a) => `${esc(a.ledger)} → ${esc(a.owner)} (${a.kind})`).join(' · ')}. Save to make these explicit.<br>` : '')
+    + (S.owners.length ? `Ratios add to ${sum}; each share is ratio ÷ ${sum || 1}. ` : '')
+    + 'A ledger left unassigned is shown in an “unallocated” column of the capital account until it is placed.';
+}
+function readOwnerRows() {
+  const rows = [...$('ownRows').querySelectorAll('tr[data-i]')];
+  S.owners = rows.map((tr, i) => {
+    const prev = S.owners[i] || {};
+    const ledgers = {};
+    tr.querySelectorAll('select.pick').forEach((s) => { ledgers[s.dataset.kind] = [...s.selectedOptions].map((x) => x.value); });
+    const split = tr.querySelector('.o-split').value;
+    return { id: prev.id, name: tr.querySelector('.o-name').value.trim(), role: tr.querySelector('.o-role').value.trim(),
+      pan: tr.querySelector('.o-pan').value.trim().toUpperCase(), ratio: Number(tr.querySelector('.o-ratio').value) || 0,
+      split: split === '' ? null : Number(split), ledgers };
+  });
+}
+$('ownAdd').onclick = () => { readOwnerRows(); S.owners.push({ name: '', ratio: S.owners.length ? 0 : 1, ledgers: {} }); renderOwners(); };
+$('ownSave').onclick = async () => {
+  readOwnerRows();
+  const owners = S.owners.filter((o) => o.name);
+  try {
+    const j = await api(`/engagements/${S.eng.id}/owners`, { method: 'PUT', body: JSON.stringify({ owners, profitTo: $('ownProfitTo').value }) });
+    S.owners = j.owners; S.profitTo = j.profitTo;
+    await refresh();
+    renderOwners();
+    msg('mOwn', `${owners.length} saved and the statements rebuilt.`, 'ok');
+  } catch (e) { msg('mOwn', e.message, 'bad'); }
 };
 $('engOpen').onclick = () => { const v = $('engList').value; if (v) openEngagement(v); };
 
@@ -162,16 +253,19 @@ async function refresh() {
   S.payload = j;
   if (!S.heads.length) await loadHeads();
   renderGrouping(); renderStatements(); renderChecks(); renderExport();
+  if (isNCE()) renderOwners();
   reach(5);
   renderObservations();
 }
 /**
- * The full Schedule III chart, from the server. It must NOT be derived from the
- * heads already in use, or a head could never be assigned for the first time.
+ * The full chart of heads for this division, from the server. It must NOT be
+ * derived from the heads already in use, or a head could never be assigned for
+ * the first time.
  */
 async function loadHeads() {
   const div = (S.eng && S.eng.division) || 'AS';
-  const { lines } = await api('/lines?division=' + div);
+  const con = (S.eng && S.eng.constitution) || 'company';
+  const { lines } = await api('/lines?division=' + div + '&constitution=' + encodeURIComponent(con));
   S.heads = lines;
 }
 /** <optgroup> markup, sections in Schedule III order, with the current pick selected. */
@@ -335,6 +429,7 @@ function renderStatements() {
     for (const n of j.notes) {
       h += `<table class="fin" style="margin-bottom:14px"><thead><tr>
         <th>Note ${n.number} — ${esc(n.caption)}</th><th class="r">${esc(m.currentLabel)}</th><th class="r">${esc(m.priorLabel)}</th></tr></thead><tbody>`;
+      if (n.kind === 'owners' && n.schedule) h += `<tr><td colspan="3" style="padding:8px 0 10px">${ownersTable(n.schedule, m)}</td></tr>`;
       for (const s of n.subLines) {
         h += `<tr><td>${esc(s.name)}</td><td class="r">${inr(s.current)}</td><td class="r">${inr(s.prior)}</td></tr>`;
         // the ledgers behind a sub-grouped line, so the figure stays traceable
@@ -349,6 +444,28 @@ function renderStatements() {
     if (!j.notes.length) h = '<p class="muted" style="padding:12px">No notes yet.</p>';
   }
   $('stBody').innerHTML = h;
+}
+
+/** The owner-by-owner statement of a capital or current account. */
+function ownersTable(s, m) {
+  const cols = s.owners || [];
+  const un = s.unallocated && s.unallocated.length;
+  let h = `<table class="fin own" style="width:auto;min-width:60%"><thead><tr><th>${esc(m.ownersLabel || 'Owners')} — ${s.kind === 'capital' ? 'capital' : 'current'} accounts, year ended ${esc(m.currentLabel)}</th>`;
+  for (const o of cols) h += `<th class="r">${esc(o.name)}${o.ratio ? `<div class="muted" style="font-weight:400">ratio ${o.ratio}</div>` : ''}</th>`;
+  if (un) h += `<th class="r">Unallocated<div class="muted" style="font-weight:400" title="${esc(s.unallocated.join(', '))}">${s.unallocated.length} ledger(s)</div></th>`;
+  h += '<th class="r">Total</th></tr></thead><tbody>';
+  for (const r of s.rows) {
+    const bold = r.key === 'opening' || r.key === 'closing';
+    const any = cols.some((o) => r.byOwner[o.id]) || r.unallocated || r.total;
+    if (!any && !bold) continue;
+    h += `<tr class="${r.key === 'closing' ? 'tot' : ''}"><td>${esc(r.caption)}</td>`;
+    for (const o of cols) h += `<td class="r">${inr(r.byOwner[o.id] || 0)}</td>`;
+    if (un) h += `<td class="r">${inr(r.unallocated || 0)}</td>`;
+    h += `<td class="r">${inr(r.total || 0)}</td></tr>`;
+  }
+  h += '</tbody></table>';
+  if (s.profitTo) h += `<div class="muted" style="margin-top:4px">Share of profit ${esc(s.shareBasis || 'by profit-sharing ratio')}.</div>`;
+  return h;
 }
 
 /* ---------- 5. exceptions ---------------------------------------------- */
@@ -384,7 +501,7 @@ $('exXlsx').onclick = async () => {
     const wb = mod.buildWorkbook(window.ExcelJS, S.payload);
     const buf = await wb.xlsx.writeBuffer();
     const name = (S.payload.meta.entity || 'Financials').replace(/[^A-Za-z0-9]+/g, '_')
-      + '_ScheduleIII_' + (S.payload.meta.currentLabel || '').replace(/\s+/g, '_') + '.xlsx';
+      + (isNCE() ? '_Financials_' : '_ScheduleIII_') + (S.payload.meta.currentLabel || '').replace(/\s+/g, '_') + '.xlsx';
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
     a.download = name; a.style.display = 'none';
@@ -748,4 +865,4 @@ async function renderObservations() {
 }
 
 /* ---------- boot -------------------------------------------------------- */
-loadEngagements();
+loadConstitutions().then(loadEngagements);

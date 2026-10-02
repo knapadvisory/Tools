@@ -29,9 +29,71 @@ export const SECTIONS = {
   UNCLASSIFIED: { statement: 'NONE', side: 'Dr', group: 'unclassified' },
 };
 
+/* ---------- reporting divisions ----------------------------------------- */
+/**
+ * Three divisions share one chart:
+ *   AS     Schedule III Division I   — companies under Accounting Standards
+ *   INDAS  Schedule III Division II  — companies under Ind AS
+ *   NCE    ICAI Guidance Note on Financial Statements of Non-Corporate
+ *          Entities — proprietorships, HUFs, partnership firms, LLPs, AOPs,
+ *          trusts and societies. Its formats follow Division I in structure
+ *          but present "Owners' funds" (owners' capital accounts, reserves)
+ *          where a company presents share capital.
+ *
+ * A line's `division` keyword says where it applies:
+ *   BOTH  every division          AS    Division I and the NCE formats
+ *   INDAS Division II only        CORP  companies only (AS and INDAS)
+ *   NCE   non-corporate only
+ */
+export const DIVISIONS = ['AS', 'INDAS', 'NCE'];
+const APPLIES = {
+  BOTH: new Set(['AS', 'INDAS', 'NCE']),
+  AS: new Set(['AS', 'NCE']),
+  INDAS: new Set(['INDAS']),
+  CORP: new Set(['AS', 'INDAS']),
+  NCE: new Set(['NCE']),
+};
+export const appliesTo = (line, division) => (APPLIES[line.division] || APPLIES.BOTH).has(division);
+
+/**
+ * The constitution of the reporting entity decides the division and the
+ * wording of the owners' lines. `isCorporate` picks Schedule III; everything
+ * else reports in the ICAI non-corporate format.
+ */
+export const CONSTITUTIONS = {
+  company:        { label: 'Company',                  isCorporate: true,  owners: 'Shareholders', ownerRole: 'Director' },
+  llp:            { label: 'Limited liability partnership', isCorporate: false, owners: 'Partners', ownerRole: 'Designated partner' },
+  partnership:    { label: 'Partnership firm',         isCorporate: false, owners: 'Partners', ownerRole: 'Partner' },
+  proprietorship: { label: 'Sole proprietorship',      isCorporate: false, owners: 'Proprietor', ownerRole: 'Proprietor' },
+  huf:            { label: 'Hindu undivided family',   isCorporate: false, owners: 'Karta and coparceners', ownerRole: 'Karta' },
+  aop:            { label: 'Association of persons / body of individuals', isCorporate: false, owners: 'Members', ownerRole: 'Member' },
+  trust:          { label: 'Trust',                    isCorporate: false, owners: 'Trustees', ownerRole: 'Trustee' },
+  society:        { label: 'Society',                  isCorporate: false, owners: 'Members', ownerRole: 'Member' },
+};
+export const constitutionOf = (key) => CONSTITUTIONS[key] || CONSTITUTIONS.company;
+export const divisionForConstitution = (key, wanted) =>
+  (constitutionOf(key).isCorporate ? (wanted === 'INDAS' ? 'INDAS' : 'AS') : 'NCE');
+export function frameworkLabel(division) {
+  if (division === 'INDAS') return 'Schedule III, Division II — Indian Accounting Standards';
+  if (division === 'NCE') return 'ICAI Guidance Note on Financial Statements of Non-Corporate Entities';
+  return 'Schedule III, Division I — Accounting Standards';
+}
+
+/** Wording of the owners' lines, by constitution. */
+const OWNER_CAPTIONS = {
+  owners_capital: {
+    proprietorship: 'Proprietor’s capital account',
+    partnership: 'Partners’ capital accounts', llp: 'Partners’ capital accounts',
+    huf: 'Karta’s capital account', default: 'Owners’ capital account',
+  },
+  partners_current: { default: 'Partners’ current accounts', proprietorship: 'Proprietor’s current account', huf: 'Owner’s current account' },
+  partners_remuneration: { default: 'Partners’ remuneration', proprietorship: 'Remuneration to proprietor' },
+  interest_on_capital: { default: 'Interest on partners’ capital', proprietorship: 'Interest on proprietor’s capital' },
+};
+
 const L = (id, caption, section, opts = {}) => ({
   id, caption, section,
-  division: opts.division || 'BOTH',      // BOTH | AS | INDAS
+  division: opts.division || 'BOTH',      // BOTH | AS | INDAS | CORP | NCE
   indasCaption: opts.indasCaption || null,
   note: opts.note !== false,              // does it carry a numbered note?
   order: opts.order ?? 0,
@@ -41,16 +103,25 @@ const L = (id, caption, section, opts = {}) => ({
 
 export const LINES = [
   // ---------------- EQUITY ----------------
-  L('share_capital', 'Share capital', 'EQUITY', { order: 100,
+  L('share_capital', 'Share capital', 'EQUITY', { order: 100, division: 'CORP',
     indasCaption: 'Equity share capital',
     requires: ['authorised/issued/subscribed split', 'reconciliation of shares outstanding',
                'rights attached', 'shares held by holding company', 'shareholders >5%',
                'promoter shareholding with % change', 'shares issued in preceding 5 years'] }),
+  // ---- Owners' funds (non-corporate) ----
+  // The capital account is a STATEMENT, not a balance: opening, capital
+  // introduced, drawings, interest, remuneration, share of profit, closing —
+  // owner by owner. owners.js builds it; the line here carries the closing.
+  L('owners_capital', 'Owners’ capital account', 'EQUITY', { order: 100, division: 'NCE',
+    requires: ['owner-wise movement: opening, introduced, drawings, interest, remuneration, share of profit, closing',
+               'profit-sharing ratio of each partner'] }),
+  L('partners_current', 'Partners’ current accounts', 'EQUITY', { order: 105, division: 'NCE',
+    requires: ['owner-wise movement for the year'] }),
   L('reserves_surplus', 'Reserves and surplus', 'EQUITY', { order: 110,
     indasCaption: 'Other equity',
     requires: ['movement per reserve (opening, additions, utilisations, closing)'] }),
-  L('share_warrants', 'Money received against share warrants', 'EQUITY', { order: 120 }),
-  L('share_application_money', 'Share application money pending allotment', 'EQUITY', { order: 130 }),
+  L('share_warrants', 'Money received against share warrants', 'EQUITY', { order: 120, division: 'CORP' }),
+  L('share_application_money', 'Share application money pending allotment', 'EQUITY', { order: 130, division: 'CORP' }),
 
   // ---------------- NON-CURRENT LIABILITIES ----------------
   L('lt_borrowings', 'Long-term borrowings', 'NCL', { order: 200,
@@ -123,15 +194,23 @@ export const LINES = [
   L('changes_in_inventories', 'Changes in inventories of finished goods, work-in-progress and stock-in-trade', 'EXPENSE', { order: 720 }),
   L('employee_benefits', 'Employee benefits expense', 'EXPENSE', { order: 730,
     requires: ['salaries and wages', 'contribution to provident and other funds', 'staff welfare'] }),
+  // Payments to the owners of a firm are appropriations charged in the
+  // statement of profit and loss (deductible under s.40(b) within limits),
+  // never employee costs or finance costs. They also flow into each partner's
+  // capital account, which is why they are lines of their own.
+  L('partners_remuneration', 'Partners’ remuneration', 'EXPENSE', { order: 735, division: 'NCE',
+    requires: ['partner-wise amount', 'authorised by the partnership deed', 's.40(b) limit'] }),
   L('finance_costs', 'Finance costs', 'EXPENSE', { order: 740,
     requires: ['interest expense', 'other borrowing costs', 'exchange difference regarded as interest'] }),
+  L('interest_on_capital', 'Interest on partners’ capital', 'EXPENSE', { order: 745, division: 'NCE',
+    requires: ['partner-wise amount', 'rate per the partnership deed (s.40(b) caps at 12%)'] }),
   L('depreciation_amortisation', 'Depreciation and amortisation expense', 'EXPENSE', { order: 750 }),
   L('other_expenses', 'Other expenses', 'EXPENSE', { order: 760,
     requires: ['payment to auditors', 'CSR expenditure', 'items exceeding 1% of revenue or ₹10 lakh'] }),
 
   // ---------------- BELOW THE LINE ----------------
   L('exceptional_items', 'Exceptional items', 'EXPENSE', { order: 800, note: false }),
-  L('extraordinary_items', 'Extraordinary items', 'EXPENSE', { division: 'AS', order: 810, note: false }),
+  L('extraordinary_items', 'Extraordinary items', 'EXPENSE', { division: 'AS', order: 810, note: false }),   // AS and the NCE formats
   L('prior_period_items', 'Prior period items', 'EXPENSE', { division: 'AS', order: 820, note: false }),
 
   // ---------------- TAX ----------------
@@ -151,15 +230,22 @@ const BY_ID = new Map(LINES.map((l) => [l.id, l]));
 export const line = (id) => BY_ID.get(id) || null;
 export const hasLine = (id) => BY_ID.has(id);
 
-/** Lines applicable to a reporting division ('AS' | 'INDAS'). */
+/** Lines applicable to a reporting division ('AS' | 'INDAS' | 'NCE'). */
 export function linesFor(division) {
-  return LINES.filter((l) => l.division === 'BOTH' || l.division === division)
-    .sort((a, b) => a.order - b.order);
+  const d = DIVISIONS.includes(division) ? division : 'AS';
+  return LINES.filter((l) => appliesTo(l, d)).sort((a, b) => a.order - b.order);
 }
 
-export function captionFor(id, division) {
+/**
+ * The caption of a line in a division. For the owners' lines the wording
+ * follows the constitution — a proprietor has one capital account, a firm has
+ * partners' capital accounts.
+ */
+export function captionFor(id, division, constitution) {
   const l = line(id);
   if (!l) return id;
+  const own = OWNER_CAPTIONS[id];
+  if (own) return own[constitution] || own.default;
   return division === 'INDAS' && l.indasCaption ? l.indasCaption : l.caption;
 }
 

@@ -46,7 +46,7 @@ export function toRupees(p) { return guard(p, 'amount') / PAISE; }
 
 export const add = (...xs) => guard(xs.reduce((t, x) => t + guard(x, 'operand'), 0), 'sum');
 export const sub = (a, b) => guard(guard(a, 'operand') - guard(b, 'operand'), 'difference');
-export const neg = (a) => guard(-guard(a, 'operand'), 'amount');
+export const neg = (a) => guard(guard(a, 'operand') === 0 ? 0 : -a, 'amount');   // never -0
 export const isZero = (a) => guard(a, 'operand') === 0;
 export const sum = (xs) => add(...xs);
 

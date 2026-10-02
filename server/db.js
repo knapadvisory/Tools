@@ -247,6 +247,41 @@ const MIGRATIONS = [
     );
     `,
   },
+  {
+    id: 6,
+    name: 'non_corporate_entities',
+    up: `
+    -- The constitution decides the reporting format: a company reports under
+    -- Schedule III (division AS | INDAS); every other constitution reports in
+    -- the ICAI non-corporate format (division NCE).
+    ALTER TABLE engagements ADD COLUMN constitution TEXT NOT NULL DEFAULT 'company';
+    ALTER TABLE engagements ADD COLUMN pan TEXT;
+    -- where the year's profit closes: the owners' capital or current accounts
+    ALTER TABLE engagements ADD COLUMN profit_to TEXT NOT NULL DEFAULT 'capital';
+
+    -- Gross debit and credit movement of each ledger in the period (paise), when
+    -- the source supplied them. The owners' capital accounts need both sides.
+    ALTER TABLE ledgers ADD COLUMN mov_dr_paise INTEGER;
+    ALTER TABLE ledgers ADD COLUMN mov_cr_paise INTEGER;
+
+    -- The owners: proprietor, partners, karta. Ratios are the profit-sharing
+    -- ratio from the deed; ledgers (JSON, by kind) say which trial-balance
+    -- ledgers are each owner's; split_paise is a manual share of profit that
+    -- overrides the ratio for the year, when the preparer records one.
+    CREATE TABLE owners (
+      id            TEXT PRIMARY KEY,
+      engagement_id TEXT NOT NULL REFERENCES engagements(id),
+      name          TEXT NOT NULL,
+      role          TEXT,
+      ratio         REAL NOT NULL DEFAULT 0,
+      pan           TEXT,
+      ledgers       TEXT,
+      split_paise   INTEGER,
+      sort          INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX idx_owners_eng ON owners(engagement_id, sort);
+    `,
+  },
 ];
 
 let db = null;
@@ -298,9 +333,11 @@ export function log(engagementId, actor, action, detail) {
     .run(engagementId || null, actor || null, action, detail ? JSON.stringify(detail) : null, now());
 }
 
-/** Seal a snapshot: after this, its ledgers/balances must never change. */
+/** Seal a snapshot: after this, its ledgers/balances must never change.
+ *  Sealing says the rows are frozen; it says nothing about whether the books
+ *  balanced, which `complete` records separately and must survive this. */
 export function sealSnapshot(id) {
-  db.prepare('UPDATE snapshots SET sealed = 1, complete = 1 WHERE id = ?').run(id);
+  db.prepare('UPDATE snapshots SET sealed = 1 WHERE id = ?').run(id);
 }
 export function isSealed(id) {
   const r = db.prepare('SELECT sealed FROM snapshots WHERE id = ?').get(id);

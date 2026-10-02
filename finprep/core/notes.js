@@ -73,7 +73,7 @@ export function buildNotes(r, subOverrides = {}) {
     const n = r.noteNumbers.get(def.id);
     if (!n) continue;
     const note = {
-      number: n, lineId: def.id, caption: captionFor(def.id, division),
+      number: n, lineId: def.id, caption: captionFor(def.id, division, r.constitution),
       section: def.section, subLines: subLines(r, def.id, periods, subOverrides),
       requires: def.requires || [],
     };
@@ -83,11 +83,29 @@ export function buildNotes(r, subOverrides = {}) {
     // shows opening + profit for the year. The note must show that movement and
     // total to the same closing figure, or the note and the face disagree.
     if (def.id === 'reserves_surplus') {
-      const profit = { name: 'Add: Profit for the year', reason: 'statement of profit and loss' };
-      let any = false;
-      for (const p of periods) { profit[p] = r.pl[p].pat; if (profit[p] !== 0) any = true; }
-      if (any) note.subLines = note.subLines.concat([profit]);
+      if (!r.nce) {
+        const profit = { name: 'Add: Profit for the year', reason: 'statement of profit and loss' };
+        let any = false;
+        for (const p of periods) { profit[p] = r.pl[p].pat; if (profit[p] !== 0) any = true; }
+        if (any) note.subLines = note.subLines.concat([profit]);
+      }
       for (const p of periods) note[p] = r.bs[p].reserves;
+    }
+    // The owners' accounts: the ledger lines stay (they are what the trial
+    // balance holds), the year's profit is added as a line, and the full
+    // owner-by-owner statement rides along for the screen and the exports.
+    if (r.nce && (def.id === 'owners_capital' || def.id === 'partners_current')) {
+      const face = def.id === 'owners_capital' ? 'ownersCapital' : 'partnersCurrent';
+      const sched = r.owners && (def.id === 'owners_capital' ? r.owners.capital : r.owners.current);
+      if (sched && sched.profitTo) {
+        const profit = { name: 'Add: share of profit / (loss) for the year', reason: 'statement of profit and loss, by the profit-sharing ratio' };
+        let any = false;
+        for (const p of periods) { profit[p] = p === periods[0] ? r.pl[p].pat : 0; if (profit[p] !== 0) any = true; }
+        if (any) note.subLines = note.subLines.concat([profit]);
+      }
+      for (const p of periods) note[p] = r.bs[p][face];
+      note.kind = 'owners';
+      note.schedule = sched || null;
     }
     out.push(note);
   }
@@ -100,29 +118,40 @@ const SECTION_TITLES = {
 };
 const INDAS_TITLES = { EQUITY: 'Equity', NCL: 'Non-current liabilities', CL: 'Current liabilities',
   NCA: 'Non-current assets', CA: 'Current assets' };
+const NCE_TITLES = { EQUITY: 'Owners’ funds', NCL: 'Non-current liabilities', CL: 'Current liabilities',
+  NCA: 'Non-current assets', CA: 'Current assets' };
+export const sectionTitles = (division) => (division === 'INDAS' ? INDAS_TITLES : division === 'NCE' ? NCE_TITLES : SECTION_TITLES);
 
 /** Balance-sheet face: sections, their lines (with note refs) and totals. */
 export function balanceSheetFace(r) {
   const { periods, division } = r;
-  const titles = division === 'INDAS' ? INDAS_TITLES : SECTION_TITLES;
+  const titles = sectionTitles(division);
+  const cap = (id) => captionFor(id, division, r.constitution);
   const section = (sec) => {
     const rows = linesFor(division)
       .filter((l) => l.section === sec)
       .map((l) => {
-        const row = { lineId: l.id, caption: captionFor(l.id, division), note: r.noteNumbers.get(l.id) || null };
+        const row = { lineId: l.id, caption: cap(l.id), note: r.noteNumbers.get(l.id) || null };
         for (const p of periods) row[p] = r.presented(l.id, p);
         return row;
       })
       .filter((row) => periods.some((p) => row[p] !== 0));
     // reserves carry the year's result, which is not in the ledger balance
     if (sec === 'EQUITY') {
-      const res = rows.find((x) => x.lineId === 'reserves_surplus');
-      if (res) for (const p of periods) res[p] = r.bs[p].reserves;
-      else {
-        const row = { lineId: 'reserves_surplus', caption: captionFor('reserves_surplus', division), note: r.noteNumbers.get('reserves_surplus') || null };
+      const place = (lineId, value) => {
+        const have = rows.find((x) => x.lineId === lineId);
+        if (have) { for (const p of periods) have[p] = value(p); return; }
+        const row = { lineId, caption: cap(lineId), note: r.noteNumbers.get(lineId) || null };
         let any = false;
-        for (const p of periods) { row[p] = r.bs[p].reserves; if (row[p] !== 0) any = true; }
+        for (const p of periods) { row[p] = value(p); if (row[p] !== 0) any = true; }
         if (any) rows.push(row);
+      };
+      place('reserves_surplus', (p) => r.bs[p].reserves);
+      if (r.nce) {
+        place('owners_capital', (p) => r.bs[p].ownersCapital);
+        place('partners_current', (p) => r.bs[p].partnersCurrent);
+        const order = { owners_capital: 0, partners_current: 1, reserves_surplus: 2 };
+        rows.sort((a, b) => (order[a.lineId] ?? 9) - (order[b.lineId] ?? 9));
       }
     }
     const total = {};
@@ -148,6 +177,7 @@ export function balanceSheetFace(r) {
 /** Statement of profit and loss face, in Schedule III order. */
 export function profitAndLossFace(r) {
   const { periods, division } = r;
+  const captionFor = (id, div) => r.caption ? r.caption(id) : id;   // constitution-aware wording
   const row = (caption, pick, lineId) => {
     const o = { caption, lineId: lineId || null, note: lineId ? (r.noteNumbers.get(lineId) || null) : null };
     for (const p of periods) o[p] = pick(p);
@@ -172,7 +202,7 @@ export function profitAndLossFace(r) {
     row('Deferred tax', (p) => r.pl[p].tax.deferred, 'deferred_tax'),
     row('Tax relating to earlier years', (p) => r.pl[p].tax.earlier, 'tax_earlier_years'),
   ].filter((x) => periods.some((p) => x[p] !== 0));
-  const pat = row('Profit for the year', (p) => r.pl[p].pat);
+  const pat = row(r.nce ? 'Profit for the year, transferred to the owners’ accounts' : 'Profit for the year', (p) => r.pl[p].pat);
 
   const hasExceptional = periods.some((p) => exceptional[p] !== 0);
   return { income, totalIncome, expenses, totalExpenses,
@@ -233,10 +263,12 @@ export function disclosureSources(reg) {
 
 export function presentationModel(r, opts = {}) {
   return {
-    division: r.division, periods: r.periods,
+    division: r.division, periods: r.periods, constitution: r.constitution || 'company',
     balanceSheet: balanceSheetFace(r),
     profitAndLoss: profitAndLossFace(r),
     notes: buildNotes(r, opts.subOverrides || {}),
+    ownersAccounts: r.owners ? { capital: r.owners.capital, current: r.owners.current, profitTo: r.owners.profitTo,
+                                 shareBasis: r.owners.shareBasis, assignments: r.owners.assignments || [] } : null,
     disclosures: disclosureRegister(r, opts.answers),
     disclosureSources: disclosureSources(disclosureRegister(r, opts.answers)),
     checks: r.checks,

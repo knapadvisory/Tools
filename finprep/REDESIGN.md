@@ -91,6 +91,29 @@ figure is not equal to its note total, the value is written plain and the
 shortfall is reported on the Review sheet as `EXP-LINK`. A formula that looks
 right but computes something else is worse than no formula.
 
+## Non-corporate entities (proprietorships, HUFs, firms, LLPs)
+
+An engagement carries a **constitution**. A company reports under Schedule III
+(division `AS` or `INDAS`); every other constitution reports in the **ICAI
+Guidance Note on Financial Statements of Non-Corporate Entities** (division
+`NCE`), whatever framework was asked for. The chart in `schedule3.js` is shared:
+a line's `division` keyword (`BOTH | AS | INDAS | CORP | NCE`) says where it
+applies, so share capital exists only for companies and the owners' lines only
+for the rest.
+
+| Piece | Where | What it does |
+|---|---|---|
+| Owners' lines | `core/schedule3.js` | `owners_capital`, `partners_current` (Owners' funds); `partners_remuneration`, `interest_on_capital` (appropriations charged in the P&L, never employee or finance costs). Captions follow the constitution. |
+| Classification | `core/classify.js` | `classifyLedger(led, {nce})`: Tally's Capital Account group → owners' capital (drawings net inside it, a current a/c to `partners_current`); partner remuneration / interest on capital recognised before the employee and finance-cost rules. |
+| Profit | `core/engine.js` | The year's PAT closes into the owners' capital (or current) accounts; reserves carry only what the books hold. The comparative capital figure is last year's closing and is NOT re-added last year's profit; the comparative P&L is a comparative, so the prior-period TB check tests the balance-sheet half on its own. |
+| Capital accounts | `core/owners.js` | Owner by owner: opening, introduced, interest, remuneration, share of profit, drawings, closing. Share by ratio with `allocate()` (largest remainder; a nil ratio never gets a paisa) or a manual split that must add to PAT (`OWN-SPLIT` CRITICAL otherwise). Introduced vs drawings from GROSS movements when supplied (connector 4.80+ sends `drTotal`/`crTotal`), else net with `OWN-GROSS`. Remuneration/interest "credited to the account" is inferred from the gross credits and reported (`OWN-CREDITED`). Unassigned ledgers sit in an "unallocated" column (`OWN-UNALLOC`). `OWN-APPROP` warns when the books also appropriated profit by journal. The statement always adds across to the face (`OWN-TIE`). |
+| Owners | `server/db.js` migration 6, `/api/fin2/engagements/:id/owners` | name, role, PAN, ratio, ledgers by kind, manual split; `profit_to` on the engagement. Ledgers are matched to an owner by name when exactly one owner's name appears in the ledger name. |
+| Cash flow | `core/cashflow.js` | Owners' net capital movement is a financing item (`CF-OWN`). |
+| Export | `export/workbook.js` | Framework and PAN on every masthead; "Owners' funds" on the face; a **Capital Accounts** sheet with a column per owner whose closing row is a `SUM`; the partners sign for the firm with their PAN. |
+
+Tests: `node finprep/core/owners.test.mjs`, `node finprep/export/workbook.nce.test.mjs`,
+`node server/finprep2.test.mjs` (end to end against a scratch database).
+
 ## Not yet built
 
 Listed honestly; none of it is stubbed or faked.
