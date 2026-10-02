@@ -185,6 +185,90 @@ await t('approved heads and the owners survive the re-import by ledger name', as
   assert.equal(j.balanceSheet.difference.current, 0);
 });
 
+console.log('\n── adjustment entries, by ledger name ──');
+let jid;
+await t('an entry is recorded by ledger name and applied once approved', async () => {
+  const j = await call('POST', `/engagements/${engId}/journals`, { narration: 'Rent accrued for March', kind: 'provision',
+    entries: [{ ledgerKey: 'Shop Rent', amount: 5000 }, { lineId: 'other_current_liabilities', amount: -5000 }] });
+  assert.ok(j.ok, j.error); jid = j.journalId;
+  let s = await call('GET', `/engagements/${engId}/statements`);
+  assert.ok(s.checks.some((c) => c.id === 'JRN-PENDING'), 'pending entries are flagged');
+  assert.equal(s.profitAndLoss.pat.current, 430000, 'not applied while pending');
+  const a = await call('POST', `/engagements/${engId}/journals/${jid}/approve`, { approved: true });
+  assert.ok(a.ok && a.approved);
+  s = await call('GET', `/engagements/${engId}/statements`);
+  assert.equal(s.profitAndLoss.pat.current, 425000);
+  assert.equal(s.balanceSheet.difference.current, 0);
+  assert.equal(s.journals[0].entries[0].ledgerName, 'Shop Rent');
+  assert.equal(s.journals[0].entries[1].lineCaption, 'Other current liabilities');
+});
+await t('an entry to a ledger not in the books, or that does not balance, is refused', async () => {
+  const j = await call('POST', `/engagements/${engId}/journals`, { narration: 'x', entries: [{ ledgerKey: 'No Such Ledger', amount: 1 }, { ledgerKey: 'Shop Rent', amount: -1 }] });
+  assert.equal(j.ok, false); assert.match(j.error, /not in the trial balance/);
+  const k = await call('POST', `/engagements/${engId}/journals`, { narration: 'x', entries: [{ ledgerKey: 'Shop Rent', amount: 1 }, { ledgerKey: 'HDFC Bank', amount: -2 }] });
+  assert.equal(k.ok, false); assert.match(k.error, /does not balance/);
+});
+await t('the entry survives a re-import of the books; a ledger that disappears is flagged CRITICAL until the entry is edited', async () => {
+  const renamed = firm.map((l) => l.name === 'Shop Rent' ? { ...l, name: 'Rent - Shop', current: 130000 } : l.name === 'HDFC Bank' ? { ...l, current: 1050000 } : l);
+  const s0 = await call('POST', `/engagements/${engId}/snapshots`, { source: 'excel', method: 'file', ledgers: renamed });
+  assert.ok(s0.ok && s0.balanced);
+  let s = await call('GET', `/engagements/${engId}/statements`);
+  const flag = s.checks.find((c) => c.id.startsWith('JRN-LEDGER'));
+  assert.ok(flag && flag.severity === 'CRITICAL', 'missing ledger must be flagged');
+  assert.equal(s.journals[0].entries[0].missing, true);
+  // edit the entry onto the renamed ledger: the old one is superseded, the new one applies
+  const e = await call('PUT', `/engagements/${engId}/journals/${jid}`, { narration: 'Rent accrued for March', kind: 'provision', approve: true,
+    entries: [{ ledgerKey: 'Rent - Shop', amount: 5000 }, { lineId: 'other_current_liabilities', amount: -5000 }] });
+  assert.ok(e.ok, e.error); assert.equal(e.supersedes, jid); jid = e.journalId;
+  s = await call('GET', `/engagements/${engId}/statements`);
+  assert.ok(!s.checks.some((c) => c.id.startsWith('JRN-LEDGER')));
+  assert.equal(s.journals.length, 1);
+  assert.equal(s.profitAndLoss.pat.current, 425000);
+});
+await t('a withdrawn entry is no longer applied', async () => {
+  const d0 = await call('DELETE', `/engagements/${engId}/journals/${jid}`);
+  assert.ok(d0.ok);
+  const s = await call('GET', `/engagements/${engId}/statements`);
+  assert.equal(s.journals.length, 0);
+  assert.equal(s.profitAndLoss.pat.current, 430000);
+});
+
+console.log('\n── next year: carry forward ──');
+let eng2;
+await t('clients group their engagements; the next year finds last year', async () => {
+  const j = await call('POST', '/engagements', { clientName: 'M/s Kumar Traders', pan: 'AAAFK1234A', constitution: 'partnership', fyStart: '2026-04-01', fyEnd: '2027-03-31' });
+  eng2 = j.id;
+  const clients = await call('GET', '/clients');
+  const kt = clients.clients.find((c) => c.name === 'M/s Kumar Traders');
+  assert.equal(kt.engagements.length, 2);
+  assert.equal(kt.engagements[0].fyEnd, '2027-03-31', 'newest first');
+  const cf = await call('GET', `/engagements/${eng2}/carry-forward`);
+  assert.equal(cf.candidate.id, engId);
+  assert.ok(cf.candidate.owners === 2);
+});
+await t('carry-forward copies approved heads, captions and owners for ledgers still in the books, and never overwrites', async () => {
+  // last year the preparer approved a head for the furniture and a caption for the rent
+  await call('POST', `/engagements/${engId}/mappings`, { mappings: [{ ledgerKey: 'Furniture', lineId: 'ppe', approved: true }, { ledgerKey: 'Sales', lineId: 'revenue_operations', approved: true }] });
+  await call('POST', `/engagements/${engId}/subgroups`, { subgroups: [{ ledgerKey: 'Rent - Shop', label: 'Rent' }] });
+  const refused = await call('POST', `/engagements/${eng2}/carry-forward`, {});
+  assert.equal(refused.ok, false, 'needs this year’s books first');
+  const next = firm.filter((l) => l.name !== 'Furniture').map((l) => ({ ...l, prior: l.current }));   // the furniture was sold; last year's closing is this year's opening
+  const bank = next.find((l) => l.name === 'HDFC Bank'); bank.current = bank.prior + 300000;            // the sale proceeds
+  await call('POST', `/engagements/${eng2}/snapshots`, { source: 'tally', method: 'live', ledgers: next });
+  await call('POST', `/engagements/${eng2}/mappings`, { mappings: [{ ledgerKey: 'Sales', lineId: 'other_income', approved: true }] });   // decided this year
+  const cf = await call('POST', `/engagements/${eng2}/carry-forward`, {});
+  assert.ok(cf.ok, cf.error);
+  assert.equal(cf.carried.owners, 2);
+  assert.equal(cf.skipped.alreadySet, 1, 'Sales was decided this year and is left alone');
+  assert.ok(cf.skipped.notInBooks.includes('Furniture'));
+  const s = await call('GET', `/engagements/${eng2}/statements`);
+  assert.equal(s.trialBalance.find((r) => r.ledger === 'Sales').lineId, 'other_income');
+  assert.equal(s.ownersAccounts.capital.owners.length, 2);
+  const own = await call('GET', `/engagements/${eng2}/owners`);
+  assert.deepEqual(own.owners.map((o) => o.ratio), [60, 40]);
+  assert.ok(own.owners.every((o) => o.split == null), 'last year’s manual split is never carried');
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 srv.close();
 fs.rmSync(dir, { recursive: true, force: true });

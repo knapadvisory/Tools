@@ -114,6 +114,19 @@ for the rest.
 Tests: `node finprep/core/owners.test.mjs`, `node finprep/export/workbook.nce.test.mjs`,
 `node server/finprep2.test.mjs` (end to end against a scratch database).
 
+## Books that arrive as a spreadsheet, and the years that follow
+
+| Piece | Where | What it does |
+|---|---|---|
+| Excel template | `core/tbTemplate.js` | `buildTemplate()` writes a workbook with the engagement's heads as a drop-down; `readTemplate()` / `parseTemplateRows()` read a filled one back, finding columns by heading (Tally's own export headings included). Refused with every problem listed: duplicate names, blank or numeric group, both sides on one row, negatives, non-numbers, unknown head, debits ≠ credits. Gross movement columns are optional and feed the owners' accounts. Snapshot `source: excel`. |
+| Variance | `GET /api/fin2/engagements/:id/variance` | Latest import against the previous one, ledger by ledger: changed, added, dropped, with both periods. Shown on the import step after every import. |
+| Adjustment entries | step 5 of `v2.html`; `insertJournal()` in `server/routes/finprep2.js`; migration 7 | Entries target a ledger by NAME (`ledger_key`) or a head; the id is resolved in the current snapshot at build time, so entries survive a re-import. Approve / take back (`POST …/journals/:jid/approve`), withdraw (`DELETE`, superseded, kept for the record), edit (`PUT` supersedes and re-records). A ledger that disappears from the books raises `JRN-LEDGER` CRITICAL in `engine.js` rather than vanishing. |
+| Clients and next year | `GET /clients`, `GET/POST …/carry-forward` | Engagements grouped by client; "Start next year for this client" pre-fills the form; "Carry forward last year's grouping" copies approved heads and note captions for ledgers still in the books, and the owners (ratios, PAN, ledgers; never last year's manual split) when none are recorded — nothing decided this year is overwritten. |
+
+Tests: `node finprep/core/tbTemplate.test.mjs`; `node server/finprep2.test.mjs` (now
+18 steps); `CHROME_PATH=… node finprep/v2.smoke.test.mjs` drives the real page in
+headless Chromium against the real server and a scratch database.
+
 ## Not yet built
 
 Listed honestly; none of it is stubbed or faked.

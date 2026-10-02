@@ -122,6 +122,15 @@ export function build({ ledgers, journals = [], periods = ['current', 'prior'], 
     for (const p of periods) balances[p] = add(r.balances[p], adj[p] || 0);
     return { ...r, balances, adjusted: !!ledgerAdj.get(r.ledgerId) };
   });
+  // A posting to a ledger that is not in these books (dropped in a re-import)
+  // would vanish silently and leave the entry unbalanced in effect.
+  const knownIds = new Set(leds.map((l) => l.id));
+  for (const [ledgerId, per] of ledgerAdj) {
+    if (knownIds.has(ledgerId)) continue;
+    const amt = add(...periods.map((p) => per[p] || 0));
+    checks.push({ id: `JRN-LEDGER-${String(ledgerId).replace(/^missing:/, '')}`, severity: SEV.CRITICAL, amount: amt,
+      message: `An approved adjustment posts ${format(amt)} to "${String(ledgerId).replace(/^missing:/, '')}", which is not in the trial balance any more. Edit the entry to a ledger that exists, or withdraw it.` });
+  }
 
   // ---- 3. Classify, per period (C3) and per side (C4) -----------------
   const byLine = new Map();   // lineId -> {period: paise}

@@ -282,6 +282,17 @@ const MIGRATIONS = [
     CREATE INDEX idx_owners_eng ON owners(engagement_id, sort);
     `,
   },
+  {
+    id: 7,
+    name: 'journal_entries_by_ledger_name',
+    up: `
+    -- A ledger's row id changes with every snapshot; its NAME does not. An
+    -- adjustment entry keyed by name survives a re-import of the books.
+    ALTER TABLE journal_entries ADD COLUMN ledger_key TEXT;
+    UPDATE journal_entries SET ledger_key = (SELECT name FROM ledgers WHERE ledgers.id = journal_entries.ledger_id)
+      WHERE ledger_id IS NOT NULL AND ledger_key IS NULL;
+    `,
+  },
 ];
 
 let db = null;

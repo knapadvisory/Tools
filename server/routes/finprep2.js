@@ -84,6 +84,85 @@ router.get('/engagements', (_req, res) => {
   res.json({ ok: true, engagements: rows.map((e) => ({ ...e, constitutionLabel: constitutionOf(e.constitution).label })) });
 });
 
+/* ---------- clients and the year before ---------------------------------- */
+/** Engagements grouped by client, newest year first. */
+router.get('/clients', (_req, res) => {
+  const rows = db().prepare('SELECT * FROM engagements ORDER BY lower(client_name), fy_end DESC').all();
+  const byClient = new Map();
+  for (const e of rows) {
+    const k = e.client_name.trim().toLowerCase();
+    if (!byClient.has(k)) byClient.set(k, { name: e.client_name, constitution: e.constitution, pan: e.pan || e.cin || '', engagements: [] });
+    byClient.get(k).engagements.push({ id: e.id, fyStart: e.fy_start, fyEnd: e.fy_end, division: e.division, status: e.status });
+  }
+  res.json({ ok: true, clients: [...byClient.values()] });
+});
+/** The most recent earlier engagement of the same client — last year's file. */
+function previousEngagement(eng) {
+  return db().prepare(`SELECT * FROM engagements WHERE id<>? AND lower(trim(client_name))=lower(trim(?)) AND fy_end<? ORDER BY fy_end DESC LIMIT 1`)
+    .get(eng.id, eng.client_name, eng.fy_end) || null;
+}
+router.get('/engagements/:id/carry-forward', (req, res) => {
+  const eng = db().prepare('SELECT * FROM engagements WHERE id=?').get(req.params.id);
+  if (!eng) return bad(res, 'engagement not found', 404);
+  const prev = previousEngagement(eng);
+  if (!prev) return res.json({ ok: true, candidate: null });
+  const d = db();
+  res.json({ ok: true, candidate: { id: prev.id, fyStart: prev.fy_start, fyEnd: prev.fy_end,
+    mappings: d.prepare('SELECT count(*) n FROM mappings WHERE engagement_id=? AND approved=1').get(prev.id).n,
+    subgroups: d.prepare('SELECT count(*) n FROM sub_groups WHERE engagement_id=?').get(prev.id).n,
+    owners: d.prepare('SELECT count(*) n FROM owners WHERE engagement_id=?').get(prev.id).n } });
+});
+/**
+ * Carry last year's decisions into this year: approved heads and note captions
+ * for ledgers that are still in the books, and the owners if none are recorded
+ * yet. Nothing already decided this year is overwritten.
+ */
+router.post('/engagements/:id/carry-forward', (req, res) => {
+  const d = db();
+  const eng = d.prepare('SELECT * FROM engagements WHERE id=?').get(req.params.id);
+  if (!eng) return bad(res, 'engagement not found', 404);
+  const prev = (req.body && req.body.from) ? d.prepare('SELECT * FROM engagements WHERE id=?').get(req.body.from) : previousEngagement(eng);
+  if (!prev) return bad(res, 'no earlier engagement of this client to carry from');
+  const names = latestLedgerNames(eng.id);
+  if (!names.size) return bad(res, 'import this year’s trial balance first — the heads are carried for ledgers that are in it');
+  const have = new Set(d.prepare('SELECT ledger_key FROM mappings WHERE engagement_id=? AND approved=1').all(eng.id).map((x) => x.ledger_key));
+  const haveSub = new Set(d.prepare('SELECT ledger_key FROM sub_groups WHERE engagement_id=?').all(eng.id).map((x) => x.ledger_key));
+  const carried = { mappings: 0, subgroups: 0, owners: 0 }, skipped = { notInBooks: [], alreadySet: 0 };
+  const label = `carried forward from FY ending ${prev.fy_end}`;
+  d.exec('BEGIN');
+  try {
+    const up = d.prepare(`INSERT INTO mappings (id,engagement_id,ledger_key,line_id,confidence,reason,approved,approved_by,approved_at,created_at)
+      VALUES (?,?,?,?,?,?,1,?,?,?) ON CONFLICT(engagement_id,ledger_key) DO UPDATE SET line_id=excluded.line_id, approved=1,
+      approved_by=excluded.approved_by, approved_at=excluded.approved_at, reason=excluded.reason`);
+    for (const m of d.prepare('SELECT * FROM mappings WHERE engagement_id=? AND approved=1').all(prev.id)) {
+      if (!names.has(m.ledger_key)) { skipped.notInBooks.push(m.ledger_key); continue; }
+      if (have.has(m.ledger_key)) { skipped.alreadySet += 1; continue; }
+      up.run(uid('map'), eng.id, m.ledger_key, m.line_id, 'carried', label, actor(req), now(), now());
+      carried.mappings += 1;
+    }
+    const sg = d.prepare('INSERT OR IGNORE INTO sub_groups (engagement_id,ledger_key,label,set_by,set_at) VALUES (?,?,?,?,?)');
+    for (const s of d.prepare('SELECT * FROM sub_groups WHERE engagement_id=?').all(prev.id)) {
+      if (!names.has(s.ledger_key) || haveSub.has(s.ledger_key)) continue;
+      sg.run(eng.id, s.ledger_key, s.label, actor(req), now());
+      carried.subgroups += 1;
+    }
+    if (!d.prepare('SELECT count(*) n FROM owners WHERE engagement_id=?').get(eng.id).n) {
+      const ins = d.prepare('INSERT INTO owners (id,engagement_id,name,role,ratio,pan,ledgers,split_paise,sort) VALUES (?,?,?,?,?,?,?,NULL,?)');
+      for (const o of d.prepare('SELECT * FROM owners WHERE engagement_id=? ORDER BY sort').all(prev.id)) {
+        // ledgers that no longer exist are dropped from the owner; the split is never carried (it was last year's)
+        let ledgers = {}; try { ledgers = JSON.parse(o.ledgers || '{}'); } catch { /* */ }
+        for (const k of Object.keys(ledgers)) ledgers[k] = (ledgers[k] || []).filter((n) => names.has(n));
+        ins.run(uid('own'), eng.id, o.name, o.role, o.ratio, o.pan, JSON.stringify(ledgers), o.sort);
+        carried.owners += 1;
+      }
+      if (carried.owners) d.prepare('UPDATE engagements SET profit_to=? WHERE id=?').run(prev.profit_to || 'capital', eng.id);
+    }
+    d.exec('COMMIT');
+  } catch (e) { d.exec('ROLLBACK'); return bad(res, e.message, 500); }
+  log(eng.id, actor(req), 'carry.forward', { from: prev.id, carried, skipped: { notInBooks: skipped.notInBooks.length, alreadySet: skipped.alreadySet } });
+  res.json({ ok: true, from: { id: prev.id, fyEnd: prev.fy_end }, carried, skipped });
+});
+
 router.get('/constitutions', (_req, res) => {
   res.json({ ok: true, constitutions: Object.entries(CONSTITUTIONS).map(([key, c]) =>
     ({ key, label: c.label, isCorporate: c.isCorporate, owners: c.owners, ownerRole: c.ownerRole,
@@ -250,25 +329,81 @@ router.post('/engagements/:id/mappings', (req, res) => {
   res.json({ ok: true, saved: mappings.length });
 });
 
-/* ---------- journals ---------------------------------------------------- */
-router.post('/engagements/:id/journals', (req, res) => {
-  const { narration, period = 'current', kind = 'reclass', entries, approve } = req.body || {};
-  const check = validateJournal({ narration, entries });
-  if (!check.ok) return bad(res, check.errors.join('; '));
+/* ---------- journals (adjustment entries) -------------------------------- */
+/**
+ * An entry targets a LEDGER by name (`ledgerKey`, which survives a re-import)
+ * or a statement HEAD (`lineId`). Amounts are Dr-positive rupees and must sum
+ * to nil. The same ledger may appear on several lines of one entry.
+ */
+function latestLedgerNames(engagementId) {
+  const d = db();
+  const snap = d.prepare('SELECT id FROM snapshots WHERE engagement_id=? ORDER BY taken_at DESC, rowid DESC LIMIT 1').get(engagementId);
+  if (!snap) return new Map();
+  return new Map(d.prepare('SELECT id, name FROM ledgers WHERE snapshot_id=?').all(snap.id).map((l) => [l.name, l.id]));
+}
+function insertJournal(d, engagementId, body, who) {
+  const { narration, period = 'current', kind = 'reclass', entries, approve } = body || {};
+  if (!['current', 'prior'].includes(period)) return { error: 'period must be current or prior' };
+  if (!['reclass', 'provision', 'correction', 'closing', 'other'].includes(kind)) return { error: 'unknown kind' };
+  const names = latestLedgerNames(engagementId);
+  const idToName = new Map([...names].map(([n, id]) => [id, n]));
+  const resolved = (entries || []).map((e) => {
+    const key = e.ledgerKey || (e.ledgerId ? idToName.get(e.ledgerId) : null) || null;
+    return { ledgerKey: key, ledgerId: key ? (names.get(key) || null) : null, lineId: e.lineId || null, amount: e.amount };
+  });
+  const missing = resolved.filter((e) => e.ledgerKey && !e.ledgerId).map((e) => e.ledgerKey);
+  if (missing.length) return { error: `not in the trial balance: ${missing.join(', ')}` };
+  const check = validateJournal({ narration, entries: resolved });
+  if (!check.ok) return { error: check.errors.join('; ') };
   const jid = uid('jrn');
+  d.prepare(`INSERT INTO journals (id,engagement_id,period,narration,kind,approved,created_by,created_at,approved_by,approved_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?)`)
+    .run(jid, engagementId, period, narration, kind, approve ? 1 : 0, who, now(), approve ? who : null, approve ? now() : null);
+  const ins = d.prepare('INSERT INTO journal_entries (id,journal_id,ledger_id,ledger_key,line_id,amount_paise) VALUES (?,?,?,?,?,?)');
+  for (const e of resolved) ins.run(uid('je'), jid, e.ledgerId, e.ledgerKey, e.lineId, toPaise(e.amount));
+  return { jid };
+}
+router.post('/engagements/:id/journals', (req, res) => {
   const d = db();
   d.exec('BEGIN');
+  let out;
+  try { out = insertJournal(d, req.params.id, req.body, actor(req)); if (out.error) { d.exec('ROLLBACK'); return bad(res, out.error); } d.exec('COMMIT'); }
+  catch (e) { d.exec('ROLLBACK'); return bad(res, e.message, 500); }
+  log(req.params.id, actor(req), 'journal.created', { jid: out.jid, narration: req.body.narration, approve: !!req.body.approve });
+  res.json({ ok: true, journalId: out.jid });
+});
+/** Approve, or take approval back. */
+router.post('/engagements/:id/journals/:jid/approve', (req, res) => {
+  const j = db().prepare('SELECT * FROM journals WHERE id=? AND engagement_id=? AND superseded=0').get(req.params.jid, req.params.id);
+  if (!j) return bad(res, 'journal not found', 404);
+  const on = !(req.body && req.body.approved === false);
+  db().prepare('UPDATE journals SET approved=?, approved_by=?, approved_at=? WHERE id=?').run(on ? 1 : 0, on ? actor(req) : null, on ? now() : null, j.id);
+  log(req.params.id, actor(req), on ? 'journal.approved' : 'journal.unapproved', { jid: j.id });
+  res.json({ ok: true, approved: on });
+});
+/** Withdraw: the entry is kept for the record but no longer applied. */
+router.delete('/engagements/:id/journals/:jid', (req, res) => {
+  const j = db().prepare('SELECT * FROM journals WHERE id=? AND engagement_id=? AND superseded=0').get(req.params.jid, req.params.id);
+  if (!j) return bad(res, 'journal not found', 404);
+  db().prepare('UPDATE journals SET superseded=1 WHERE id=?').run(j.id);
+  log(req.params.id, actor(req), 'journal.withdrawn', { jid: j.id });
+  res.json({ ok: true });
+});
+/** Edit = supersede the old entry and record the new one, so the trail stays. */
+router.put('/engagements/:id/journals/:jid', (req, res) => {
+  const d = db();
+  const j = d.prepare('SELECT * FROM journals WHERE id=? AND engagement_id=? AND superseded=0').get(req.params.jid, req.params.id);
+  if (!j) return bad(res, 'journal not found', 404);
+  d.exec('BEGIN');
+  let out;
   try {
-    d.prepare(`INSERT INTO journals (id,engagement_id,period,narration,kind,approved,created_by,created_at,approved_by,approved_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?)`)
-      .run(jid, req.params.id, period, narration, kind, approve ? 1 : 0, actor(req), now(),
-        approve ? actor(req) : null, approve ? now() : null);
-    const ins = d.prepare('INSERT INTO journal_entries (id,journal_id,ledger_id,line_id,amount_paise) VALUES (?,?,?,?,?)');
-    for (const e of entries) ins.run(uid('je'), jid, e.ledgerId || null, e.lineId || null, toPaise(e.amount));
+    out = insertJournal(d, req.params.id, req.body, actor(req));
+    if (out.error) { d.exec('ROLLBACK'); return bad(res, out.error); }
+    d.prepare('UPDATE journals SET superseded=1 WHERE id=?').run(j.id);
     d.exec('COMMIT');
   } catch (e) { d.exec('ROLLBACK'); return bad(res, e.message, 500); }
-  log(req.params.id, actor(req), 'journal.created', { jid, narration, approve: !!approve });
-  res.json({ ok: true, journalId: jid });
+  log(req.params.id, actor(req), 'journal.edited', { from: j.id, to: out.jid });
+  res.json({ ok: true, journalId: out.jid, supersedes: j.id });
 });
 
 /* ---------- build statements ------------------------------------------- */
@@ -316,12 +451,16 @@ function loadForBuild(engagementId, snapshotId) {
     d.prepare('SELECT ledger_key, label FROM sub_groups WHERE engagement_id=?').all(engagementId)
       .map((x) => [x.ledger_key, x.label]));
 
+  // Entries name their ledger; the id is looked up in THIS snapshot, so an
+  // adjustment recorded before a re-import still lands on the right ledger.
+  const idByName = new Map(rows.map((r) => [r.name, r.tally_id || r.id]));
   const jrows = d.prepare('SELECT * FROM journals WHERE engagement_id=? AND superseded=0').all(engagementId);
   const journals = jrows.map((j) => ({
     id: j.id, approved: !!j.approved, period: j.period, narration: j.narration, kind: j.kind,
     createdAt: j.created_at, approvedBy: j.approved_by,
     entries: d.prepare('SELECT * FROM journal_entries WHERE journal_id=?').all(j.id)
-      .map((e) => ({ id: e.id, ledgerId: e.ledger_id, lineId: e.line_id, amount: toRupees(e.amount_paise) })),
+      .map((e) => ({ id: e.id, ledgerKey: e.ledger_key, lineId: e.line_id, amount: toRupees(e.amount_paise),
+        ledgerId: e.ledger_key ? (idByName.get(e.ledger_key) || ('missing:' + e.ledger_key)) : (e.ledger_id || null) })),
   }));
   const owners = loadOwners(engagementId);
   return { eng, snap, ledgers, overrides, journals, priorOverrides, subOverrides, owners };
@@ -407,7 +546,9 @@ function buildPayload(ctx, schedules = {}) {
     notes: rupDeep(model.notes),
     ownersAccounts: model.ownersAccounts ? rupDeep(model.ownersAccounts) : null,
     journals: ctx.journals.map((j) => ({ ...j, entries: j.entries.map((e) => ({ ...e,
-      ledgerName: (ctx.ledgers.find((l) => l.id === e.ledgerId) || {}).name || null })) })),
+      ledgerName: e.ledgerKey || (ctx.ledgers.find((l) => l.id === e.ledgerId) || {}).name || null,
+      lineCaption: e.lineId ? captionFor(e.lineId, r.division, r.constitution) : null,
+      missing: typeof e.ledgerId === 'string' && e.ledgerId.startsWith('missing:') })) })),
     cashFlow: rupDeep({ ...cf, checks: undefined }),
     checks: allChecks.map((c) => ({ ...c, amount: c.amount != null ? toRupees(c.amount) / SCALE_DIV : undefined })),
     disclosures: model.disclosures,

@@ -49,9 +49,10 @@ function msg(el, text, kind) {
 }
 
 /* ---------- stepper ----------------------------------------------------- */
+const STEPS = 9;   // 1 engagement · 2 inputs · 3 import · 4 grouping · 5 adjustments · 6 statements · 7 exceptions · 8 observations · 9 export
 function go(n) {
   if (n > S.maxStep) return;
-  for (let i = 1; i <= 8; i++) $('s' + i).classList.toggle('hidden', i !== n);
+  for (let i = 1; i <= STEPS; i++) $('s' + i).classList.toggle('hidden', i !== n);
   document.querySelectorAll('#stepper .step').forEach((el) => {
     const st = +el.dataset.step;
     el.classList.toggle('active', st === n);
@@ -90,10 +91,31 @@ async function loadEngagements() {
     // Only offer the "continue" picker once there is something to continue.
     $('engExisting').classList.toggle('hidden', engagements.length === 0);
     $('engFirst').classList.toggle('hidden', engagements.length > 0);
-    $('engList').innerHTML = engagements.map((e) =>
-      `<option value="${e.id}">${esc(e.client_name)} — FY ${esc(e.fy_start)} to ${esc(e.fy_end)} · ${esc(e.constitutionLabel || e.constitution || 'Company')} (${e.division})</option>`).join('');
+    // grouped by client, newest year first, so a practice with many clients can find one
+    const byClient = new Map();
+    for (const e of engagements) {
+      const k = e.client_name.trim().toLowerCase();
+      if (!byClient.has(k)) byClient.set(k, { name: e.client_name, items: [] });
+      byClient.get(k).items.push(e);
+    }
+    S.engagements = engagements;
+    $('engList').innerHTML = [...byClient.values()].sort((a, b) => a.name.localeCompare(b.name)).map((c) =>
+      `<optgroup label="${esc(c.name)}">` + c.items.sort((a, b) => b.fy_end.localeCompare(a.fy_end)).map((e) =>
+        `<option value="${e.id}">FY ${esc(e.fy_start)} to ${esc(e.fy_end)} · ${esc(e.constitutionLabel || e.constitution || 'Company')} (${e.division})</option>`).join('') + '</optgroup>').join('');
   } catch (e) { msg('m1', 'Could not reach the server: ' + e.message, 'bad'); }
 }
+/** Pre-fill the form for the same client's next year; the preparer presses Create. */
+$('engNext').onclick = () => {
+  const e = (S.engagements || []).find((x) => x.id === $('engList').value);
+  if (!e) return;
+  const shift = (iso) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCFullYear(d.getUTCFullYear() + 1); return d.toISOString().slice(0, 10); };
+  $('cName').value = e.client_name; $('cCin').value = e.cin || ''; $('cPan').value = e.pan || '';
+  $('cCon').value = e.constitution || 'company'; onConstitutionPick();
+  if (e.division !== 'NCE') $('cDiv').value = e.division;
+  $('cStart').value = shift(e.fy_start); $('cEnd').value = shift(e.fy_end);
+  msg('m1', `Form filled for ${e.client_name}, FY ${shift(e.fy_start)} to ${shift(e.fy_end)}. Press Create, import the books, then use “Carry forward last year’s grouping” in step 4.`, 'ok');
+  $('cName').scrollIntoView({ behavior: 'smooth', block: 'center' });
+};
 async function openEngagement(id) {
   const { engagements } = await api('/engagements');
   S.eng = engagements.find((e) => e.id === id);
@@ -328,11 +350,122 @@ async function refresh() {
   const j = await api(`/engagements/${S.eng.id}/statements`);
   S.payload = j;
   if (!S.heads.length) await loadHeads();
-  renderGrouping(); renderStatements(); renderChecks(); renderExport();
+  renderGrouping(); renderJournals(); renderStatements(); renderChecks(); renderExport();
   if (isNCE()) renderOwners();
-  reach(5);
+  reach(6);
   renderObservations();
+  checkCarryForward();
 }
+
+/* ---------- carry forward last year's decisions -------------------------- */
+async function checkCarryForward() {
+  if (!S.eng) return;
+  try {
+    const j = await api(`/engagements/${S.eng.id}/carry-forward`);
+    const c = j.candidate;
+    $('cfBtn').classList.toggle('hidden', !c);
+    if (c) $('cfBtn').title = `Copy from the engagement for FY ending ${c.fyEnd}: ${c.mappings} approved head(s), ${c.subgroups} note caption(s)${c.owners ? ', ' + c.owners + ' owner(s)' : ''} — for ledgers still in the books. Nothing decided this year is overwritten.`;
+  } catch { $('cfBtn').classList.add('hidden'); }
+}
+$('cfBtn').onclick = async () => {
+  try {
+    const j = await api(`/engagements/${S.eng.id}/carry-forward`, { method: 'POST', body: '{}' });
+    const c = j.carried, s = j.skipped;
+    msg('mCf', `Carried from FY ending ${j.from.fyEnd}: ${c.mappings} head(s), ${c.subgroups} caption(s), ${c.owners} owner(s).`
+      + (s.alreadySet ? ` ${s.alreadySet} already decided this year were left alone.` : '')
+      + (s.notInBooks.length ? ` ${s.notInBooks.length} ledger(s) from last year are not in this year's books: ${s.notInBooks.slice(0, 5).join('; ')}${s.notInBooks.length > 5 ? '…' : ''}.` : ''), 'ok');
+    if (isNCE()) await loadOwners();
+    await refresh();
+  } catch (e) { msg('mCf', e.message, 'bad'); }
+};
+
+/* ---------- 5. adjustment entries ---------------------------------------- */
+function renderJournals() {
+  const j = S.payload; if (!j) return;
+  const list = j.journals || [];
+  const side = (a) => (a >= 0 ? `<td class="r">${inr(a)}</td><td class="r"></td>` : `<td class="r"></td><td class="r">${inr(-a)}</td>`);
+  $('jrnList').innerHTML = list.length ? list.map((x) => `
+    <div class="chk ${x.approved ? 'INFO' : 'HIGH'}" style="padding:10px 12px">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <span class="pill ${x.approved ? 'ok' : 'warn'}">${x.approved ? 'approved' : 'pending'}</span>
+        <b>${esc(x.narration)}</b> <span class="muted">· ${esc(x.kind)} · ${x.period === 'prior' ? 'comparative year' : 'current year'} · ${esc(String(x.createdAt || '').slice(0, 10))}</span>
+        <span style="margin-left:auto"></span>
+        <button class="btn ghost sm" data-japp="${esc(x.id)}" data-on="${x.approved ? 0 : 1}" type="button">${x.approved ? 'Take back approval' : 'Approve'}</button>
+        <button class="btn ghost sm" data-jedit="${esc(x.id)}" type="button">Edit</button>
+        <button class="btn ghost sm" data-jdel="${esc(x.id)}" type="button">Withdraw</button>
+      </div>
+      <table class="fin" style="margin-top:6px"><tbody>${x.entries.map((e) => `<tr${e.missing ? ' style="background:var(--bad-soft)"' : ''}>
+        <td>${e.ledgerName ? esc(e.ledgerName) + (e.missing ? ' <span class="pill bad">not in the books any more</span>' : '') : '<i>' + esc(e.lineCaption || e.lineId) + '</i> <span class="muted">(head)</span>'}</td>${side(e.amount)}</tr>`).join('')}</tbody></table>
+    </div>`).join('')
+    : '<div class="chk INFO">No adjustment entries yet. Everything on the statements is exactly what the books hold.</div>';
+  $('jrnList').querySelectorAll('[data-japp]').forEach((b) => b.onclick = async () => {
+    try { await api(`/engagements/${S.eng.id}/journals/${b.dataset.japp}/approve`, { method: 'POST', body: JSON.stringify({ approved: b.dataset.on === '1' }) }); await refresh(); }
+    catch (e) { alert(e.message); }
+  });
+  $('jrnList').querySelectorAll('[data-jdel]').forEach((b) => b.onclick = async () => {
+    if (!confirm('Withdraw this entry? It stays on the record but is no longer applied.')) return;
+    try { await api(`/engagements/${S.eng.id}/journals/${b.dataset.jdel}`, { method: 'DELETE' }); await refresh(); }
+    catch (e) { alert(e.message); }
+  });
+  $('jrnList').querySelectorAll('[data-jedit]').forEach((b) => b.onclick = () => {
+    const x = list.find((y) => y.id === b.dataset.jedit); if (!x) return;
+    S.jEditing = x.id;
+    $('jNarr').value = x.narration; $('jKind').value = x.kind || 'reclass'; $('jPeriod').value = x.period || 'current';
+    S.jLines = x.entries.map((e) => ({ ledger: e.ledgerName || '', lineId: e.lineId || '', dr: e.amount > 0 ? e.amount : '', cr: e.amount < 0 ? -e.amount : '' }));
+    renderJLines();
+    msg('mJ', 'Editing — saving records a new entry and withdraws the old one, so the trail stays.', '');
+    $('jNarr').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+  // the ledger search: every ledger in the trial balance, no cap
+  $('jLedgers').innerHTML = (j.trialBalance || []).map((r) => `<option value="${esc(r.ledger)}">`).join('');
+  if (!S.jLines) { S.jLines = [{}, {}]; renderJLines(); }
+}
+function renderJLines() {
+  const heads = headOptions(null).replace(/ selected/g, '');
+  $('jRows').innerHTML = S.jLines.map((l, i) => `<tr data-i="${i}">
+    <td><input class="j-led" list="jLedgers" value="${esc(l.ledger || '')}" placeholder="ledger name" style="width:100%"></td>
+    <td><select class="j-head" style="width:100%;font-size:12px"><option value="">— no head —</option>${heads}</select></td>
+    <td class="r"><input class="j-dr" type="number" step="0.01" min="0" value="${l.dr === '' || l.dr == null ? '' : l.dr}" style="width:120px;text-align:right"></td>
+    <td class="r"><input class="j-cr" type="number" step="0.01" min="0" value="${l.cr === '' || l.cr == null ? '' : l.cr}" style="width:120px;text-align:right"></td>
+    <td><button class="btn ghost sm" data-jrm="${i}" type="button">×</button></td></tr>`).join('');
+  $('jRows').querySelectorAll('tr').forEach((tr, i) => { const sel = tr.querySelector('.j-head'); if (S.jLines[i].lineId) sel.value = S.jLines[i].lineId; });
+  $('jRows').querySelectorAll('[data-jrm]').forEach((b) => b.onclick = () => { readJLines(); S.jLines.splice(+b.dataset.jrm, 1); if (!S.jLines.length) S.jLines = [{}]; renderJLines(); });
+  $('jRows').querySelectorAll('input,select').forEach((el) => el.onchange = () => { readJLines(); jTotals(); });
+  jTotals();
+}
+function readJLines() {
+  S.jLines = [...$('jRows').querySelectorAll('tr')].map((tr) => ({
+    ledger: tr.querySelector('.j-led').value.trim(), lineId: tr.querySelector('.j-head').value,
+    dr: tr.querySelector('.j-dr').value === '' ? '' : Number(tr.querySelector('.j-dr').value),
+    cr: tr.querySelector('.j-cr').value === '' ? '' : Number(tr.querySelector('.j-cr').value) }));
+}
+function jTotals() {
+  const dr = S.jLines.reduce((t, l) => t + (Number(l.dr) || 0), 0), cr = S.jLines.reduce((t, l) => t + (Number(l.cr) || 0), 0);
+  $('jDr').textContent = inr(dr); $('jCr').textContent = inr(cr);
+  const diff = Math.round((dr - cr) * 100) / 100;
+  $('jDiff').innerHTML = diff ? `<span style="color:var(--bad)">out by ${inr(Math.abs(diff))}</span>` : (dr ? '<span style="color:var(--ok)">balances</span>' : '');
+}
+$('jAddRow').onclick = () => { readJLines(); S.jLines.push({}); renderJLines(); };
+async function saveJournal(approve) {
+  readJLines();
+  const entries = S.jLines.filter((l) => (Number(l.dr) || 0) || (Number(l.cr) || 0)).map((l) => {
+    const amount = (Number(l.dr) || 0) - (Number(l.cr) || 0);
+    return l.ledger ? { ledgerKey: l.ledger, amount } : { lineId: l.lineId || null, amount };
+  });
+  if (!$('jNarr').value.trim()) return msg('mJ', 'Give the entry a narration — the reason it is being passed.', 'bad');
+  if (entries.some((e) => !e.ledgerKey && !e.lineId)) return msg('mJ', 'Every line needs a ledger or a head.', 'bad');
+  if (entries.length < 2) return msg('mJ', 'An entry needs at least two lines.', 'bad');
+  const body = { narration: $('jNarr').value.trim(), kind: $('jKind').value, period: $('jPeriod').value, entries, approve };
+  try {
+    if (S.jEditing) await api(`/engagements/${S.eng.id}/journals/${S.jEditing}`, { method: 'PUT', body: JSON.stringify(body) });
+    else await api(`/engagements/${S.eng.id}/journals`, { method: 'POST', body: JSON.stringify(body) });
+    S.jEditing = null; S.jLines = [{}, {}]; $('jNarr').value = '';
+    await refresh();
+    msg('mJ', approve ? 'Recorded, approved and applied to the statements.' : 'Recorded as pending — it is not applied until approved.', 'ok');
+  } catch (e) { msg('mJ', e.message, 'bad'); }
+}
+$('jSavePending').onclick = () => saveJournal(false);
+$('jSaveApprove').onclick = () => saveJournal(true);
 /**
  * The full chart of heads for this division, from the server. It must NOT be
  * derived from the heads already in use, or a head could never be assigned for
@@ -420,7 +553,7 @@ $('gSave').onclick = async () => {
     if (subgroups.length) await api(`/engagements/${S.eng.id}/subgroups`, { method: 'POST', body: JSON.stringify({ subgroups }) });
     await refresh();
     msg('m3', `${mappings.length} mapping(s) approved and the statements rebuilt.`, 'ok');
-    go(5);
+    go(6);
   } catch (e) { msg('m3', e.message, 'bad'); }
 };
 
@@ -439,7 +572,7 @@ function renderStatements() {
   const m = j.meta, c = `As at ${m.currentLabel}`, p = `As at ${m.priorLabel}`;
   const crit = j.checks.filter((x) => x.severity === 'CRITICAL');
   $('stBanner').innerHTML = crit.length
-    ? `<div class="banner bad">DRAFT — NOT FOR ISSUE · ${crit.length} unresolved critical exception(s). See step 5.</div>`
+    ? `<div class="banner bad">DRAFT — NOT FOR ISSUE · ${crit.length} unresolved critical exception(s). See step 7.</div>`
     : `<div class="banner ok">Arithmetic checks pass. Disclosures still need review before issue.</div>`;
 
   let h = '';
@@ -556,7 +689,7 @@ function renderChecks() {
     `<tr><td class="note">${d.note || ''}</td><td>${esc(d.caption)}</td><td>${esc(d.requirement)}</td>
      <td><span class="pill warn">${esc(d.status)}</span></td></tr>`).join('')
     : '<tr><td colspan="4" class="muted">Nothing outstanding.</td></tr>';
-  reach(6);
+  reach(7);
 }
 
 /* ---------- 6. export --------------------------------------------------- */
@@ -566,7 +699,7 @@ function renderExport() {
   $('exBanner').innerHTML = crit.length
     ? `<div class="banner bad">${crit.length} critical exception(s) outstanding — the workbook will be watermarked DRAFT — NOT FOR ISSUE and cannot be marked Final.</div>`
     : `<div class="banner ok">No critical exceptions. The workbook may be issued as a reviewed draft.</div>`;
-  reach(8);
+  reach(9);
 }
 $('exXlsx').onclick = async () => {
   if (!S.payload) return;
@@ -936,7 +1069,7 @@ async function renderObservations() {
       }
     }
     $('obsList').innerHTML = html || '<div class="chk INFO">Nothing observed from the data available.</div>';
-    reach(7);
+    reach(8);
   } catch (e) { $('obsList').innerHTML = `<div class="chk CRITICAL">Could not build observations: ${esc(e.message)}</div>`; }
 }
 
