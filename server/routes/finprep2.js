@@ -183,6 +183,49 @@ router.get('/engagements/:id/snapshots', (req, res) => {
   res.json({ ok: true, snapshots: db().prepare('SELECT * FROM snapshots WHERE engagement_id=? ORDER BY taken_at DESC').all(req.params.id) });
 });
 
+/* ---------- what changed between two imports ----------------------------- */
+/**
+ * Ledger by ledger: the balance in the previous snapshot, the balance now, the
+ * difference — for both periods — plus ledgers that appeared or disappeared.
+ * Default: the latest snapshot against the one before it.
+ */
+router.get('/engagements/:id/variance', (req, res) => {
+  const d = db();
+  const snaps = d.prepare('SELECT * FROM snapshots WHERE engagement_id=? ORDER BY taken_at DESC, rowid DESC').all(req.params.id);
+  if (snaps.length < 2 && !(req.query.to && req.query.from)) {
+    return res.json({ ok: true, rows: [], summary: null, note: snaps.length ? 'Only one import so far — nothing to compare it with.' : 'No import yet.' });
+  }
+  const to = req.query.to ? snaps.find((s) => s.id === req.query.to) : snaps[0];
+  const from = req.query.from ? snaps.find((s) => s.id === req.query.from) : snaps[1];
+  if (!to || !from) return bad(res, 'snapshot not found', 404);
+  const load = (sid) => {
+    const out = new Map();
+    for (const l of d.prepare('SELECT * FROM ledgers WHERE snapshot_id=?').all(sid)) out.set(l.name, { ...l, current: 0, prior: 0 });
+    for (const b of d.prepare('SELECT l.name, b.period, b.amount_paise FROM balances b JOIN ledgers l ON l.id=b.ledger_id WHERE b.snapshot_id=?').all(sid)) {
+      const l = out.get(b.name); if (l) l[b.period] = b.amount_paise;
+    }
+    return out;
+  };
+  const A = load(from.id), B = load(to.id);
+  const names = [...new Set([...A.keys(), ...B.keys()])].sort((x, y) => x.localeCompare(y));
+  const rows = [], summary = { added: 0, dropped: 0, changed: 0, same: 0, netCurrent: 0, netPrior: 0, grossCurrent: 0 };
+  for (const n of names) {
+    const a = A.get(n), b = B.get(n);
+    const status = !a ? 'added' : !b ? 'dropped' : (a.current !== b.current || a.prior !== b.prior) ? 'changed' : 'same';
+    summary[status] += 1;
+    const dCur = (b ? b.current : 0) - (a ? a.current : 0), dPri = (b ? b.prior : 0) - (a ? a.prior : 0);
+    summary.netCurrent += dCur; summary.netPrior += dPri; summary.grossCurrent += Math.abs(dCur);
+    if (status === 'same') continue;
+    rows.push({ ledger: n, group: (b || a).grp, status,
+      wasCurrent: a ? toRupees(a.current) : null, nowCurrent: b ? toRupees(b.current) : null, deltaCurrent: toRupees(dCur),
+      wasPrior: a ? toRupees(a.prior) : null, nowPrior: b ? toRupees(b.prior) : null, deltaPrior: toRupees(dPri),
+      groupChanged: !!(a && b && (a.grp || '') !== (b.grp || '')) });
+  }
+  for (const k of ['netCurrent', 'netPrior', 'grossCurrent']) summary[k] = toRupees(summary[k]);
+  res.json({ ok: true, from: { id: from.id, takenAt: from.taken_at, source: from.source }, to: { id: to.id, takenAt: to.taken_at, source: to.source },
+    rows, summary, note: null });
+});
+
 /* ---------- mappings ---------------------------------------------------- */
 router.post('/engagements/:id/mappings', (req, res) => {
   const { mappings } = req.body || {};

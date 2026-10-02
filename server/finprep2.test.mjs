@@ -156,6 +156,35 @@ await t('a manual split that does not add up blocks release', async () => {
   assert.ok(rel2.ok, rel2.error);
 });
 
+console.log('\n── a second import, and what changed ──');
+await t('the variance report lists changed, new and dropped ledgers against the previous import', async () => {
+  const before = await call('GET', `/engagements/${engId}/variance`);
+  assert.equal(before.summary, null, 'one import has nothing to compare with');
+  // the furniture ledger was renamed, rent went up by 10,000 and the bank down by the same
+  const again = firm.map((l) => l.name === 'Furniture' ? { ...l, name: 'Furniture & Fixtures' }
+    : l.name === 'Shop Rent' ? { ...l, current: 130000 }
+    : l.name === 'HDFC Bank' ? { ...l, current: 1050000 } : l);
+  const s = await call('POST', `/engagements/${engId}/snapshots`, { source: 'excel', method: 'file', ledgers: again });
+  assert.ok(s.ok, s.error); assert.equal(s.balanced, true);
+  const v = await call('GET', `/engagements/${engId}/variance`);
+  assert.ok(v.ok, v.error);
+  assert.equal(v.from.source, 'tally'); assert.equal(v.to.source, 'excel');
+  const by = Object.fromEntries(v.rows.map((r) => [r.ledger, r]));
+  assert.equal(by['Furniture'].status, 'dropped');
+  assert.equal(by['Furniture & Fixtures'].status, 'added');
+  assert.equal(by['Shop Rent'].status, 'changed'); assert.equal(by['Shop Rent'].deltaCurrent, 10000);
+  assert.equal(by['HDFC Bank'].deltaCurrent, -10000);
+  assert.equal(v.summary.changed, 2); assert.equal(v.summary.added, 1); assert.equal(v.summary.dropped, 1);
+  assert.ok(!by['Sales'], 'an unchanged ledger is not listed');
+});
+await t('approved heads and the owners survive the re-import by ledger name', async () => {
+  const j = await call('GET', `/engagements/${engId}/statements`);
+  assert.equal(j.meta.snapshotId !== undefined, true);
+  const sched = j.ownersAccounts.capital;
+  assert.equal(sched.rows.find((x) => x.key === 'closing').total, 820000 + 430000);
+  assert.equal(j.balanceSheet.difference.current, 0);
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 srv.close();
 fs.rmSync(dir, { recursive: true, force: true });

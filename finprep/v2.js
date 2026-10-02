@@ -108,7 +108,7 @@ async function openEngagement(id) {
   reach(3); go(2);
   await loadInputs();
   if (isNCE()) await loadOwners();
-  try { await refresh(); } catch { /* no snapshot yet — expected */ }
+  try { await refresh(); await showVariance(); } catch { /* no snapshot yet — expected */ }
 }
 $('engNew').onclick = async () => {
   try {
@@ -242,10 +242,86 @@ $('pull').onclick = async () => {
       kpi(snap.ledgerCount, 'ledgers sealed into the snapshot') +
       kpi(inr(snap.controlTotals.current), 'trial balance total (must be nil)', snap.balanced ? 'good' : 'bad');
     msg('m2', snap.balanced ? 'Snapshot sealed and the books balance.' : snap.warning, snap.balanced ? 'ok' : 'bad');
-    await refresh(); reach(4); go(4);
+    await refresh(); await showVariance(); reach(4); go(4);
   } catch (e) { msg('m2', 'Import failed: ' + e.message, 'bad'); }
 };
 const kpi = (v, t, cls = '') => `<div class="k ${cls}"><div class="v">${esc(v)}</div><div class="t">${esc(t)}</div></div>`;
+
+/* ---------- 2b. an Excel trial balance ---------------------------------- */
+function download(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name; a.style.display = 'none';
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { a.remove(); URL.revokeObjectURL(a.href); }, 1500);
+}
+$('tplDl').onclick = async () => {
+  if (!S.eng) return msg('mTpl', 'Open or create the engagement first — the template carries its heads.', 'bad');
+  try {
+    if (!window.ExcelJS) throw new Error('the Excel library is still loading — try again in a moment');
+    if (!S.heads.length) await loadHeads();
+    const mod = await import('./core/tbTemplate.js');
+    const wb = mod.buildTemplate(window.ExcelJS, { heads: S.heads.filter((h) => h.section !== 'UNCLASSIFIED'),
+      entity: S.eng.client_name, fyEnd: S.eng.fy_end, framework: isNCE() ? 'ICAI format for non-corporate entities' : 'Schedule III' });
+    const buf = await wb.xlsx.writeBuffer();
+    download(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+      'Trial_balance_template_' + S.eng.client_name.replace(/[^A-Za-z0-9]+/g, '_') + '.xlsx');
+    msg('mTpl', 'Template downloaded. Fill the "Trial Balance" sheet and upload it here.', 'ok');
+  } catch (e) { msg('mTpl', e.message, 'bad'); }
+};
+$('tplGo').onclick = async () => {
+  if (!S.eng) return msg('mTpl', 'Open or create the engagement first.', 'bad');
+  const f = $('tplFile').files[0];
+  if (!f) return msg('mTpl', 'Choose the filled template first.', 'bad');
+  msg('mTpl', 'Reading the sheet…');
+  $('tplReport').innerHTML = '';
+  try {
+    if (!window.ExcelJS) throw new Error('the Excel library is still loading — try again in a moment');
+    if (!S.heads.length) await loadHeads();
+    const mod = await import('./core/tbTemplate.js');
+    const res = await mod.readTemplate(window.ExcelJS, await f.arrayBuffer(), { heads: S.heads });
+    const list = (items, cls) => items.map((x) => `<div class="chk ${cls}">${esc(x)}</div>`).join('');
+    if (res.errors.length) {
+      $('tplReport').innerHTML = `<div class="banner bad">Not imported — ${res.errors.length} problem(s) in the sheet${res.sheet ? ' “' + esc(res.sheet) + '”' : ''}. Fix them and upload again.</div>`
+        + list(res.errors, 'CRITICAL') + list(res.warnings, 'REVIEW');
+      return msg('mTpl', 'The sheet was refused.', 'bad');
+    }
+    const t = res.totals;
+    const snap = await api(`/engagements/${S.eng.id}/snapshots`, { method: 'POST', body: JSON.stringify({
+      source: 'excel', method: 'file', company: f.name, periodFrom: S.eng.fy_start, periodTo: S.eng.fy_end, ledgers: res.ledgers }) });
+    if (res.mappings.length) await api(`/engagements/${S.eng.id}/mappings`, { method: 'POST', body: JSON.stringify({ mappings: res.mappings }) });
+    $('k2').innerHTML =
+      kpi(snap.ledgerCount, 'ledgers sealed into the snapshot') +
+      kpi(inr(snap.controlTotals.current), 'trial balance total (must be nil)', snap.balanced ? 'good' : 'bad') +
+      kpi(t.withHead, 'heads given in the sheet') + kpi(t.withMovements, 'ledgers with gross movements');
+    $('tplReport').innerHTML = list(res.warnings, 'REVIEW');
+    msg('mTpl', `Imported ${res.ledgers.length} ledgers from “${esc(res.sheet)}” (closing Dr ${inr(t.closeDr)} = Cr ${inr(t.closeCr)}).`, 'ok');
+    $('tplFile').value = '';
+    await refresh();
+    await showVariance();
+    reach(4); go(4);
+  } catch (e) { msg('mTpl', 'Import failed: ' + e.message, 'bad'); }
+};
+/** Ledger by ledger, what this import changed against the previous one. */
+async function showVariance() {
+  if (!S.eng) return;
+  try {
+    const v = await api(`/engagements/${S.eng.id}/variance`);
+    if (!v.summary) { $('varCard').classList.add('hidden'); return; }
+    $('varCard').classList.remove('hidden');
+    $('varSub').textContent = `Previous import ${String(v.from.takenAt).slice(0, 16).replace('T', ' ')} (${v.from.source}) against this one ${String(v.to.takenAt).slice(0, 16).replace('T', ' ')} (${v.to.source}). Approved heads, note captions, owners and adjustments carry over by ledger name.`;
+    const s = v.summary;
+    $('varKpi').innerHTML = kpi(s.changed, 'ledgers changed', s.changed ? '' : 'good') + kpi(s.added, 'new ledgers', s.added ? '' : 'good')
+      + kpi(s.dropped, 'ledgers gone', s.dropped ? 'bad' : 'good') + kpi(s.same, 'unchanged') + kpi(inr(s.grossCurrent), 'gross change in closing balances');
+    const cls = { added: 'ok', dropped: 'bad', changed: 'warn' };
+    $('varRows').innerHTML = v.rows.length ? v.rows.map((r) => `<tr>
+      <td>${esc(r.ledger)}</td><td class="muted">${esc(r.group || '')}${r.groupChanged ? ' <span class="pill warn">group changed</span>' : ''}</td>
+      <td><span class="pill ${cls[r.status] || 'info'}">${esc(r.status)}</span></td>
+      <td class="r">${r.wasCurrent == null ? '—' : inr(r.wasCurrent)}</td><td class="r">${r.nowCurrent == null ? '—' : inr(r.nowCurrent)}</td>
+      <td class="r"><b>${inr(r.deltaCurrent)}</b></td>
+      <td class="r">${r.wasPrior == null ? '—' : inr(r.wasPrior)}</td><td class="r">${r.nowPrior == null ? '—' : inr(r.nowPrior)}</td></tr>`).join('')
+      : '<tr><td colspan="8" class="muted">Nothing changed between the two imports.</td></tr>';
+  } catch { $('varCard').classList.add('hidden'); }
+}
 
 /* ---------- refresh the whole model ------------------------------------ */
 async function refresh() {

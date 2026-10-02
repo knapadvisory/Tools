@@ -175,6 +175,25 @@
       <div id="m2" style="margin-top:10px"></div>
       <div class="kpi" id="k2"></div>
     </div>
+    <div class="card">
+      <h2>…or upload a trial balance in Excel</h2>
+      <p class="sub">For books that cannot be reached from this PC — a client’s Tally on a remote desktop, another accounting package, a trial balance that arrived as a spreadsheet. Download the template, fill one row per ledger (debit and credit in separate columns; opening and closing; movements optional), and upload it. The sheet is checked before anything is stored: it must balance, every ledger once, every head one the tool knows. A re-upload replaces the previous trial balance and shows what changed; the heads you approved and the adjustments you recorded are kept.</p>
+      <div class="row">
+        <button class="btn ghost" id="tplDl" type="button">⬇ Download the template</button>
+        <input type="file" id="tplFile" accept=".xlsx,.xlsm,.xls" style="font-size:12px">
+        <button class="btn" id="tplGo" type="button">Check &amp; import</button>
+      </div>
+      <div id="mTpl" style="margin-top:10px"></div>
+      <div id="tplReport"></div>
+    </div>
+    <div class="card hidden" id="varCard">
+      <h2>What changed since the previous import</h2>
+      <p class="sub" id="varSub"></p>
+      <div class="kpi" id="varKpi"></div>
+      <div class="wrap" style="margin-top:10px;max-height:380px"><table class="fin"><thead><tr>
+        <th>Ledger</th><th>Group</th><th>Status</th><th class="r">Closing before</th><th class="r">Closing now</th><th class="r">Change</th><th class="r">Opening before</th><th class="r">Opening now</th>
+      </tr></thead><tbody id="varRows"></tbody></table></div>
+    </div>
   </section>
 
   <!-- 3 GROUPING -->
