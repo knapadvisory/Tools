@@ -42,7 +42,8 @@ function priorLabel(iso) {
  */
 const NON_MONEY = new Set(['number', 'note', 'id', 'key', 'lineId', 'caption', 'name', 'reason',
   'severity', 'status', 'requirement', 'evidence', 'section', 'title', 'period', 'method',
-  'reconciled', 'drcr', 'group', 'primary', 'lineCaption', 'text', 'label']);
+  'reconciled', 'drcr', 'group', 'primary', 'lineCaption', 'text', 'label', 'ratio', 'ownerId',
+  'kind', 'owner', 'basis', 'profitTo', 'shareBasis', 'ledger', 'depBasis', 'splitBasis', 'personalPct', 'footnote', 'extra', 'provided']);
 let SCALE_DIV = 1;
 const rupDeep = (v, key) => {
   if (typeof v === 'number') return NON_MONEY.has(key) ? v : (toRupees(v) / SCALE_DIV);
@@ -463,8 +464,47 @@ function loadForBuild(engagementId, snapshotId) {
         ledgerId: e.ledger_key ? (idByName.get(e.ledger_key) || ('missing:' + e.ledger_key)) : (e.ledger_id || null) })),
   }));
   const owners = loadOwners(engagementId);
-  return { eng, snap, ledgers, overrides, journals, priorOverrides, subOverrides, owners };
+  const inputs = loadInputs(engagementId);
+  return { eng, snap, ledgers, overrides, journals, priorOverrides, subOverrides, owners, inputs };
 }
+
+/* ---------- what the preparer types: policies, footnotes, MSMED, PPE, sign-off ---- */
+function loadInputs(engagementId) {
+  return Object.fromEntries(db().prepare('SELECT key, value FROM note_inputs WHERE engagement_id=?').all(engagementId).map((x) => [x.key, x.value]));
+}
+router.get('/engagements/:id/text', (req, res) => {
+  const eng = db().prepare('SELECT * FROM engagements WHERE id=?').get(req.params.id);
+  if (!eng) return bad(res, 'engagement not found', 404);
+  res.json({ ok: true, inputs: loadInputs(eng.id) });
+});
+/** Upsert the given keys; a null or empty value removes the key. */
+router.put('/engagements/:id/text', (req, res) => {
+  const eng = db().prepare('SELECT * FROM engagements WHERE id=?').get(req.params.id);
+  if (!eng) return bad(res, 'engagement not found', 404);
+  const inputs = (req.body && req.body.inputs) || {};
+  if (typeof inputs !== 'object') return bad(res, 'inputs{} is required');
+  const d = db();
+  const up = d.prepare(`INSERT INTO note_inputs (engagement_id,key,value,updated_by,updated_at) VALUES (?,?,?,?,?)
+    ON CONFLICT(engagement_id,key) DO UPDATE SET value=excluded.value, updated_by=excluded.updated_by, updated_at=excluded.updated_at`);
+  const del = d.prepare('DELETE FROM note_inputs WHERE engagement_id=? AND key=?');
+  d.exec('BEGIN');
+  try {
+    for (const [k, v] of Object.entries(inputs)) {
+      if (!/^[a-z]+(:[^:]{1,200}){0,2}$/i.test(k)) continue;
+      if (v == null || String(v).trim() === '') del.run(eng.id, k); else up.run(eng.id, k, String(v).slice(0, 20000), actor(req), now());
+    }
+    d.exec('COMMIT');
+  } catch (e) { d.exec('ROLLBACK'); return bad(res, e.message, 500); }
+  log(eng.id, actor(req), 'text.saved', { keys: Object.keys(inputs).length });
+  res.json({ ok: true, inputs: loadInputs(eng.id) });
+});
+/** A starting text for the accounting policies, by constitution and framework. */
+router.get('/engagements/:id/policies/default', async (req, res) => {
+  const eng = db().prepare('SELECT * FROM engagements WHERE id=?').get(req.params.id);
+  if (!eng) return bad(res, 'engagement not found', 404);
+  const { defaultPolicies } = await import('../../finprep/core/policies.js');
+  res.json({ ok: true, text: defaultPolicies({ constitution: eng.constitution, division: eng.division, entity: eng.client_name }) });
+});
 
 /** Everything build() needs from a loaded context — one place, so the screen,
  *  the export and the release all compute the same statements. */
@@ -488,9 +528,11 @@ function buildPayload(ctx, schedules = {}) {
   SCALE_DIV = SCALES[scaleKey].div;
   const r = build(buildArgs(ctx));
   const cf = buildCashFlow(r, { schedules });
-  const model = presentationModel(r, { subOverrides: ctx.subOverrides || {} });
-  const allChecks = r.checks.concat(cf.checks);
+  const inputs = ctx.inputs || {};
+  const model = presentationModel(r, { subOverrides: ctx.subOverrides || {}, inputs });
+  const allChecks = r.checks.concat(cf.checks, model.scheduleChecks || []);
   const releasable = r.releasable && cf.reconciled;
+  const sign = (k) => inputs[`sign:${k}`] || '';
 
   // trial balance rows, natural sign, with the head each ledger reached
   // The caption each ledger ends up on, looked up once rather than per row.
@@ -539,7 +581,18 @@ function buildPayload(ctx, schedules = {}) {
       scaleLabel: SCALES[scaleKey].label,
       permittedScales: permittedScales(r.value('revenue_operations', 'current') * -1 || 0),
       sectionTitles: sectionTitles(r.division),
+      auditor: { firm: sign('firm'), frn: sign('frn'), partner: sign('partner'), membership: sign('membership') },
+      place: sign('place'), signedOn: sign('date'),
     },
+    text: {
+      policies: inputs.policies || '',
+      footnotes: Object.fromEntries(Object.entries(inputs).filter(([k]) => k.startsWith('footnote:')).map(([k, v]) => [k.slice(9), v])),
+      msme: Object.fromEntries(Object.entries(inputs).filter(([k]) => k.startsWith('msme:')).map(([k, v]) => [k.slice(5), v])),
+      ppe: Object.fromEntries(Object.entries(inputs).filter(([k]) => k.startsWith('ppe:')).map(([k, v]) => [k.slice(4), v])),
+      sign: { firm: sign('firm'), frn: sign('frn'), partner: sign('partner'), membership: sign('membership'), place: sign('place'), date: sign('date') },
+    },
+    policies: inputs.policies || '',
+    ppe: model.ppe ? rupDeep(model.ppe) : null,
     trialBalance,
     balanceSheet: rupDeep(model.balanceSheet),
     profitAndLoss: rupDeep(model.profitAndLoss),

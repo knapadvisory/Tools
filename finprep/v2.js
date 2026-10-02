@@ -130,6 +130,7 @@ async function openEngagement(id) {
   reach(3); go(2);
   await loadInputs();
   if (isNCE()) await loadOwners();
+  await loadText();
   try { await refresh(); await showVariance(); } catch { /* no snapshot yet — expected */ }
 }
 $('engNew').onclick = async () => {
@@ -680,11 +681,13 @@ function renderStatements() {
   } else if (S.tab === 'cash') {
     h = cashReportHtml();
   } else {
-    h = '';
+    h = `<div class="row" style="padding:10px 10px 0"><span class="muted" style="flex:1">Under each note: a footnote, the MSMED figures under trade payables, depreciation per asset on the fixed-asset note. Type, then save — the statements rebuild and the exports carry the text.</span>
+      <button class="btn sm" id="ntSave" type="button">Save notes text &amp; rebuild</button><span id="mNt" class="muted"></span></div>`;
     for (const n of j.notes) {
       h += `<table class="fin" style="margin-bottom:14px"><thead><tr>
         <th>Note ${n.number} — ${esc(n.caption)}</th><th class="r">${esc(m.currentLabel)}</th><th class="r">${esc(m.priorLabel)}</th></tr></thead><tbody>`;
       if (n.kind === 'owners' && n.schedule) h += `<tr><td colspan="3" style="padding:8px 0 10px">${ownersTable(n.schedule, m)}</td></tr>`;
+      if (n.kind === 'ppe' && n.schedule) h += `<tr><td colspan="3" style="padding:8px 0 10px">${ppeTable(n.schedule, m)}</td></tr>`;
       for (const s of n.subLines) {
         h += `<tr><td>${esc(s.name)}</td><td class="r">${inr(s.current)}</td><td class="r">${inr(s.prior)}</td></tr>`;
         // the ledgers behind a sub-grouped line, so the figure stays traceable
@@ -693,13 +696,86 @@ function renderStatements() {
           + s.members.map((m) => `${esc(m.name)} ${inr(m.current)}`).join(' · ') + '</td></tr>';
       }
       h += `<tr class="grp"><td>Total</td><td class="r">${inr(n.current)}</td><td class="r">${inr(n.prior)}</td></tr>`;
+      if (n.msme) h += `<tr><td colspan="3" style="padding:6px 0 8px">${msmeTable(n.msme)}</td></tr>`;
       if (n.requires.length) h += `<tr><td colspan="3" class="muted">Still required: ${n.requires.map(esc).join(' · ')}</td></tr>`;
+      h += `<tr><td colspan="3"><label style="margin:4px 0 2px">Footnote to note ${n.number}</label>
+        <textarea data-fn="${esc(n.lineId)}" rows="2" placeholder="e.g. Secured by hypothecation of stock and book debts; repayable in 36 monthly instalments." style="width:100%;font:inherit;font-size:12px;padding:6px;border:1px solid var(--rule);border-radius:6px">${esc(n.footnote || '')}</textarea></td></tr>`;
       h += '</tbody></table>';
     }
     if (!j.notes.length) h = '<p class="muted" style="padding:12px">No notes yet.</p>';
   }
   $('stBody').innerHTML = h;
+  if (S.tab === 'nt') { const b = $('ntSave'); if (b) b.onclick = saveNotesText; }
 }
+
+/* ---------- the fixed-asset schedule on the PPE note ---------------------- */
+function ppeTable(s, m) {
+  let h = `<table class="fin own" style="width:100%"><thead><tr><th>Asset ledger</th><th class="r">Opening WDV</th><th class="r">Additions</th><th class="r">Deductions</th>
+    <th class="r" title="From the depreciation ledger named for the asset, the whole charge when there is one asset, or what you key here">Depreciation</th><th class="r">Closing WDV</th>
+    <th class="r" title="Share of the depreciation for personal use — disallowed under s.38(2)">Personal use %</th><th class="r">Personal-use dep.</th></tr></thead><tbody>`;
+  for (const r of s.rows) {
+    h += `<tr><td>${esc(r.ledger)}<div class="muted" style="font-size:11px">${esc(r.depBasis)}${r.hasGross ? '' : ' · shown net'}</div></td>
+      <td class="r">${inr(r.opening)}</td><td class="r">${inr(r.additions)}</td><td class="r">${inr(r.deductions)}</td>
+      <td class="r"><input data-ppe="dep" data-led="${esc(r.ledger)}" type="number" step="0.01" value="${/keyed/.test(r.depBasis) ? r.depreciation : ''}" placeholder="${inr(r.depreciation)}" style="width:120px;text-align:right" title="Leave blank to use the matched figure"></td>
+      <td class="r"><b>${inr(r.closing)}</b></td>
+      <td class="r"><input data-ppe="personal" data-led="${esc(r.ledger)}" type="number" min="0" max="100" step="1" value="${r.personalPct || ''}" style="width:60px;text-align:right"></td>
+      <td class="r">${inr(r.personalUse)}</td></tr>`;
+  }
+  const t = s.totals;
+  h += `<tr class="tot"><td>Total</td><td class="r">${inr(t.opening)}</td><td class="r">${inr(t.additions)}</td><td class="r">${inr(t.deductions)}</td><td class="r">${inr(t.depreciation)}</td><td class="r">${inr(t.closing)}</td><td></td><td class="r">${inr(t.personalUse)}</td></tr></tbody></table>`;
+  h += `<div class="row" style="margin-top:6px"><div style="flex:1"><label>Depreciation method (printed under the schedule)</label><input data-ppe="method" value="${esc(s.method || '')}" placeholder="Written-down value at the rates under the Income-tax Act, 1961" style="width:100%"></div></div>`;
+  if (s.notes && s.notes.length) h += `<div class="muted" style="margin-top:4px">${s.notes.map(esc).join(' · ')}</div>`;
+  if (s.checks && s.checks.length) h += s.checks.map((c) => `<div class="chk ${c.severity}" style="margin-top:6px">${esc(c.message)}</div>`).join('');
+  return h;
+}
+/* ---------- MSMED s.22 under trade payables ------------------------------ */
+function msmeTable(msme) {
+  return `<div class="muted" style="margin-bottom:4px"><b>Dues to micro and small enterprises (MSMED Act, s.22)</b> — from the Udyam evidence and the ageing; leave blank where nil has not been established.</div>
+    <table class="fin own" style="width:100%"><tbody>${msme.rows.map((r) => `<tr><td style="white-space:normal">${esc(r.label)}</td>
+      <td class="r"><input data-msme="${esc(r.key)}" type="number" step="0.01" value="${r.amount == null ? '' : r.amount}" style="width:140px;text-align:right"></td></tr>`).join('')}</tbody></table>`;
+}
+async function saveNotesText() {
+  const inputs = {};
+  document.querySelectorAll('#stBody [data-fn]').forEach((el) => { inputs['footnote:' + el.dataset.fn] = el.value.trim(); });
+  document.querySelectorAll('#stBody [data-msme]').forEach((el) => { inputs['msme:' + el.dataset.msme] = el.value.trim(); });
+  document.querySelectorAll('#stBody [data-ppe]').forEach((el) => {
+    const k = el.dataset.ppe === 'method' ? 'ppe:method' : `ppe:${el.dataset.led}:${el.dataset.ppe}`;
+    inputs[k] = el.value.trim();
+  });
+  try {
+    await api(`/engagements/${S.eng.id}/text`, { method: 'PUT', body: JSON.stringify({ inputs }) });
+    await refresh();
+    msg('mNt', 'Saved and rebuilt.', 'ok');
+  } catch (e) { msg('mNt', e.message, 'bad'); }
+}
+
+/* ---------- sign-off and accounting policies (export step) --------------- */
+async function loadText() {
+  if (!S.eng) return;
+  try {
+    const { inputs } = await api(`/engagements/${S.eng.id}/text`);
+    S.text = inputs || {};
+    const g = (k) => S.text[k] || '';
+    $('sgFirm').value = g('sign:firm'); $('sgFrn').value = g('sign:frn'); $('sgPartner').value = g('sign:partner');
+    $('sgMem').value = g('sign:membership'); $('sgPlace').value = g('sign:place'); $('sgDate').value = g('sign:date');
+    $('polText').value = g('policies');
+  } catch { /* an older server */ }
+}
+$('sgSave').onclick = async () => {
+  const inputs = { 'sign:firm': $('sgFirm').value, 'sign:frn': $('sgFrn').value, 'sign:partner': $('sgPartner').value,
+    'sign:membership': $('sgMem').value, 'sign:place': $('sgPlace').value, 'sign:date': $('sgDate').value };
+  try { await api(`/engagements/${S.eng.id}/text`, { method: 'PUT', body: JSON.stringify({ inputs }) }); await refresh(); msg('mSg', 'Saved.', 'ok'); }
+  catch (e) { msg('mSg', e.message, 'bad'); }
+};
+$('polSave').onclick = async () => {
+  try { await api(`/engagements/${S.eng.id}/text`, { method: 'PUT', body: JSON.stringify({ inputs: { policies: $('polText').value } }) }); await refresh(); msg('mPol', 'Saved.', 'ok'); }
+  catch (e) { msg('mPol', e.message, 'bad'); }
+};
+$('polDefault').onclick = async () => {
+  if ($('polText').value.trim() && !confirm('Replace the current text with the starting text?')) return;
+  try { const { text } = await api(`/engagements/${S.eng.id}/policies/default`); $('polText').value = text; msg('mPol', 'Starting text inserted — edit it, confirm every [CONFIRM] choice, then save.', 'ok'); }
+  catch (e) { msg('mPol', e.message, 'bad'); }
+};
 
 /* ---------- cash report: s.40A(3) payments and s.269ST receipts ----------- */
 /**

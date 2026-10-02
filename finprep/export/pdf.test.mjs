@@ -37,7 +37,7 @@ const firm = [
 const owners = [{ id: 'own_r', name: 'Ramesh Kumar', role: 'Partner', pan: 'AAAPR1111A', ratio: 60 }, { id: 'own_s', name: 'Suresh Kumar', role: 'Partner', pan: 'AAAPS2222B', ratio: 40 }];
 const r = build({ ledgers: firm, constitution: 'partnership', owners });
 const cf = buildCashFlow(r);
-const pm = presentationModel(r);
+const pm = presentationModel(r, { inputs: { 'footnote:trade_payables_others': 'Creditors are unsecured.', 'msme:principal': 120000, 'ppe:Furniture:dep': 0 } });
 const NON_MONEY = new Set(['number', 'note', 'id', 'key', 'lineId', 'caption', 'name', 'reason', 'severity', 'status', 'requirement', 'evidence', 'section', 'title', 'period', 'method', 'reconciled', 'drcr', 'group', 'primary', 'lineCaption', 'text', 'label', 'ratio', 'ownerId', 'kind', 'owner', 'basis', 'profitTo', 'shareBasis']);
 const rup = (v, k) => (typeof v === 'number' ? (NON_MONEY.has(k) ? v : toRupees(v)) : Array.isArray(v) ? v.map((x) => rup(x, k)) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([kk, x]) => [kk, rup(x, kk)])) : v);
 const payload = {
@@ -45,6 +45,7 @@ const payload = {
     ownersLabel: 'Partners', ownerRole: 'Partner', framework: 'ICAI Guidance Note on Financial Statements of Non-Corporate Entities',
     owners, currentLabel: '31 March 2026', priorLabel: '31 March 2025', status: 'Draft', scaleLabel: 'Amounts in ₹' },
   balanceSheet: rup(pm.balanceSheet), profitAndLoss: rup(pm.profitAndLoss), notes: rup(pm.notes), ownersAccounts: rup(pm.ownersAccounts),
+  ppe: rup(pm.ppe),
   checks: r.checks.concat(cf.checks), policies: 'Basis of preparation: the financial statements are prepared under the historical cost convention on the accrual basis.\nRevenue: recognised on transfer of goods.',
 };
 
@@ -89,7 +90,8 @@ await t('the PDF is produced with a page for each statement, the owners’ accou
 await t('the faces, the partners’ accounts, the signatures and the policies are on the pages', async () => {
   const text = await drawnText(bytes);
   for (const must of ['Balance sheet as at 31 March 2026', 'Statement of profit and loss', "Partners' capital accounts", 'Ramesh Kumar', 'Suresh Kumar',
-    '12,60,000.00', '2,64,000.00', '1,76,000.00', 'PAN AAAPR1111A', 'For M/s Kumar Traders', 'Significant accounting policies', 'historical cost', 'Page 1 of']) {
+    '12,60,000.00', '2,64,000.00', '1,76,000.00', 'PAN AAAPR1111A', 'For M/s Kumar Traders', 'Significant accounting policies', 'historical cost', 'Page 1 of',
+    'Property, plant and equipment - schedule', 'Furniture', 'Creditors are unsecured.', 'Dues to micro and small enterprises', '1,20,000.00']) {
     assert.ok(text.includes(must), 'missing: ' + must);
   }
   assert.ok(!text.includes('Board of Directors'));

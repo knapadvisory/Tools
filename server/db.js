@@ -293,6 +293,24 @@ const MIGRATIONS = [
       WHERE ledger_id IS NOT NULL AND ledger_key IS NULL;
     `,
   },
+  {
+    id: 8,
+    name: 'note_inputs',
+    up: `
+    -- What the preparer types into the statements that no ledger holds: the
+    -- accounting policies, a footnote under a note, the MSMED disclosure
+    -- figures, depreciation per asset ledger for the PPE schedule, who signs.
+    -- One row per key; the key names the note or the item it belongs to.
+    CREATE TABLE note_inputs (
+      engagement_id TEXT NOT NULL REFERENCES engagements(id),
+      key           TEXT NOT NULL,
+      value         TEXT,
+      updated_by    TEXT,
+      updated_at    TEXT NOT NULL,
+      PRIMARY KEY (engagement_id, key)
+    );
+    `,
+  },
 ];
 
 let db = null;

@@ -14,6 +14,7 @@ import { add, neg } from './money.js';
 import { linesFor, captionFor, sectionOf, sideOf, line as lineDef } from './schedule3.js';
 import { byLine as disclosuresForLine } from './disclosures.js';
 import { deriveSubGroups } from './subgroup.js';
+import { ppeSchedule, msmeDisclosure } from './ppe.js';
 
 /**
  * Aggregate a line's ledger contributions into note sub-lines.
@@ -64,10 +65,13 @@ function subLines(r, lineId, periods, subOverrides = {}) {
     .sort((a, b) => Math.abs(b[periods[0]]) - Math.abs(a[periods[0]]));
 }
 
-/** The numbered notes, in Schedule III order, for the heads actually used. */
-export function buildNotes(r, subOverrides = {}) {
+/** The numbered notes, in Schedule III order, for the heads actually used.
+ *  `inputs` holds what the preparer typed: footnotes, MSMED figures, PPE depreciation. */
+export function buildNotes(r, subOverrides = {}, inputs = {}) {
   const { periods, division } = r;
   const out = [];
+  const schedules = { ppe: ppeSchedule(r, inputs, 'ppe'), intangibles: ppeSchedule(r, inputs, 'intangibles') };
+  const msme = msmeDisclosure(inputs);
   for (const def of linesFor(division)) {
     if (!def.note) continue;
     const n = r.noteNumbers.get(def.id);
@@ -107,6 +111,15 @@ export function buildNotes(r, subOverrides = {}) {
       note.kind = 'owners';
       note.schedule = sched || null;
     }
+    // The fixed-asset schedule rides on the PPE (and intangibles) note.
+    if (schedules[def.id]) { note.kind = 'ppe'; note.schedule = schedules[def.id]; }
+    // The MSMED s.22 disclosure sits under trade payables, from the preparer's figures.
+    if (def.id === 'trade_payables_msme' || def.id === 'trade_payables_others') {
+      note.msme = msme;
+      note.extra = msme.provided ? msme.rows.filter((x) => x.amount != null).map((x) => `${x.label}: ${x.amount}`) : [];
+    }
+    const fn = inputs[`footnote:${def.id}`];
+    if (fn && String(fn).trim()) note.footnote = String(fn).trim();
     out.push(note);
   }
   return out;
@@ -262,11 +275,16 @@ export function disclosureSources(reg) {
 }
 
 export function presentationModel(r, opts = {}) {
+  const inputs = opts.inputs || {};
+  const notes = buildNotes(r, opts.subOverrides || {}, inputs);
+  const ppe = (notes.find((n) => n.lineId === 'ppe') || {}).schedule || null;
   return {
     division: r.division, periods: r.periods, constitution: r.constitution || 'company',
     balanceSheet: balanceSheetFace(r),
     profitAndLoss: profitAndLossFace(r),
-    notes: buildNotes(r, opts.subOverrides || {}),
+    notes,
+    ppe,
+    scheduleChecks: notes.flatMap((n) => (n.schedule && n.schedule.checks) || []),
     ownersAccounts: r.owners ? { capital: r.owners.capital, current: r.owners.current, profitTo: r.owners.profitTo,
                                  shareBasis: r.owners.shareBasis, assignments: r.owners.assignments || [] } : null,
     disclosures: disclosureRegister(r, opts.answers),

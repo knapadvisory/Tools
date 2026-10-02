@@ -317,6 +317,28 @@
   <!-- 9 EXPORT -->
   <section id="s9" class="hidden">
     <div class="card">
+      <h2>Sign-off</h2>
+      <p class="sub">Who signs the statements. The auditor on the left of each face; the board or the owners on the right (the owners come from step 4). Kept with the engagement; printed on the Excel and the PDF.</p>
+      <div class="row">
+        <div><label>Audit firm</label><input id="sgFirm" placeholder="ABC & Associates" style="min-width:200px"></div>
+        <div><label>FRN</label><input id="sgFrn" placeholder="012345N" style="width:110px"></div>
+        <div><label>Signing partner</label><input id="sgPartner" placeholder="CA Name" style="min-width:160px"></div>
+        <div><label>Membership no.</label><input id="sgMem" placeholder="123456" style="width:110px"></div>
+        <div><label>Place</label><input id="sgPlace" placeholder="Faridabad" style="width:140px"></div>
+        <div><label>Date</label><input id="sgDate" type="date"></div>
+        <button class="btn sm" id="sgSave" type="button">Save</button><span id="mSg" class="muted"></span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Significant accounting policies</h2>
+      <p class="sub">Printed as the first section of the notes. “Insert a starting text” gives a template for this constitution and framework with the choices to confirm marked [CONFIRM: …] — it is a draft to edit, never a statement of fact about the client.</p>
+      <div class="row">
+        <button class="btn ghost sm" id="polDefault" type="button">Insert a starting text</button>
+        <button class="btn sm" id="polSave" type="button">Save</button><span id="mPol" class="muted"></span>
+      </div>
+      <textarea id="polText" rows="12" style="width:100%;font:inherit;font-size:13px;margin-top:8px;padding:8px;border:1px solid var(--rule);border-radius:6px"></textarea>
+    </div>
+    <div class="card">
       <h2>Export</h2>
       <p class="sub">One workbook: Balance Sheet, Profit &amp; Loss, Cash Flow, Notes, Trial Balance, Disclosures and Review. The faces are formula-linked to the notes and the notes to the trial balance, so every figure is traceable inside the file.</p>
       <div id="exBanner"></div>

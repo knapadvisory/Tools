@@ -233,6 +233,51 @@ await t('a withdrawn entry is no longer applied', async () => {
   assert.equal(s.profitAndLoss.pat.current, 430000);
 });
 
+console.log('\n── what the preparer types: footnotes, MSMED, PPE depreciation, sign-off, policies ──');
+await t('text inputs round-trip and reach the payload: footnote, MSMED block, sign-off, policies', async () => {
+  const put = await call('PUT', `/engagements/${engId}/text`, { inputs: {
+    'footnote:trade_payables_others': 'Creditors are unsecured and payable within 60 days.',
+    'msme:principal': '120000', 'msme:interest': '0',
+    'sign:firm': 'ABC & Associates', 'sign:frn': '012345N', 'sign:partner': 'CA Test', 'sign:membership': '123456', 'sign:place': 'Faridabad', 'sign:date': '2026-09-01',
+    'policies': 'Basis: historical cost.', 'bad key with spaces': 'ignored', 'empty:thing': '' } });
+  assert.ok(put.ok, put.error);
+  assert.equal(put.inputs['sign:firm'], 'ABC & Associates');
+  assert.equal(put.inputs['bad key with spaces'], undefined);
+  assert.equal(put.inputs['empty:thing'], undefined);
+  const s = await call('GET', `/engagements/${engId}/statements`);
+  const tp = s.notes.find((n) => n.lineId === 'trade_payables_others');
+  assert.equal(tp.footnote, 'Creditors are unsecured and payable within 60 days.');
+  assert.equal(tp.msme.provided, true);
+  assert.equal(tp.msme.rows[0].amount, 120000);
+  assert.equal(s.meta.auditor.firm, 'ABC & Associates'); assert.equal(s.meta.place, 'Faridabad'); assert.equal(s.meta.signedOn, '2026-09-01');
+  assert.equal(s.text.policies, 'Basis: historical cost.'); assert.equal(s.policies, 'Basis: historical cost.');
+  // removing a key
+  await call('PUT', `/engagements/${engId}/text`, { inputs: { 'footnote:trade_payables_others': null } });
+  const s2 = await call('GET', `/engagements/${engId}/statements`);
+  assert.equal(s2.notes.find((n) => n.lineId === 'trade_payables_others').footnote, undefined);
+});
+await t('the PPE note carries the asset schedule; keyed depreciation that disagrees with the P&L is flagged', async () => {
+  const s = await call('GET', `/engagements/${engId}/statements`);
+  const ppe = s.notes.find((n) => n.lineId === 'ppe');
+  assert.equal(ppe.kind, 'ppe');
+  assert.equal(ppe.schedule.rows[0].ledger, 'Furniture');
+  assert.equal(ppe.schedule.rows[0].opening, 300000);
+  assert.equal(s.ppe.totals.closing, 300000);
+  await call('PUT', `/engagements/${engId}/text`, { inputs: { 'ppe:Furniture:dep': '30000', 'ppe:Furniture:personal': '10' } });
+  const s2 = await call('GET', `/engagements/${engId}/statements`);
+  const sched = s2.notes.find((n) => n.lineId === 'ppe').schedule;
+  assert.equal(sched.rows[0].depreciation, 30000);
+  assert.equal(sched.rows[0].personalUse, 3000);
+  assert.ok(s2.checks.some((c) => c.id === 'PPE-DEP'), 'the books charge no depreciation, the schedule shows 30,000');
+  await call('PUT', `/engagements/${engId}/text`, { inputs: { 'ppe:Furniture:dep': '', 'ppe:Furniture:personal': '' } });
+});
+await t('a starting text for the policies names the firm’s constitution and the framework', async () => {
+  const d = await call('GET', `/engagements/${engId}/policies/default`);
+  assert.match(d.text, /ICAI Guidance Note/);
+  assert.match(d.text, /Partners’ capital/);
+  assert.match(d.text, /CONFIRM/);
+});
+
 console.log('\n── next year: carry forward ──');
 let eng2;
 await t('clients group their engagements; the next year finds last year', async () => {

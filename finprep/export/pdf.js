@@ -239,6 +239,35 @@ export async function buildPdf(PDFLib, payload) {
     }
   }
 
+  /* ================= PPE schedule ================= */
+  const ppe = p.ppe;
+  if (ppe && arr(ppe.rows).length) {
+    newPage('Property, plant and equipment');
+    masthead(`Property, plant and equipment - schedule for the year ended ${meta.currentLabel}`);
+    const cols = [152, 222, 292, 362, 437, 547];      // right edges: opening, additions, deductions, depreciation, closing, personal
+    need(30);
+    pg.drawRectangle({ x: M.left, y: y - 5, width: W - M.left - M.right, height: 26, color: color(INK.band) });
+    text('Asset', M.left + 4, y + 4, 7.5, FB, INK.title);
+    [['Opening', meta.priorLabel], ['Additions', ''], ['Deductions', ''], ['Depreciation', ''], ['Closing', meta.currentLabel], ['Personal-use', 'depreciation']].forEach(([a, b], i) => {
+      text(a, cols[i], y + 6, 7, FB, INK.title, { right: true }); if (b) text(b, cols[i], y - 3, 6, F, INK.muted, { right: true });
+    });
+    y -= 28;
+    const line = (label, vals, o = {}) => {
+      need(12);
+      if (o.top) rule(M.left, W - M.right, y + 9);
+      text(label, M.left + 4, y, 7.5, o.bold ? FB : F);
+      vals.forEach((v, i) => text(inr(v), cols[i], y, 7.5, o.bold ? FB : F, INK.text, { right: true }));
+      y -= 11;
+    };
+    for (const x of arr(ppe.rows)) line(x.ledger, [x.opening, x.additions, x.deductions, x.depreciation, x.closing, x.personalUse]);
+    const t = ppe.totals || {};
+    line('Total', [t.opening, t.additions, t.deductions, t.depreciation, t.closing, t.personalUse], { bold: true, top: true });
+    y -= 4;
+    for (const x of arr(ppe.rows)) note8(`${x.ledger}: depreciation ${x.depBasis}; ${x.splitBasis}.`);
+    for (const nte of arr(ppe.notes)) note8(nte);
+    for (const c of arr(ppe.checks)) note8(`${c.severity}: ${c.message}`, INK.red);
+  }
+
   /* ================= Notes ================= */
   newPage('Notes to the financial statements');
   masthead(`Notes forming part of the financial statements for the year ended ${meta.currentLabel}`);
@@ -267,8 +296,16 @@ export async function buildPdf(PDFLib, payload) {
     }
     row2('Total', '', n.current, n.prior, { bold: true, top: true, indent: true, gap: 14 });
     if (n.kind === 'owners' && n.schedule) note8(`The owner-wise statement of this account is on the page "${txt(meta.ownersLabel) || 'Owners'}' accounts".`);
-    const extra = arr(n.extra);
-    for (const e of extra) { for (const line of wrap(F, e, 8, W - M.left - M.right - 8)) { need(11); text(line, M.left + 4, y, 8); y -= 10; } }
+    if (n.kind === 'ppe' && n.schedule) note8('The asset-wise schedule is on the page "Property, plant and equipment".');
+    if (n.msme && n.msme.provided) {
+      need(14); text('Dues to micro and small enterprises (MSMED Act, s.22):', M.left + 4, y, 8, FB); y -= 11;
+      for (const x of arr(n.msme.rows)) {
+        if (x.amount == null) continue;
+        const lines = wrap(F, x.label, 7.5, COLS.cur - 120 - M.left);
+        lines.forEach((line, i) => { need(10); text(line, M.left + 12, y, 7.5); if (i === 0) text(inr(x.amount), COLS.cur, y, 7.5, F, INK.text, { right: true }); y -= 9; });
+      }
+      y -= 3;
+    }
     const fn = txt(n.footnote || '').trim();
     if (fn) { for (const line of wrap(FI, fn, 7.5, W - M.left - M.right - 8)) { need(11); text(line, M.left + 4, y, 7.5, FI, INK.muted); y -= 10; } }
     y -= 8;

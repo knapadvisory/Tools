@@ -139,6 +139,20 @@ Tests: `node finprep/core/aiMap.test.mjs` (fake fetch), `node finprep/export/pdf
 (inflates the content streams and reads the text back), `node connector/cashbook.test.mjs`
 (stub Tally).
 
+## What the preparer types: the PPE schedule, MSMED, footnotes, policies, sign-off
+
+Stored in `note_inputs` (migration 8), one row per key, through `GET/PUT …/text`.
+
+| Piece | Where | What it does |
+|---|---|---|
+| PPE schedule | `core/ppe.js`; the fixed-asset note on the Notes tab; sheet "PPE Schedule"; a page in the PDF | Per asset ledger: opening WDV, additions, deductions, depreciation, closing. Depreciation from the P&L ledger named for the asset, the whole charge when there is one asset, or keyed (`ppe:<ledger>:dep`). With gross movements, deductions = credits less depreciation and the row must close (`PPE-MOVE`); without, the net movement is split and the schedule says so. The schedule's depreciation must agree with the P&L charge (`PPE-DEP`). A personal-use % (`ppe:<ledger>:personal`) gives the s.38(2) disallowance line. |
+| MSMED s.22 | `msmeDisclosure()` in `core/ppe.js`; under the trade payables note | Six figures (`msme:*`) the preparer records from the Udyam evidence; printed under the note in Excel and PDF, never asserted as nil on their own. |
+| Footnotes | `footnote:<lineId>` | Free text under any note; Excel and PDF carry it. |
+| Policies | `core/policies.js`; `GET …/policies/default` | A starting text by constitution and framework with `[CONFIRM: …]` marks; the preparer edits and saves it (`policies`); the first section of the notes in both exports. |
+| Sign-off | `sign:firm|frn|partner|membership|place|date` | Fills the auditor's side of the signature blocks; the owners' side comes from step 4. |
+
+Tests: `node finprep/core/ppe.test.mjs`; the API, workbook and PDF suites cover the round trip.
+
 ## Not yet built
 
 Listed honestly; none of it is stubbed or faked.

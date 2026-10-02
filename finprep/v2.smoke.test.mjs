@@ -149,6 +149,29 @@ try {
     assert.match(dl.suggestedFilename(), /Kumar_Traders_Financials.*\.pdf$/);
   });
 
+  await t('a footnote and the MSMED figure typed under a note are saved and come back after the rebuild', async () => {
+    await page.click('#stepper .step[data-step="6"]');
+    await page.click('#stTabs button[data-t="nt"]');
+    await page.fill('#stBody [data-fn="trade_payables_others"]', 'Creditors are unsecured and payable within 60 days.');
+    await page.fill('#stBody [data-msme="principal"]', '120000');
+    await page.click('#ntSave');
+    await page.waitForFunction(() => /Saved/.test((document.getElementById('mNt') || {}).textContent || ''), null, { timeout: 15000 });
+    assert.equal(await page.inputValue('#stBody [data-fn="trade_payables_others"]'), 'Creditors are unsecured and payable within 60 days.');
+    assert.equal(await page.inputValue('#stBody [data-msme="principal"]'), '120000');
+    assert.ok(await page.isVisible('#stBody [data-ppe="dep"]'), 'the PPE note shows the asset schedule with a depreciation input');
+  });
+
+  await t('the sign-off and a starting text for the policies are saved on the export step', async () => {
+    await page.click('#stepper .step[data-step="9"]');
+    await page.fill('#sgFirm', 'ABC & Associates'); await page.fill('#sgPlace', 'Faridabad');
+    await page.click('#sgSave');
+    await page.waitForFunction(() => /Saved/.test(document.getElementById('mSg').textContent), null, { timeout: 15000 });
+    await page.click('#polDefault');
+    await page.waitForFunction(() => /ICAI Guidance Note/.test(document.getElementById('polText').value), null, { timeout: 15000 });
+    await page.click('#polSave');
+    await page.waitForFunction(() => /Saved/.test(document.getElementById('mPol').textContent), null, { timeout: 15000 });
+  });
+
   await t('the AI settings open and save without touching the network; the cash report tab renders', async () => {
     await page.click('#stepper .step[data-step="4"]');
     await page.click('#aiCfgBtn');

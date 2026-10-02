@@ -42,7 +42,9 @@ const owners = [
 ];
 const r = build({ ledgers: firm, constitution: 'partnership', owners });
 const cf = buildCashFlow(r);
-const pm = presentationModel(r);
+const inputs = { 'footnote:trade_payables_others': 'Creditors are unsecured.', 'msme:principal': 120000, 'msme:interest': 0,
+  'ppe:Furniture:dep': 0, 'ppe:method': 'WDV at Income-tax rates', policies: 'Basis: historical cost.\nRevenue: on delivery.' };
+const pm = presentationModel(r, { inputs });
 
 // paise → rupees at the export boundary, the way the server does it
 const NON_MONEY = new Set(['number', 'note', 'id', 'key', 'lineId', 'caption', 'name', 'reason', 'severity', 'status',
@@ -63,6 +65,7 @@ const payload = {
     note: r.noteNumbers.get(l.perPeriod.current.lineId) || null })),
   balanceSheet: rup(pm.balanceSheet), profitAndLoss: rup(pm.profitAndLoss), notes: rup(pm.notes),
   ownersAccounts: rup(pm.ownersAccounts), cashFlow: rup({ ...cf, checks: undefined }),
+  ppe: rup(pm.ppe), text: { policies: inputs.policies }, policies: inputs.policies,
   checks: r.checks.concat(cf.checks).map((c) => ({ ...c, amount: c.amount != null ? toRupees(c.amount) : undefined })),
   disclosures: pm.disclosures,
 };
@@ -80,9 +83,27 @@ t('the books balance and the cash flow reconciles with the owners’ movement in
   assert.equal(cf.reconciled, true, 'unreconciled ' + cf.unreconciled);
   assert.ok(cf.financing.items.some((i) => /owners/.test(i.label) && i.amount === 12000000));
 });
-t('a Capital Accounts sheet sits after the Notes', () => {
+t('a Capital Accounts sheet and a PPE Schedule sit after the Notes', () => {
   const names = wb.worksheets.map((w) => w.name);
-  assert.deepEqual(names, ['Balance Sheet', 'Profit & Loss', 'Cash Flow', 'Notes', 'Capital Accounts', 'Trial Balance', 'Disclosures', 'Review']);
+  assert.deepEqual(names, ['Balance Sheet', 'Profit & Loss', 'Cash Flow', 'Notes', 'Capital Accounts', 'PPE Schedule', 'Trial Balance', 'Disclosures', 'Review']);
+});
+t('the PPE schedule has the asset with its closing as a formula and a SUM total', () => {
+  const ps = ws('PPE Schedule');
+  const fr = findRow(ps, 'Furniture');
+  assert.ok(fr, 'furniture row');
+  assert.equal(val(ps.getRow(fr).getCell(2)), 300000);
+  assert.equal(val(ps.getRow(fr).getCell(6)), 300000);
+  assert.match(ps.getRow(fr).getCell(6).value.formula, /^B\d+\+C\d+-D\d+-E\d+$/);
+  const tot = findRow(ps, 'Total');
+  assert.match(ps.getRow(tot).getCell(6).value.formula, /^SUM\(F\d+:F\d+\)$/);
+  assert.ok(strings(ps).join(' | ').includes('WDV at Income-tax rates'));
+});
+t('the notes sheet opens with the policies and carries the footnote and the MSMED figures', () => {
+  const s = strings(ws('Notes')).join(' | ');
+  assert.ok(/Significant accounting policies/.test(s) && /Basis: historical cost\./.test(s) && /Revenue: on delivery\./.test(s));
+  assert.ok(/Creditors are unsecured\./.test(s));
+  assert.ok(/Dues to micro and small enterprises/.test(s) && /Principal amount remaining unpaid/.test(s));
+  assert.ok(/sheet "PPE Schedule"/.test(s));
 });
 t('every sheet names the framework and the PAN, never a CIN', () => {
   for (const w of wb.worksheets) {

@@ -369,6 +369,20 @@ function buildNotes(ws, p, tbIndex, link) {
   const totalRowByNote = new Map();
   const consumed = new Set();
 
+  // the significant accounting policies come first, as prose
+  const policies = txt((p.text && p.text.policies) || p.policies || '').trim();
+  if (policies) {
+    put(ws, r, 1, 'Significant accounting policies', { font: { bold: true, size: 10, color: { argb: INK.title } } });
+    r += 1;
+    for (const para of policies.split(/\n+/).map((x) => x.trim()).filter(Boolean)) {
+      ws.mergeCells(`A${r}:D${r}`);
+      put(ws, r, 1, para, { font: { size: 9 }, align: { wrapText: true, vertical: 'top' } });
+      ws.getRow(r).height = Math.min(160, 13 * Math.ceil(para.length / 120));
+      r += 1;
+    }
+    r += 1;
+  }
+
   for (const note of arr(p.notes)) {
     put(ws, r, 1, `${note.number}.  ${txt(note.caption)}`,
         { font: { bold: true, size: 10, color: { argb: INK.title } } });
@@ -431,6 +445,30 @@ function buildNotes(ws, p, tbIndex, link) {
     if (note.kind === 'owners' && note.schedule) {
       put(ws, r, 1, '        The owner-wise statement of this account is on the sheet "Capital Accounts".',
           { font: { size: 8, italic: true, color: { argb: INK.muted } } });
+      r += 1;
+    }
+    if (note.kind === 'ppe' && note.schedule) {
+      put(ws, r, 1, '        The asset-wise schedule (opening, additions, deductions, depreciation, closing) is on the sheet "PPE Schedule".',
+          { font: { size: 8, italic: true, color: { argb: INK.muted } } });
+      r += 1;
+    }
+    // MSMED s.22 — the preparer's figures, under trade payables
+    if (note.msme && note.msme.provided) {
+      put(ws, r, 1, '        Dues to micro and small enterprises (MSMED Act, s.22):', { font: { size: 8, bold: true } });
+      r += 1;
+      for (const x of arr(note.msme.rows)) {
+        if (x.amount == null) continue;
+        put(ws, r, 1, '            ' + txt(x.label), { font: { size: 8 }, align: { wrapText: true, vertical: 'top' } });
+        money(ws, r, 2, x.amount, null, { font: { size: 8 } });
+        put(ws, r, 4, 'Figure recorded by the preparer', { font: { size: 8, italic: true, color: { argb: INK.muted } } });
+        ws.getRow(r).height = 24;
+        r += 1;
+      }
+    }
+    if (note.footnote) {
+      ws.mergeCells(`A${r}:D${r}`);
+      put(ws, r, 1, '        ' + txt(note.footnote), { font: { size: 8, italic: true }, align: { wrapText: true, vertical: 'top' } });
+      ws.getRow(r).height = Math.min(90, 14 * Math.ceil(txt(note.footnote).length / 110));
       r += 1;
     }
     for (const req of arr(note.requires)) {
@@ -515,6 +553,49 @@ function buildCapitalAccounts(ws, p) {
   if (!oa.capital && !oa.current) {
     put(ws, r, 1, 'No owners’ account is in use.', { font: { size: 9, italic: true } });
   }
+}
+
+/* ------------------------------------------------------------ PPE schedule */
+
+/** Asset by asset: opening, additions, deductions, depreciation, closing — the
+ *  closing a formula of the row, the totals a SUM of the column. */
+function buildPpeSchedule(ws, p) {
+  const meta = p.meta, s = p.ppe || {};
+  let r = masthead(ws, meta, `Property, plant and equipment — schedule for the year ended ${meta.currentLabel}`, 8, false);
+  const headRow = r;
+  r = columnHeads(ws, r, meta, [
+    { label: 'Asset ledger' }, { label: `Opening WDV ${meta.priorLabel}`, right: true }, { label: 'Additions', right: true },
+    { label: 'Deductions', right: true }, { label: 'Depreciation', right: true }, { label: `Closing WDV ${meta.currentLabel}`, right: true },
+    { label: 'Personal use %', right: true }, { label: 'Depreciation on personal use', right: true },
+  ]);
+  frame(ws, [34, 16, 16, 16, 16, 16, 12, 16], headRow);
+  const first = r;
+  for (const x of arr(s.rows)) {
+    put(ws, r, 1, txt(x.ledger), { font: { size: 9 } });
+    money(ws, r, 2, x.opening, null, { font: { size: 9 } });
+    money(ws, r, 3, x.additions, null, { font: { size: 9 } });
+    money(ws, r, 4, x.deductions, null, { font: { size: 9 } });
+    money(ws, r, 5, x.depreciation, null, { font: { size: 9 } });
+    money(ws, r, 6, x.closing, `B${r}+C${r}-D${r}-E${r}`, { font: { size: 9, bold: true } });
+    put(ws, r, 7, x.personalPct || '', { font: { size: 9 }, align: { horizontal: 'right' } });
+    money(ws, r, 8, x.personalUse, null, { font: { size: 9 } });
+    r += 1;
+  }
+  const last = r - 1;
+  const t = s.totals || {};
+  put(ws, r, 1, 'Total', { font: { bold: true, size: 9 }, border: TOP_DOUBLE });
+  [['B', t.opening], ['C', t.additions], ['D', t.deductions], ['E', t.depreciation], ['F', t.closing], ['H', t.personalUse]].forEach(([col, v]) => {
+    const c = col.charCodeAt(0) - 64;
+    money(ws, r, c, v, last >= first ? `SUM(${col}${first}:${col}${last})` : null, { font: { bold: true, size: 9 }, border: TOP_DOUBLE });
+  });
+  put(ws, r, 7, '', { border: TOP_DOUBLE });
+  r += 2;
+  for (const x of arr(s.rows)) {
+    put(ws, r, 1, `· ${txt(x.ledger)}: depreciation ${txt(x.depBasis)}; ${txt(x.splitBasis)}.`, { font: { size: 8, italic: true, color: { argb: INK.muted } } });
+    r += 1;
+  }
+  for (const n of arr(s.notes)) { put(ws, r, 1, '· ' + txt(n), { font: { size: 8, italic: true, color: { argb: INK.muted } } }); r += 1; }
+  for (const c of arr(s.checks)) { put(ws, r, 1, `${txt(c.severity)}: ${txt(c.message)}`, { font: { size: 8, color: { argb: INK.red } } }); r += 1; }
 }
 
 /* -------------------------------------------------------------- face sheets */
@@ -988,6 +1069,7 @@ export function buildWorkbook(ExcelJS, payload) {
   // Created in presentation order; filled in dependency order below. A
   // non-corporate entity gets its owners' accounts as a sheet of their own.
   const sheetNames = SHEETS.slice();
+  if (p.ppe && arr(p.ppe.rows).length) sheetNames.splice(sheetNames.indexOf('Notes') + 1, 0, 'PPE Schedule');
   if (model.ownersAccounts) sheetNames.splice(sheetNames.indexOf('Notes') + 1, 0, 'Capital Accounts');
   const ws = {};
   for (const name of sheetNames) ws[name] = wb.addWorksheet(name, { properties: { tabColor: undefined } });
@@ -995,8 +1077,9 @@ export function buildWorkbook(ExcelJS, payload) {
   const link = { leaves: 0, unlinked: 0, unlinkedNames: [], faceLinked: 0, faceUnlinked: 0, faceUnlinkedNames: [] };
 
   const tbIndex = buildTrialBalance(ws['Trial Balance'], model);
-  const noteTotals = buildNotes(ws.Notes, model, tbIndex, link);
+  const noteTotals = buildNotes(ws.Notes, Object.assign({ text: p.text, policies: p.policies }, model), tbIndex, link);
   if (ws['Capital Accounts']) buildCapitalAccounts(ws['Capital Accounts'], model);
+  if (ws['PPE Schedule']) buildPpeSchedule(ws['PPE Schedule'], Object.assign({ ppe: p.ppe }, model));
   const faceRowByLine = buildBalanceSheet(ws['Balance Sheet'], model, noteTotals, link);
   buildProfitAndLoss(ws['Profit & Loss'], model, noteTotals, link);
   buildCashFlow(ws['Cash Flow'], model, faceRowByLine);
