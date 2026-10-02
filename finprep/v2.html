@@ -223,9 +223,22 @@
         <div><label>Show</label><select id="gFilter"><option value="review">Needs review</option><option value="all">All ledgers</option><option value="uncl">Unclassified only</option></select></div>
         <div style="flex:1;min-width:200px"><label>Search</label><input id="gSearch" placeholder="ledger name" style="width:100%"></div>
         <button class="btn ghost hidden" id="cfBtn" type="button" title="Copy last year's approved heads, note captions and owners for the ledgers still in the books. Nothing decided this year is overwritten.">↶ Carry forward last year’s grouping</button>
+        <button class="btn ghost" id="aiBtn" type="button" title="Ask a language model, with your own key, which head each ledger shown belongs to. Only the ledger name and its Tally group are sent — no amounts, no parties. Answers are proposals you still approve.">✨ Suggest heads with AI</button>
+        <button class="btn ghost sm" id="aiCfgBtn" type="button" title="AI provider and key">⚙</button>
         <button class="btn" id="gSave" type="button">Approve &amp; rebuild</button>
       </div>
+      <div id="aiCfg" class="hidden" style="border:1px solid var(--rule);border-radius:9px;padding:12px;margin-top:10px;background:#f6f8f6">
+        <div class="row">
+          <div><label>Provider</label><select id="aiProv"><option value="anthropic">Anthropic (Claude) — your own key</option><option value="openai">OpenAI-compatible (Groq, OpenRouter, LM Studio…)</option><option value="ollama">Local — Ollama (nothing leaves this PC)</option></select></div>
+          <div><label>API key (kept only in this browser)</label><input id="aiKey" type="password" placeholder="sk-…" style="min-width:240px"></div>
+          <div><label>Model</label><input id="aiModel" placeholder="default for the provider" style="min-width:200px"></div>
+          <div id="aiUrlWrap"><label>Base URL</label><input id="aiUrl" placeholder="https://api.groq.com/openai/v1" style="min-width:240px"></div>
+          <button class="btn sm" id="aiSave" type="button">Save</button>
+        </div>
+        <div class="muted" style="margin-top:6px">What is sent: the ledger <b>name</b> and its Tally <b>group path</b>, for the ledgers shown under the current filter. Never sent: amounts, GSTINs, party details, the client’s name. Every answer comes back as a proposal marked <span class="pill info">AI</span> for you to approve or change; nothing is saved until “Approve &amp; rebuild”.</div>
+      </div>
       <div id="mCf" class="muted"></div>
+      <div id="mAi" class="muted"></div>
       <div class="wrap" style="margin-top:10px"><table class="fin" id="gTbl"><thead><tr>
         <th>Ledger</th><th>Tally grouping ▸ sub-grouping</th><th class="r">Current</th><th>Schedule III head</th><th>Shown on the note as</th>
       </tr></thead><tbody id="gRows"></tbody></table></div>
@@ -271,6 +284,7 @@
         <button data-t="pl">Profit &amp; Loss</button>
         <button data-t="cf">Cash Flow</button>
         <button data-t="nt">Notes</button>
+        <button data-t="cash">Cash report</button>
       </div>
       <div class="wrap"><div id="stBody"></div></div>
     </div>
@@ -308,6 +322,7 @@
       <div id="exBanner"></div>
       <div class="row" style="margin-top:10px">
         <button class="btn" id="exXlsx" type="button">⬇ Download Excel working paper</button>
+        <button class="btn" id="exPdf" type="button">⬇ Download PDF</button>
         <button class="btn ghost" id="exFinal" type="button">Mark Reviewed</button>
       </div>
       <div id="m6" style="margin-top:10px"></div>

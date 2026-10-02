@@ -127,6 +127,18 @@ Tests: `node finprep/core/tbTemplate.test.mjs`; `node server/finprep2.test.mjs` 
 18 steps); `CHROME_PATH=… node finprep/v2.smoke.test.mjs` drives the real page in
 headless Chromium against the real server and a scratch database.
 
+## AI suggestions, the PDF, and the cash report
+
+| Piece | Where | What it does |
+|---|---|---|
+| AI head suggestions | `core/aiMap.js`; ⚙ and "Suggest heads with AI" on the grouping step | With the preparer's OWN key (Anthropic, any OpenAI-compatible endpoint, or a local Ollama; the key lives in the browser under the same `knap-as-cfg` the old assistant used). Sends ONLY the ledger name and its Tally group path for the ledgers shown under the current filter — never amounts, GSTINs, parties or the client's name. Replies are parsed as JSON, any head not in the chart is discarded, and proposals are pre-selected only where the tool itself had no confident head; nothing is saved until "Approve & rebuild". |
+| PDF | `export/pdf.js` (pdf-lib, loaded on demand from `/pdftools/`) | Balance sheet, P&L, the owners' accounts, notes with both period dates and the accounting policies; Indian grouping, brackets for negatives, DRAFT watermark while a critical check stands; the auditor and the board or the owners sign. WinAnsi fonts: amounts headed "Rs.", a glyph the font lacks becomes "?" rather than stopping the export. |
+| Cash report | connector 4.81 `POST /api/fin/cashbook`; "Cash report" tab on the statements step | The connector returns every voucher leg on a Cash-in-Hand ledger (date, type, number, party or largest counter-leg, narration, amount, payment/receipt, bank/cash counter flags). The page groups by party and day: s.40A(3) payments above 10,000 and the 9,000–10,000 near band; s.269ST receipts of 2,00,000 or more and the 1,90,000–1,99,999 near band; contras excluded; CSV download. The page lists, it does not conclude. |
+
+Tests: `node finprep/core/aiMap.test.mjs` (fake fetch), `node finprep/export/pdf.test.mjs`
+(inflates the content streams and reads the text back), `node connector/cashbook.test.mjs`
+(stub Tally).
+
 ## Not yet built
 
 Listed honestly; none of it is stubbed or faked.

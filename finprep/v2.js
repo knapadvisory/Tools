@@ -509,17 +509,23 @@ function renderGrouping() {
   const opts = (sel) => headOptions(sel);
   const fromTally = rows.filter((x) => x.subGroupSource === 'tally').length;
   const proposed = rows.filter((x) => x.subGroupSource === 'proposed').length;
-  $('gRows').innerHTML = rows.length ? rows.map((r) => `
-    <tr${r.lineId === 'unclassified' ? ' style="background:var(--bad-soft)"' : ''}>
-      <td>${esc(r.ledger)}</td>
+  const ai = S.aiSugg || new Map();
+  S.gShown = rows.map((r) => r.ledger);
+  $('gRows').innerHTML = rows.length ? rows.map((r) => {
+    // an AI proposal is pre-selected only where the tool itself had no confident answer
+    const sg = ai.get(r.ledger);
+    const useAi = sg && (r.lineId === 'unclassified' || needsReview.has(r.ledger)) && sg.lineId !== r.lineId;
+    return `
+    <tr${r.lineId === 'unclassified' && !useAi ? ' style="background:var(--bad-soft)"' : ''}>
+      <td>${esc(r.ledger)}${sg ? ` <span class="pill info" title="${esc(sg.why || '')}">AI · ${esc(sg.confidence)}</span>` : ''}</td>
       <td class="muted">${esc(r.group || '')}${r.tallySubGroup
           ? ` <span style="color:var(--ok)">▸ ${esc(r.tallySubGroup)}</span>` : ''}</td>
       <td class="r">${inr(r.current)} <span class="muted">${r.drcr}</span></td>
-      <td><select class="assign" data-led="${esc(r.ledger)}">${opts(r.lineId)}</select></td>
+      <td><select class="assign" data-led="${esc(r.ledger)}" ${useAi ? `style="border-color:var(--info);background:var(--info-soft)" title="Proposed by AI: ${esc(sg.why || '')}"` : ''}>${opts(useAi ? sg.lineId : r.lineId)}</select></td>
       <td><input class="subg" data-led="${esc(r.ledger)}" value="${esc(r.subGroup || '')}"
            placeholder="(own line)" style="width:100%;font-size:12px;${SRC_STYLE[r.subGroupSource] || ''}"
            title="${esc(SRC_HINT[r.subGroupSource] || 'The caption this ledger appears under on the note.')}"></td>
-    </tr>`).join('')
+    </tr>`; }).join('')
     : '<tr><td colspan="5" class="muted">Nothing to review under this filter.</td></tr>';
   $('m3').textContent = `${rows.length} shown of ${j.trialBalance.length} ledgers.`
     + (fromTally ? ` ${fromTally} sub-grouped in Tally.` : '')
@@ -539,6 +545,44 @@ const SRC_HINT = {
 };
 $('gFilter').onchange = renderGrouping;
 $('gSearch').oninput = renderGrouping;
+
+/* ---------- AI head suggestions, with the preparer's own key -------------- */
+const AI_KEY = 'knap-as-cfg';                       // shared with the in-tool assistant
+function aiCfg() { try { return JSON.parse(localStorage.getItem(AI_KEY) || '{}') || {}; } catch { return {}; } }
+function aiCfgShow() {
+  const c = aiCfg();
+  $('aiProv').value = c.provider || 'anthropic'; $('aiKey').value = c.apiKey || ''; $('aiModel').value = c.model || ''; $('aiUrl').value = c.baseUrl || '';
+  $('aiUrlWrap').classList.toggle('hidden', $('aiProv').value === 'anthropic');
+}
+$('aiCfgBtn').onclick = () => { $('aiCfg').classList.toggle('hidden'); if (!$('aiCfg').classList.contains('hidden')) aiCfgShow(); };
+$('aiProv').onchange = () => $('aiUrlWrap').classList.toggle('hidden', $('aiProv').value === 'anthropic');
+$('aiSave').onclick = () => {
+  const c = Object.assign(aiCfg(), { provider: $('aiProv').value, apiKey: $('aiKey').value.trim(), model: $('aiModel').value.trim(), baseUrl: $('aiUrl').value.trim(), apiEnabled: true });
+  try { localStorage.setItem(AI_KEY, JSON.stringify(c)); } catch { /* private window */ }
+  $('aiCfg').classList.add('hidden');
+  msg('mAi', `AI set to ${c.provider}${c.model ? ' · ' + c.model : ''}. The key stays in this browser.`, 'ok');
+};
+$('aiBtn').onclick = async () => {
+  const j = S.payload; if (!j) return;
+  const c = aiCfg();
+  if (!c.provider || (c.provider !== 'ollama' && !c.apiKey)) { $('aiCfg').classList.remove('hidden'); aiCfgShow(); return msg('mAi', 'Set the provider and your key first (⚙).', 'bad'); }
+  const shown = new Set(S.gShown || []);
+  const ledgers = j.trialBalance.filter((r) => shown.has(r.ledger)).map((r) => ({ name: r.ledger, group: r.group, path: [r.group, r.primary].filter(Boolean) }));
+  if (!ledgers.length) return msg('mAi', 'Nothing is shown under this filter — change the filter to choose which ledgers to ask about.', 'bad');
+  if (ledgers.length > 400 && !confirm(`Ask about ${ledgers.length} ledgers? Only names and groups are sent, in batches of 60.`)) return;
+  $('aiBtn').disabled = true;
+  msg('mAi', `Asking ${c.provider} about ${ledgers.length} ledger(s) — names and groups only…`);
+  try {
+    const mod = await import('./core/aiMap.js');
+    const res = await mod.suggest(c, { ledgers, heads: S.heads, constitution: (S.eng || {}).constitution || 'company', framework: (j.meta || {}).framework },
+      { onProgress: (done, total) => msg('mAi', `Asked about ${done} of ${total}…`) });
+    S.aiSugg = new Map((S.aiSugg || new Map()));
+    for (const s of res.suggestions) S.aiSugg.set(s.name, s);
+    renderGrouping();
+    msg('mAi', `${res.suggestions.length} proposal(s) marked AI in the table — pre-selected only where the tool had no confident head. Check them, change any you disagree with, then “Approve & rebuild”.`, 'ok');
+  } catch (e) { msg('mAi', 'The AI step failed: ' + e.message, 'bad'); }
+  finally { $('aiBtn').disabled = false; }
+};
 $('gSave').onclick = async () => {
   const mappings = [...document.querySelectorAll('#gRows select.assign')].map((s) => ({
     ledgerKey: s.dataset.led, lineId: s.value, approved: true, confidence: 'manual',
@@ -633,6 +677,8 @@ function renderStatements() {
     h += '</tbody></table>';
     if (cf.assumptions.length) h += '<div style="padding:10px 12px">' + cf.assumptions.map((a) =>
       `<div class="chk REVIEW"><b>Assumption ${esc(a.id)}</b> — ${esc(a.text)}</div>`).join('') + '</div>';
+  } else if (S.tab === 'cash') {
+    h = cashReportHtml();
   } else {
     h = '';
     for (const n of j.notes) {
@@ -653,6 +699,86 @@ function renderStatements() {
     if (!j.notes.length) h = '<p class="muted" style="padding:12px">No notes yet.</p>';
   }
   $('stBody').innerHTML = h;
+}
+
+/* ---------- cash report: s.40A(3) payments and s.269ST receipts ----------- */
+/**
+ * The cash book is read from Tally through the connector (every voucher that
+ * touches a Cash-in-Hand ledger), then grouped here by counter-party and day:
+ *   s.40A(3)  cash payments to one person in a day above Rs 10,000 are disallowed
+ *             (Rs 35,000 for payments to a transporter) — the near band 9,000–10,000 is shown too;
+ *   s.269ST   cash received from one person of Rs 2,00,000 or more in a day, per
+ *             transaction, or per event attracts a penalty equal to the amount —
+ *             the near band 1,90,000–1,99,999 is shown too.
+ * Contra entries (cash to or from a bank) and cash moved between cash ledgers are left out.
+ */
+const CASH_BANDS = {
+  payment: [{ key: 'pay_over', label: 'Cash payments above 10,000 to one party in a day (s.40A(3))', min: 10000.01, max: Infinity },
+            { key: 'pay_near', label: 'Cash payments between 9,000 and 10,000 to one party in a day (near the s.40A(3) limit)', min: 9000, max: 10000 }],
+  receipt: [{ key: 'rec_over', label: 'Cash receipts of 2,00,000 or more from one party in a day (s.269ST)', min: 200000, max: Infinity },
+            { key: 'rec_near', label: 'Cash receipts between 1,90,000 and 1,99,999.99 from one party in a day (near the s.269ST limit)', min: 190000, max: 199999.99 }],
+};
+function cashReport(vouchers) {
+  const use = vouchers.filter((v) => !v.counterIsBank && !v.counterIsCash);
+  const byKey = new Map();
+  for (const v of use) {
+    const k = `${v.direction}|${v.date}|${(v.party || v.counter || '').trim().toLowerCase()}`;
+    const g = byKey.get(k) || { direction: v.direction, date: v.date, party: v.party || v.counter || '(no party)', total: 0, vouchers: [] };
+    g.total = Math.round((g.total + v.amount) * 100) / 100; g.vouchers.push(v);
+    byKey.set(k, g);
+  }
+  const groups = [...byKey.values()];
+  const bands = [];
+  for (const dir of ['payment', 'receipt']) {
+    for (const b of CASH_BANDS[dir]) {
+      const rows = groups.filter((g) => g.direction === dir && g.total >= b.min && g.total <= b.max).sort((a, b2) => b2.total - a.total);
+      bands.push({ ...b, rows, total: rows.reduce((t, r) => t + r.total, 0) });
+    }
+  }
+  return { bands, considered: use.length, excluded: vouchers.length - use.length, groups: groups.length };
+}
+function cashReportHtml() {
+  const c = S.cash;
+  let h = `<div style="padding:12px">
+    <p class="muted" style="margin:0 0 10px">The cash book is read from Tally on this PC through the connector — every voucher touching a Cash-in-Hand ledger — and grouped by party and day. <b>s.40A(3)</b>: cash payments to one person in a day above 10,000 (35,000 for transporters) are disallowed. <b>s.269ST</b>: cash received from one person of 2,00,000 or more in a day, per transaction or per event, attracts a penalty equal to the amount. Bank contras and cash-to-cash transfers are left out. Judgement is yours: the report lists, it does not conclude.</p>
+    <div class="row"><button class="btn" id="cashRead" type="button">Read the cash book from Tally</button>
+      <button class="btn ghost sm${c ? '' : ' hidden'}" id="cashCsv" type="button">⬇ CSV</button><span id="mCash" class="muted"></span></div>`;
+  if (c) {
+    const r = cashReport(c.vouchers);
+    h += `<div class="kpi">${kpi(c.count, 'cash legs in the period')}${kpi(r.considered, 'considered (after contras)')}${kpi(r.groups, 'party-days')}${kpi(c.cashLedgers.length, 'cash ledgers')}</div>`;
+    for (const b of r.bands) {
+      h += `<h3 style="margin:16px 0 6px;font-size:13px;color:${/over/.test(b.key) ? 'var(--bad)' : 'var(--warn)'}">${esc(b.label)} <span class="muted">— ${b.rows.length} party-day(s), ${inr(b.total)}</span></h3>`;
+      h += b.rows.length ? `<table class="fin"><thead><tr><th>Date</th><th>Party</th><th class="r">Total in the day</th><th>Vouchers</th></tr></thead><tbody>`
+        + b.rows.map((g) => `<tr><td>${esc(g.date)}</td><td>${esc(g.party)}</td><td class="r"><b>${inr(g.total)}</b></td>
+          <td class="muted">${g.vouchers.map((v) => `${esc(v.type)} ${esc(v.number)} ${inr(v.amount)}${v.narration ? ' — ' + esc(v.narration) : ''}`).join('<br>')}</td></tr>`).join('') + '</tbody></table>'
+        : '<div class="muted">None.</div>';
+    }
+  }
+  h += '</div>';
+  setTimeout(() => {
+    const b = $('cashRead'); if (b) b.onclick = readCashBook;
+    const d = $('cashCsv'); if (d) d.onclick = cashCsv;
+  }, 0);
+  return h;
+}
+async function readCashBook() {
+  if (!S.eng) return;
+  msg('mCash', 'Reading the cash book from Tally through the connector…');
+  try {
+    const j = await connPost('/api/fin/cashbook', { from: $('pFrom').value || S.eng.fy_start, to: $('pTo').value || S.eng.fy_end, company: $('coList').value || '' });
+    if (j.ok === false) throw new Error(j.error || 'the connector refused');
+    S.cash = j;
+    renderStatements();
+    msg('mCash', j.note || `${j.count} cash leg(s) read from ${j.cashLedgers.length} cash ledger(s).`, 'ok');
+  } catch (e) { msg('mCash', 'Could not read the cash book: ' + e.message + ' — is the connector running on this PC with Tally open?', 'bad'); }
+}
+function cashCsv() {
+  const c = S.cash; if (!c) return;
+  const r = cashReport(c.vouchers);
+  const lines = [['Band', 'Date', 'Party', 'Total in the day', 'Voucher type', 'Voucher no', 'Amount', 'Cash ledger', 'Narration']];
+  for (const b of r.bands) for (const g of b.rows) for (const v of g.vouchers) lines.push([b.label, g.date, g.party, g.total, v.type, v.number, v.amount, v.ledger, v.narration]);
+  const csv = lines.map((l) => l.map((x) => '"' + String(x == null ? '' : x).replace(/"/g, '""') + '"').join(',')).join('\n');
+  download(new Blob(['﻿' + csv], { type: 'text/csv' }), (S.eng.client_name || 'cash').replace(/[^A-Za-z0-9]+/g, '_') + '_cash_report.csv');
 }
 
 /** The owner-by-owner statement of a capital or current account. */
@@ -718,6 +844,21 @@ $('exXlsx').onclick = async () => {
     setTimeout(() => { a.remove(); URL.revokeObjectURL(a.href); }, 1500);
     msg('m6', 'Workbook downloaded.', 'ok');
   } catch (e) { msg('m6', 'Export failed: ' + e.message, 'bad'); }
+};
+/** The statements as a PDF: balance sheet, P&L, owners' accounts, notes — from the same payload. */
+$('exPdf').onclick = async () => {
+  if (!S.payload) return;
+  msg('m6', 'Building the PDF…');
+  try {
+    if (!window.PDFLib) {
+      await new Promise((ok, err) => { const sc = document.createElement('script'); sc.src = '/pdftools/pdf-lib.min.js'; sc.onload = ok; sc.onerror = err; document.head.appendChild(sc); });
+    }
+    const mod = await import('./export/pdf.js');
+    const bytes = await mod.buildPdf(window.PDFLib, S.payload);
+    const name = (S.payload.meta.entity || 'Financials').replace(/[^A-Za-z0-9]+/g, '_') + '_Financials_' + (S.payload.meta.currentLabel || '').replace(/\s+/g, '_') + '.pdf';
+    download(new Blob([bytes], { type: 'application/pdf' }), name);
+    msg('m6', 'PDF downloaded.', 'ok');
+  } catch (e) { msg('m6', 'PDF failed: ' + e.message, 'bad'); }
 };
 $('exFinal').onclick = async () => {
   try {

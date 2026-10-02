@@ -28,7 +28,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import v8 from 'node:v8';
 
-const VERSION = '4.80';
+const VERSION = '4.81';
 // Bumped WITH connector/version.json — the two are compared to decide a
 // self-update, so a mismatch either loops every connector in the field or
 // hides the build. connector/version.test.mjs fails the pair apart.
@@ -4817,6 +4817,97 @@ const server = http.createServer(async (req, res) => {
           : 'Could not read Tally: ' + String((e && e.message) || e);
         json(res, 502, { ok: false, error: msg });
       } finally { state.settings.company = tbSavedCompany; }
+      return;
+    }
+
+    // ---------- Cash book (s.40A(3) / s.269ST monitoring, v4.81+) -------------
+    // Every voucher that touches a Cash-in-Hand ledger in the period: date,
+    // type, number, the cash ledger, the counter-party (the party ledger, else
+    // the largest non-cash leg), the narration, the amount and whether cash
+    // went out (payment) or came in (receipt). The page groups these by party
+    // and day against the statutory thresholds; nothing is judged here.
+    if (req.method === 'POST' && url.pathname === '/api/fin/cashbook') {
+      const body = JSON.parse(await readBody(req));
+      const to = tallyDateOf(String(body.to || '').replace(/-/g, ''));
+      const from = tallyDateOf(String(body.from || '').replace(/-/g, ''));
+      if (!to || !from) { json(res, 400, { ok: false, error: 'Set both period dates.' }); return; }
+      if (from > to) { json(res, 400, { ok: false, error: 'Period-from is after period-to.' }); return; }
+      const cbSavedCompany = state.settings.company, cbSavedUrl = state.settings.tallyUrl;
+      if (body.company !== undefined) state.settings.company = String(body.company || '').trim();
+      if (body.url) state.settings.tallyUrl = String(body.url);          // a page may name the Tally to read
+      finProgress.active = true; finProgress.steps = 2; finProgress.step = 1;
+      try {
+        finProgress.phase = 'Reading the group tree from Tally…';
+        const groups = parseGroups(await askTallyFast(state.settings.tallyUrl, GROUPS_REQUEST()));
+        finProgress.phase = 'Reading the ledger list from Tally…';
+        const masters = parseLedgerMasters(await askTallyFast(state.settings.tallyUrl, LEDGER_MASTERS_REQUEST()));
+        const pathOf = (parent) => groupPathOf(parent, groups);
+        const isCash = (parent) => pathOf(parent).some((g) => /cash.?in.?hand/i.test(g));
+        const isBank = (parent) => pathOf(parent).some((g) => /^bank/i.test(g));
+        const cashSet = new Set(Object.keys(masters).filter((n) => isCash(masters[n].parent)));
+        if (!cashSet.size) {
+          finProgress.active = false;
+          json(res, 200, { ok: true, version: VERSION, cashLedgers: [], vouchers: [], note: 'No ledger under Cash-in-Hand in this company.' });
+          return;
+        }
+        const keyOfDate = (dt) => dt.getUTCFullYear() * 10000 + (dt.getUTCMonth() + 1) * 100 + dt.getUTCDate();
+        const fromKey = keyOfDate(from), toKey = keyOfDate(to);
+        const seen = new Set(), vouchers = [];
+        let monthsTotal = 0, done = 0;
+        for (let d = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 1)); d <= to;
+             d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1))) monthsTotal++;
+        for (let d = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 1)); d <= to;
+             d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1))) {
+          const mFrom = d < from ? from : d;
+          const mEnd = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
+          const mTo = mEnd > to ? to : mEnd;
+          finProgress.step = 1 + done / Math.max(1, monthsTotal);
+          finProgress.phase = `Reading cash vouchers · ${MONTH_NAMES[mFrom.getUTCMonth()]} ${mFrom.getUTCFullYear()}…`;
+          const xml = await askTally(state.settings.tallyUrl, voucherCollectionRequest(mFrom, mTo));
+          const sig = new Map();
+          for (const block of xml.match(/<VOUCHER[\s>][\s\S]*?<\/VOUCHER>/gi) || []) {
+            if (/<ISCANCELLED>\s*Yes/i.test(block) || /<ISOPTIONAL>\s*Yes/i.test(block)) continue;
+            let key = tag(block, 'GUID');
+            if (!key) { const s = `${tag(block, 'VOUCHERTYPENAME')}|${tag(block, 'DATE')}|${tag(block, 'VOUCHERNUMBER')}`; const n = (sig.get(s) ?? 0) + 1; sig.set(s, n); key = s + '#' + n; }
+            if (seen.has(key)) continue; seen.add(key);
+            const dk = dateKey(tag(block, 'DATE'));
+            if (dk < fromKey || dk > toKey) continue;
+            const entries = (block.match(/<(?:ALL)?LEDGERENTRIES\.LIST>[\s\S]*?<\/(?:ALL)?LEDGERENTRIES\.LIST>/gi) || []).map((e) => {
+              const name = tag(e, 'LEDGERNAME');
+              const raw = toNum(tag(e, 'AMOUNT')), amt = Math.abs(raw);
+              const dp = tag(e, 'ISDEEMEDPOSITIVE');
+              const c = dp ? (/yes/i.test(dp) ? amt : -amt) : -raw;        // Dr-positive
+              return { name, c };
+            }).filter((e) => e.name);
+            const cashLegs = entries.filter((e) => cashSet.has(e.name));
+            if (!cashLegs.length) continue;
+            const others = entries.filter((e) => !cashSet.has(e.name)).sort((a, b) => Math.abs(b.c) - Math.abs(a.c));
+            const party = tag(block, 'PARTYLEDGERNAME') || (others[0] ? others[0].name : '');
+            const counter = others[0] ? others[0].name : party;
+            const dd = parseTallyFieldDate(tag(block, 'DATE'));
+            for (const leg of cashLegs) {
+              if (!leg.c) continue;
+              vouchers.push({
+                date: dd ? dd.toISOString().slice(0, 10) : '', type: tag(block, 'VOUCHERTYPENAME'), number: tag(block, 'VOUCHERNUMBER'),
+                ledger: leg.name, party, counter, counterIsBank: !!(masters[counter] && isBank(masters[counter].parent)),
+                counterIsCash: cashSet.has(counter), narration: tag(block, 'NARRATION').slice(0, 200),
+                amount: r2(Math.abs(leg.c)), direction: leg.c < 0 ? 'payment' : 'receipt',
+              });
+            }
+          }
+          done++;
+        }
+        finProgress.active = false;
+        vouchers.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+        json(res, 200, { ok: true, version: VERSION, from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10),
+          cashLedgers: [...cashSet], vouchers, count: vouchers.length, monthsRead: monthsTotal });
+      } catch (e) {
+        finProgress.active = false;
+        const msg = /timed out|timeout|abort|released/i.test(String((e && e.message) || e))
+          ? 'Tally stopped responding while reading vouchers. Keep Tally on the Gateway and try a shorter period.'
+          : 'Could not read Tally: ' + String((e && e.message) || e);
+        json(res, 502, { ok: false, error: msg });
+      } finally { state.settings.company = cbSavedCompany; state.settings.tallyUrl = cbSavedUrl; }
       return;
     }
 

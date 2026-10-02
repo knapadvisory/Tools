@@ -140,6 +140,28 @@ try {
     assert.match(dl.suggestedFilename(), /Kumar_Traders_Financials/);
   });
 
+  await t('the PDF downloads and carries the firm’s statements', async () => {
+    const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 30000 }), page.click('#exPdf')]);
+    const out = path.join(dir, 'out.pdf');
+    await dl.saveAs(out);
+    const buf = fs.readFileSync(out);
+    assert.ok(buf.length > 5000 && buf.subarray(0, 5).toString() === '%PDF-', 'a PDF file');
+    assert.match(dl.suggestedFilename(), /Kumar_Traders_Financials.*\.pdf$/);
+  });
+
+  await t('the AI settings open and save without touching the network; the cash report tab renders', async () => {
+    await page.click('#stepper .step[data-step="4"]');
+    await page.click('#aiCfgBtn');
+    assert.ok(await page.isVisible('#aiCfg'));
+    await page.selectOption('#aiProv', 'ollama');
+    await page.click('#aiSave');
+    assert.match(await page.textContent('#mAi'), /AI set to ollama/);
+    await page.click('#stepper .step[data-step="6"]');
+    await page.click('#stTabs button[data-t="cash"]');
+    assert.match(await page.textContent('#stBody'), /s\.40A\(3\)/);
+    assert.ok(await page.isVisible('#cashRead'));
+  });
+
   await t('the variance card appears after a second import and the page raised no script errors', async () => {
     await page.click('#stepper .step[data-step="3"]');
     await page.setInputFiles('#tplFile', tbFile);
