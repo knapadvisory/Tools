@@ -311,6 +311,15 @@ const MIGRATIONS = [
     );
     `,
   },
+  {
+    id: 9,
+    name: 'archive_engagements',
+    up: `
+    -- An archived engagement leaves the picker but keeps every snapshot,
+    -- mapping, owner, journal and upload under it. Nothing is deleted.
+    ALTER TABLE engagements ADD COLUMN archived_at TEXT;
+    `,
+  },
 ];
 
 let db = null;

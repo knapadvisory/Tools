@@ -80,15 +80,30 @@ router.post('/engagements', (req, res) => {
   res.json({ ok: true, id, division, constitution });
 });
 
-router.get('/engagements', (_req, res) => {
-  const rows = db().prepare('SELECT * FROM engagements ORDER BY created_at DESC').all();
+/** Live engagements; `?archived=1` lists the archived ones instead. */
+router.get('/engagements', (req, res) => {
+  const archived = req.query.archived === '1';
+  const rows = db().prepare(`SELECT * FROM engagements WHERE archived_at IS ${archived ? 'NOT ' : ''}NULL ORDER BY created_at DESC`).all();
   res.json({ ok: true, engagements: rows.map((e) => ({ ...e, constitutionLabel: constitutionOf(e.constitution).label })) });
+});
+/**
+ * Archive: out of the picker, kept in full. Everything under the engagement —
+ * snapshots, mappings, owners, journals, inputs, text — stays as it is, and
+ * restoring brings it straight back. Nothing here deletes.
+ */
+router.post('/engagements/:id/archive', (req, res) => {
+  const eng = db().prepare('SELECT * FROM engagements WHERE id=?').get(req.params.id);
+  if (!eng) return bad(res, 'engagement not found', 404);
+  const on = !(req.body && req.body.archived === false);
+  db().prepare('UPDATE engagements SET archived_at=? WHERE id=?').run(on ? now() : null, eng.id);
+  log(eng.id, actor(req), on ? 'engagement.archived' : 'engagement.restored', { clientName: eng.client_name, fyEnd: eng.fy_end });
+  res.json({ ok: true, archived: on });
 });
 
 /* ---------- clients and the year before ---------------------------------- */
 /** Engagements grouped by client, newest year first. */
 router.get('/clients', (_req, res) => {
-  const rows = db().prepare('SELECT * FROM engagements ORDER BY lower(client_name), fy_end DESC').all();
+  const rows = db().prepare('SELECT * FROM engagements WHERE archived_at IS NULL ORDER BY lower(client_name), fy_end DESC').all();
   const byClient = new Map();
   for (const e of rows) {
     const k = e.client_name.trim().toLowerCase();

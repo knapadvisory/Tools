@@ -87,10 +87,13 @@ $('cCon').onchange = onConstitutionPick;
 
 async function loadEngagements() {
   try {
-    const { engagements } = await api('/engagements');
+    const archived = $('engShowArch').checked;
+    const { engagements } = await api('/engagements' + (archived ? '?archived=1' : ''));
     // Only offer the "continue" picker once there is something to continue.
-    $('engExisting').classList.toggle('hidden', engagements.length === 0);
-    $('engFirst').classList.toggle('hidden', engagements.length > 0);
+    $('engExisting').classList.toggle('hidden', engagements.length === 0 && !archived);
+    $('engFirst').classList.toggle('hidden', engagements.length > 0 || archived);
+    $('engArchive').textContent = archived ? 'Restore' : 'Archive';
+    $('engArchive').title = archived ? 'Put it back in the live list.' : 'Take it out of this list. Everything under it is kept on the server and it can be restored.';
     // grouped by client, newest year first, so a practice with many clients can find one
     const byClient = new Map();
     for (const e of engagements) {
@@ -104,6 +107,19 @@ async function loadEngagements() {
         `<option value="${e.id}">FY ${esc(e.fy_start)} to ${esc(e.fy_end)} · ${esc(e.constitutionLabel || e.constitution || 'Company')} (${e.division})</option>`).join('') + '</optgroup>').join('');
   } catch (e) { msg('m1', 'Could not reach the server: ' + e.message, 'bad'); }
 }
+$('engShowArch').onchange = loadEngagements;
+/** Archive or restore the picked engagement. Nothing is deleted either way. */
+$('engArchive').onclick = async () => {
+  const e = (S.engagements || []).find((x) => x.id === $('engList').value);
+  if (!e) return;
+  const restoring = $('engShowArch').checked;
+  if (!restoring && !confirm(`Archive ${e.client_name}, FY ${e.fy_start} to ${e.fy_end}?\n\nIt leaves this list. Its trial balance, grouping, partners, adjustments and uploads stay on the server, and "show archived" brings it back.`)) return;
+  try {
+    await api(`/engagements/${e.id}/archive`, { method: 'POST', body: JSON.stringify({ archived: !restoring }) });
+    msg('m1', `${e.client_name} ${restoring ? 'restored to the live list' : 'archived — kept on the server, tick “show archived” to see or restore it'}.`, 'ok');
+    await loadEngagements();
+  } catch (err) { msg('m1', err.message, 'bad'); }
+};
 /** Pre-fill the form for the same client's next year; the preparer presses Create. */
 $('engNext').onclick = () => {
   const e = (S.engagements || []).find((x) => x.id === $('engList').value);

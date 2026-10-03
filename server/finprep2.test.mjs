@@ -314,6 +314,31 @@ await t('carry-forward copies approved heads, captions and owners for ledgers st
   assert.ok(own.owners.every((o) => o.split == null), 'last year’s manual split is never carried');
 });
 
+console.log('\n── archive: out of the picker, kept in full ──');
+await t('an archived engagement leaves the list and the client grouping but keeps its data, and restores', async () => {
+  const before = (await call('GET', '/engagements')).engagements.length;
+  const a = await call('POST', `/engagements/${engId}/archive`, {});
+  assert.ok(a.ok && a.archived);
+  const live = (await call('GET', '/engagements')).engagements;
+  assert.equal(live.length, before - 1);
+  assert.ok(!live.some((e) => e.id === engId));
+  const arch = (await call('GET', '/engagements?archived=1')).engagements;
+  assert.ok(arch.some((e) => e.id === engId && e.archived_at));
+  const clients = await call('GET', '/clients');
+  assert.ok(!clients.clients.find((c) => c.name === 'M/s Kumar Traders').engagements.some((e) => e.id === engId));
+  // everything under it is still there
+  const s = await call('GET', `/engagements/${engId}/statements`);
+  assert.ok(s.ok); assert.equal(s.ownersAccounts.capital.owners.length, 2);
+  const snaps = await call('GET', `/engagements/${engId}/snapshots`);
+  assert.ok(snaps.snapshots.length >= 3);
+  // next year still finds last year's file for carry-forward even when archived
+  const cf = await call('GET', `/engagements/${eng2}/carry-forward`);
+  assert.equal(cf.candidate.id, engId);
+  const r = await call('POST', `/engagements/${engId}/archive`, { archived: false });
+  assert.ok(r.ok && r.archived === false);
+  assert.ok((await call('GET', '/engagements')).engagements.some((e) => e.id === engId));
+});
+
 console.log(`\n${pass} passed, ${fail} failed`);
 srv.close();
 fs.rmSync(dir, { recursive: true, force: true });
